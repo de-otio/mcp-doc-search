@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(npm ls:*)",
-      "Bash(npm run test:coverage:*)"
+      "Bash(npm run test:coverage:*)",
+      "Bash(git -C /Users/rmyers/repos/dot/mcp-doc-search log --format=\"%an\" -1)"
     ]
   }
 }
