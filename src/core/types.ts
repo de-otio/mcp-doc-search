@@ -33,6 +33,27 @@ export interface IndexStats {
   durationMs: number;
 }
 
+export interface IndexStatus {
+  /** Files currently matching the docGlob pattern */
+  totalFiles: number;
+  /** Files recorded in the mtime cache (ever indexed) */
+  cachedFiles: number;
+  /** Files whose mtime differs from the cache */
+  changedFiles: number;
+  /** Files matching the glob that are absent from the cache */
+  newFiles: number;
+  /** Files in the cache that no longer match the glob */
+  deletedFiles: number;
+  /** Total vector chunks in the store */
+  chunkCount: number;
+  /** When the mtime cache was last written (null = never indexed) */
+  lastIndexed: Date | null;
+  /** True when any file needs re-embedding */
+  needsReindex: boolean;
+  /** The active docGlob pattern */
+  docGlob: string;
+}
+
 export interface EmbedProvider {
   /**
    * Generate embeddings for a batch of texts.

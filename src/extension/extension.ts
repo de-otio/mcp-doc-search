@@ -48,6 +48,7 @@ export function activate(context: vscode.ExtensionContext): void {
       `Doc Search: Failed to open index — ${err instanceof Error ? err.message : String(err)}`,
     );
   });
+
 }
 
 export function deactivate(): void {}

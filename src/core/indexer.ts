@@ -8,7 +8,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { glob } from "glob";
 import { chunkMarkdown } from "./chunker.js";
-import type { IndexerConfig, IndexStats } from "./types.js";
+import type { IndexerConfig, IndexStats, IndexStatus } from "./types.js";
 import type { LanceVectorStore, VectorRecord } from "./vectorstore.js";
 
 interface MtimeCache {
@@ -27,11 +27,27 @@ export class Indexer {
   /**
    * Crawl doc files, embed changed files, upsert into vector store.
    * Returns stats: { indexed, skipped, totalChunks, durationMs }
+   *
+   * @param force - Re-index all files even if unchanged
+   * @param onProgress - Optional callback invoked after each file is processed.
+   *   Receives (processedCount, totalToProcess, currentFile, phase) where
+   *   phase is "scanning" before the loop starts, "loading" on first embed,
+   *   or "indexing" during the main loop.
    */
-  async reindex(force = false): Promise<IndexStats> {
+  async reindex(
+    force = false,
+    onProgress?: (
+      processed: number,
+      total: number,
+      file: string,
+      phase: "scanning" | "loading" | "indexing",
+    ) => void,
+  ): Promise<IndexStats> {
     const t0 = Date.now();
     const cache: MtimeCache = force ? {} : this.loadMtimeCache();
     const newCache: MtimeCache = {};
+
+    onProgress?.(0, 0, "", "scanning");
 
     const mdFiles = await glob(this.config.docGlob, {
       cwd: this.config.workspaceRoot,
@@ -39,9 +55,20 @@ export class Indexer {
     });
     mdFiles.sort();
 
+    // Files that actually need indexing (skipped ones don't count for progress)
+    const toIndex = force
+      ? mdFiles
+      : mdFiles.filter((f) => {
+          const rel = path
+            .relative(this.config.workspaceRoot, f)
+            .replace(/\\/g, "/");
+          return cache[rel] !== String(statSync(f).mtimeMs);
+        });
+
     let indexed = 0;
     let skipped = 0;
     let totalChunks = 0;
+    let firstEmbed = true;
 
     for (const filePath of mdFiles) {
       const rel = path
@@ -74,6 +101,10 @@ export class Indexer {
       const texts = chunks.map((c) => c.text);
       let embeddings: number[][];
       try {
+        if (firstEmbed) {
+          onProgress?.(0, toIndex.length, rel, "loading");
+          firstEmbed = false;
+        }
         embeddings = await this.config.embedProvider.embed(
           texts,
           "search_document: ",
@@ -101,6 +132,7 @@ export class Indexer {
       newCache[rel] = mtime;
       indexed++;
       totalChunks += chunks.length;
+      onProgress?.(indexed, toIndex.length, rel, "indexing");
     }
 
     // Merge new cache with unchanged entries from old cache
@@ -111,6 +143,57 @@ export class Indexer {
       skipped,
       totalChunks,
       durationMs: Date.now() - t0,
+    };
+  }
+
+  /** Compute the current index health without modifying anything. */
+  async getStatus(): Promise<IndexStatus> {
+    const cache = this.loadMtimeCache();
+    const mdFiles = await glob(this.config.docGlob, {
+      cwd: this.config.workspaceRoot,
+      absolute: true,
+    });
+
+    const fileSet = new Set(
+      mdFiles.map((f) =>
+        path.relative(this.config.workspaceRoot, f).replace(/\\/g, "/"),
+      ),
+    );
+
+    let changedFiles = 0;
+    let newFiles = 0;
+    for (const filePath of mdFiles) {
+      const rel = path
+        .relative(this.config.workspaceRoot, filePath)
+        .replace(/\\/g, "/");
+      if (!(rel in cache)) {
+        newFiles++;
+      } else if (cache[rel] !== String(statSync(filePath).mtimeMs)) {
+        changedFiles++;
+      }
+    }
+
+    const deletedFiles = Object.keys(cache).filter(
+      (rel) => !fileSet.has(rel),
+    ).length;
+
+    const cachePath = this.mtimeCachePath();
+    const lastIndexed = existsSync(cachePath)
+      ? new Date(statSync(cachePath).mtimeMs)
+      : null;
+
+    const chunkCount = await this.store.count();
+
+    return {
+      totalFiles: mdFiles.length,
+      cachedFiles: Object.keys(cache).length,
+      changedFiles,
+      newFiles,
+      deletedFiles,
+      chunkCount,
+      lastIndexed,
+      needsReindex: changedFiles > 0 || newFiles > 0,
+      docGlob: this.config.docGlob,
     };
   }
 

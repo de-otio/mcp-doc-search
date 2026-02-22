@@ -35,6 +35,9 @@ jobs:
 
       - run: npm test
 
+      - name: Prune dev dependencies before packaging
+        run: npm prune --omit=dev
+
       - name: Package VSIX for ${{ matrix.target }}
         run: npx vsce package --target ${{ matrix.target }}
 

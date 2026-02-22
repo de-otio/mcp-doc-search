@@ -8,6 +8,7 @@ import type { ExtensionConfig } from "./config.js";
 import type { StatusBarManager } from "./statusBar.js";
 import { showSearchQuickPick } from "./searchPanel.js";
 import { SettingsPanel } from "./settingsPanel.js";
+import { IndexStatusPanel } from "./indexStatusPanel.js";
 
 interface CommandDeps {
   context: vscode.ExtensionContext;
@@ -30,34 +31,66 @@ export function registerCommands(
       await showSearchQuickPick({ workspaceRoot, store, embedProvider });
     }),
 
-    vscode.commands.registerCommand("docSearch.reindex", async () => {
-      const choice = await vscode.window.showQuickPick(
-        [
-          {
-            label: "$(refresh) Incremental",
-            description: "Only reindex changed files",
-            force: false,
-          },
-          {
-            label: "$(trash) Full reindex",
-            description: "Reindex all files from scratch",
-            force: true,
-          },
-        ],
-        { placeHolder: "Choose reindex mode" },
-      );
-
-      if (!choice) return;
+    vscode.commands.registerCommand(
+      "docSearch.reindex",
+      async (forceArg?: boolean) => {
+      let force: boolean;
+      if (forceArg !== undefined) {
+        force = forceArg;
+      } else {
+        const choice = await vscode.window.showQuickPick(
+          [
+            {
+              label: "$(refresh) Incremental",
+              description: "Only reindex changed files",
+              force: false,
+            },
+            {
+              label: "$(trash) Full reindex",
+              description: "Reindex all files from scratch",
+              force: true,
+            },
+          ],
+          { placeHolder: "Choose reindex mode" },
+        );
+        if (!choice) return;
+        force = choice.force;
+      }
 
       statusBar.setIndexing();
       try {
         const stats = await vscode.window.withProgress(
           {
             location: vscode.ProgressLocation.Notification,
-            title: "Doc Search: Indexing...",
+            title: "Doc Search",
             cancellable: false,
           },
-          () => indexer.reindex(choice.force),
+          async (progress) => {
+            let lastIncrement = 0;
+            return indexer.reindex(
+              force,
+              (processed, total, file, phase) => {
+                const baseName = file ? path.basename(file) : "";
+                if (phase === "scanning") {
+                  progress.report({ message: "Scanning files…" });
+                } else if (phase === "loading") {
+                  progress.report({
+                    message: total > 0
+                      ? `Loading AI model… (0 / ${total} files)`
+                      : "Loading AI model…",
+                  });
+                } else {
+                  const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
+                  const increment = pct - lastIncrement;
+                  lastIncrement = pct;
+                  progress.report({
+                    message: `${processed} / ${total} files — ${baseName}`,
+                    increment,
+                  });
+                }
+              },
+            );
+          },
         );
 
         statusBar.setReady();
@@ -71,8 +104,20 @@ export function registerCommands(
       }
     }),
 
+    vscode.commands.registerCommand("docSearch.openIndexStatus", () => {
+      IndexStatusPanel.createOrShow(context, indexer);
+    }),
+
     vscode.commands.registerCommand("docSearch.openSettings", () => {
       SettingsPanel.createOrShow(context);
+    }),
+
+    vscode.commands.registerCommand("docSearch.openWalkthrough", () => {
+      vscode.commands.executeCommand(
+        "workbench.action.openWalkthrough",
+        "de-otio-org.mcp-doc-search#docSearch.getStarted",
+        false,
+      );
     }),
 
     vscode.commands.registerCommand(

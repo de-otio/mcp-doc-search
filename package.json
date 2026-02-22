@@ -3,20 +3,20 @@
   "displayName": "MCP Doc Search",
   "description": "Semantic documentation search for any monorepo. VS Code extension + Claude Code MCP server. Local embeddings, no API key required.",
   "version": "0.1.0",
-  "publisher": "skybber",
+  "publisher": "de-otio-org",
   "repository": {
     "type": "git",
     "url": "https://github.com/skybber/mcp-doc-search"
   },
   "homepage": "https://github.com/skybber/mcp-doc-search#readme",
   "license": "MIT",
-  "type": "module",
   "engines": {
     "vscode": "^1.85.0",
     "node": ">=18.0.0"
   },
   "categories": ["Other"],
   "activationEvents": [
+    "onStartupFinished",
     "workspaceContains:**/*.md"
   ],
   "main": "./dist/extension.js",
@@ -37,43 +37,38 @@
       {
         "command": "docSearch.generateMcpJson",
         "title": "Doc Search: Generate .mcp.json for Claude Code"
+      },
+      {
+        "command": "docSearch.openWalkthrough",
+        "title": "Doc Search: Getting Started"
+      },
+      {
+        "command": "docSearch.openIndexStatus",
+        "title": "Doc Search: Index Status"
       }
     ],
-    "walkthroughs": [
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "docSearch",
+          "title": "Doc Search",
+          "icon": "media/icon-activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "docSearch": [
+        {
+          "id": "docSearch.mainView",
+          "name": "Doc Search",
+          "contextualTitle": "Doc Search"
+        }
+      ]
+    },
+    "viewsWelcome": [
       {
-        "id": "docSearch.getStarted",
-        "title": "Get Started with Doc Search",
-        "description": "Set up semantic documentation search for your workspace.",
-        "steps": [
-          {
-            "id": "chooseProvider",
-            "title": "Choose Embedding Provider",
-            "description": "Pick local (offline, no setup), Ollama (better quality), or OpenAI (best quality).\n[Open Settings](command:docSearch.openSettings)",
-            "media": { "markdown": "media/walkthrough/welcome.md" },
-            "completionEvents": ["onSettingChanged:docSearch.embedProvider"]
-          },
-          {
-            "id": "configureGlob",
-            "title": "Set Documentation Path",
-            "description": "Tell Doc Search where your markdown files live.\n[Open Settings](command:docSearch.openSettings)",
-            "media": { "markdown": "media/walkthrough/welcome.md" },
-            "completionEvents": ["onSettingChanged:docSearch.docGlob"]
-          },
-          {
-            "id": "runIndex",
-            "title": "Index Your Docs",
-            "description": "Run the first index to build the search database.\n[Reindex Now](command:docSearch.reindex)",
-            "media": { "markdown": "media/walkthrough/welcome.md" },
-            "completionEvents": ["onCommand:docSearch.reindex"]
-          },
-          {
-            "id": "searchDocs",
-            "title": "Search!",
-            "description": "Try searching your documentation.\n[Search Docs](command:docSearch.search)",
-            "media": { "markdown": "media/walkthrough/welcome.md" },
-            "completionEvents": ["onCommand:docSearch.search"]
-          }
-        ]
+        "view": "docSearch.mainView",
+        "contents": "Semantic documentation search powered by local AI embeddings. No API key required.\n\n[$(book) Getting Started](command:docSearch.openWalkthrough)\n[$(gear) Open Settings](command:docSearch.openSettings)\n[$(database) Index Status](command:docSearch.openIndexStatus)\n[$(search) Search Docs](command:docSearch.search)\n[$(json) Generate .mcp.json](command:docSearch.generateMcpJson)"
       }
     ],
     "configuration": {
@@ -138,20 +133,17 @@
     "test:coverage": "vitest run --coverage",
     "lint": "prettier --check .",
     "format": "prettier -w .",
-    "package": "vsce package",
-    "package:darwin-arm": "vsce package --target darwin-arm64",
-    "package:darwin-x64": "vsce package --target darwin-x64",
-    "package:linux-x64": "vsce package --target linux-x64",
-    "package:win-x64": "vsce package --target win32-x64"
+    "package": "npm prune --omit=dev && vsce package; npm install",
+    "package:darwin-arm": "npm prune --omit=dev && vsce package --target darwin-arm64; npm install",
+    "package:darwin-x64": "npm prune --omit=dev && vsce package --target darwin-x64; npm install",
+    "package:linux-x64": "npm prune --omit=dev && vsce package --target linux-x64; npm install",
+    "package:win-x64": "npm prune --omit=dev && vsce package --target win32-x64; npm install"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.4.0",
     "@lancedb/lancedb": "^0.13.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "glob": "^11.0.0"
-  },
-  "vsce": {
-    "dependencies": false
   },
   "devDependencies": {
     "@types/node": "^20.17.10",
