@@ -1,6 +1,8 @@
 # MCP Doc Search
 
-Semantic documentation search for any monorepo. Instead of pasting entire docs into an AI chat, MCP Doc Search lets your AI assistant fetch only the relevant sections — reducing token usage and keeping context focused on what actually matters.
+Semantic documentation search for any monorepo.
+
+Large repos can have hundreds or thousands of markdown files of documentation. This extension helps developers manage them by enabling precise document retrieval—find and include only the relevant sections you need, dramatically reducing context bloat and token usage in AI assistant conversations.
 
 - **VS Code extension**: type-ahead search in the command palette, auto-reindex on save, status bar indicator
 - **MCP server**: `search_docs`, `list_docs`, `reindex_docs` tools so any MCP-compatible AI assistant can find the right document in a single call
@@ -22,13 +24,13 @@ Or install from the [VS Code Marketplace](https://marketplace.visualstudio.com/i
 
 Open VS Code settings and set:
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `docSearch.docGlob` | `doc/**/*.md` | Glob pattern for docs to index |
-| `docSearch.indexDir` | `.doc-search-index` | Where to store the vector index (auto-added to `.gitignore`) |
-| `docSearch.headingDepth` | `2` | Split on `#` only (1) or `#` and `##` (2) |
-| `docSearch.embedProvider` | `local` | `local`, `ollama`, or `openai` |
-| `docSearch.autoReindex` | `true` | Auto-reindex on file save |
+| Setting                   | Default             | Description                                                  |
+| ------------------------- | ------------------- | ------------------------------------------------------------ |
+| `docSearch.docGlob`       | `doc/**/*.md`       | Glob pattern for docs to index                               |
+| `docSearch.indexDir`      | `.doc-search-index` | Where to store the vector index (auto-added to `.gitignore`) |
+| `docSearch.headingDepth`  | `2`                 | Split on `#` only (1) or `#` and `##` (2)                    |
+| `docSearch.embedProvider` | `local`             | `local`, `ollama`, or `openai`                               |
+| `docSearch.autoReindex`   | `true`              | Auto-reindex on file save                                    |
 
 ### Use it
 
@@ -48,11 +50,11 @@ reindex_docs(force=true)               → full rebuild
 
 ## Embedding providers
 
-| Provider | Quality | Setup | Cost |
-|----------|---------|-------|------|
-| `local` (default) | Good (384-dim) | None — ships with extension | Free |
-| `ollama` | Better (768-dim) | `brew install ollama && ollama pull nomic-embed-text` | Free |
-| `openai` | Best (1536-dim) | Set `docSearch.openaiApiKey` | ~$0.02/M tokens |
+| Provider          | Quality          | Setup                                                 | Cost            |
+| ----------------- | ---------------- | ----------------------------------------------------- | --------------- |
+| `local` (default) | Good (384-dim)   | None — ships with extension                           | Free            |
+| `ollama`          | Better (768-dim) | `brew install ollama && ollama pull nomic-embed-text` | Free            |
+| `openai`          | Best (1536-dim)  | Set `docSearch.openaiApiKey`                          | ~$0.02/M tokens |
 
 ## Development
 
@@ -91,6 +93,7 @@ src/
 ```
 
 Two build outputs:
+
 - `dist/extension.js` — VS Code extension host
 - `dist/mcp-server.js` — standalone Node.js MCP server
 

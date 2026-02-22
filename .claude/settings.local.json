@@ -19,7 +19,15 @@
       "Bash(du:*)",
       "Bash(unzip:*)",
       "Bash(npm install:*)",
-      "Bash(npm run package:*)"
+      "Bash(npm run package:*)",
+      "Bash(npm run:*)",
+      "Bash(git add:*)",
+      "Bash(git push:*)",
+      "Bash(git add README.md && git commit -m \"$\\(cat <<'EOF'\nAdd token reduction pitch to README intro\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\nEOF\n\\)\" && git push 2>&1)"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "doc-search"
+  ]
 }

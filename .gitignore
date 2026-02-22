@@ -5,3 +5,5 @@ coverage/
 *.vsix
 .claude/
 .mcp.json
+# doc-search index
+.doc-search-index
