@@ -9,6 +9,7 @@ import type { StatusBarManager } from "./statusBar.js";
 import { SearchPanel } from "./searchPanel.js";
 import { SettingsPanel } from "./settingsPanel.js";
 import { IndexStatusPanel } from "./indexStatusPanel.js";
+import { McpSetupPanel } from "./mcpSetupPanel.js";
 
 interface CommandDeps {
   context: vscode.ExtensionContext;
@@ -127,11 +128,16 @@ export function registerCommands(
         const mcpServerPath = path.join(extensionDir, "dist", "mcp-server.js");
         const mcpJsonPath = path.join(workspaceRoot, ".mcp.json");
 
+        const env: Record<string, string> = {
+          DOC_SEARCH_WORKSPACE: workspaceRoot,
+        };
+
         const mcpConfig = {
           mcpServers: {
             "doc-search": {
               command: "node",
               args: [mcpServerPath],
+              env,
             },
           },
         };
@@ -142,11 +148,7 @@ export function registerCommands(
           "utf8",
         );
 
-        const uri = vscode.Uri.file(mcpJsonPath);
-        await vscode.window.showTextDocument(uri);
-        vscode.window.showInformationMessage(
-          `Doc Search: .mcp.json written to workspace root.`,
-        );
+        McpSetupPanel.createOrShow(context, { mcpServerPath, env });
       },
     ),
   );

@@ -50,8 +50,21 @@ export class LanceVectorStore {
   }
 
   async ensureTable(vectorDim: number): Promise<void> {
-    if (this.table) return;
     if (!this.db) throw new Error("Store not opened. Call open() first.");
+
+    // If table exists, verify the vector dimension matches
+    if (this.table) {
+      const schema = await this.table.schema();
+      const vectorField = schema.fields.find((f: any) => f.name === "vector");
+      const existingDim = vectorField?.type?.listSize;
+      if (existingDim && existingDim !== vectorDim) {
+        // Dimension mismatch — drop and recreate the table
+        await this.db.dropTable(this.tableName);
+        this.table = null;
+      } else {
+        return;
+      }
+    }
 
     // Create table with a seed record that we immediately delete
     const seedRecord: VectorRecord = {
