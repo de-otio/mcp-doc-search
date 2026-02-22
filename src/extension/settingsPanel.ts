@@ -100,8 +100,9 @@ export class SettingsPanel {
       }
 
       case "reindex": {
+        vscode.commands.executeCommand("docSearch.openIndexStatus");
+        vscode.commands.executeCommand("docSearch.reindex", false);
         this.panel.dispose();
-        vscode.commands.executeCommand("docSearch.reindex");
         break;
       }
 

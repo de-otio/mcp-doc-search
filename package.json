@@ -71,6 +71,39 @@
         "contents": "Semantic documentation search powered by local AI embeddings. No API key required.\n\n[$(book) Getting Started](command:docSearch.openWalkthrough)\n[$(gear) Open Settings](command:docSearch.openSettings)\n[$(database) Index Status](command:docSearch.openIndexStatus)\n[$(search) Search Docs](command:docSearch.search)\n[$(json) Generate .mcp.json](command:docSearch.generateMcpJson)"
       }
     ],
+    "walkthroughs": [
+      {
+        "id": "docSearch.getStarted",
+        "title": "Get Started with Doc Search",
+        "description": "Set up semantic documentation search in your workspace.",
+        "steps": [
+          {
+            "id": "configureSettings",
+            "title": "Configure Settings",
+            "description": "Choose your AI model and set which files to index.\n\n[Open Settings](command:docSearch.openSettings)",
+            "media": { "markdown": "media/walkthrough-settings.md" }
+          },
+          {
+            "id": "buildIndex",
+            "title": "Build Search Index",
+            "description": "Index your documentation so it becomes searchable by meaning.\n\n[Build Index](command:docSearch.openIndexStatus)",
+            "media": { "markdown": "media/walkthrough-index.md" }
+          },
+          {
+            "id": "searchDocs",
+            "title": "Search Your Docs",
+            "description": "Find relevant documentation using natural language queries.\n\n[Search Docs](command:docSearch.search)",
+            "media": { "markdown": "media/walkthrough-search.md" }
+          },
+          {
+            "id": "claudeCode",
+            "title": "Use with Claude Code",
+            "description": "Generate an MCP config so Claude Code can search your docs too.\n\n[Generate .mcp.json](command:docSearch.generateMcpJson)",
+            "media": { "markdown": "media/walkthrough-claude.md" }
+          }
+        ]
+      }
+    ],
     "configuration": {
       "title": "Doc Search",
       "properties": {

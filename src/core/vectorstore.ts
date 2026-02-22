@@ -4,7 +4,6 @@
  */
 
 import { mkdirSync } from "node:fs";
-import type { DocChunk } from "./types.js";
 
 /** Record stored in LanceDB. */
 export interface VectorRecord {
@@ -95,7 +94,7 @@ export class LanceVectorStore {
 
     const results = await this.table
       .search(queryVector)
-      .metricType("cosine")
+      .distanceType("cosine")
       .limit(n)
       .toArray();
 

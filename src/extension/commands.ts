@@ -6,7 +6,7 @@ import type { EmbedProvider } from "../core/types.js";
 import type { LanceVectorStore } from "../core/vectorstore.js";
 import type { ExtensionConfig } from "./config.js";
 import type { StatusBarManager } from "./statusBar.js";
-import { showSearchQuickPick } from "./searchPanel.js";
+import { SearchPanel } from "./searchPanel.js";
 import { SettingsPanel } from "./settingsPanel.js";
 import { IndexStatusPanel } from "./indexStatusPanel.js";
 
@@ -27,8 +27,8 @@ export function registerCommands(
   const { indexer, store, embedProvider, statusBar, workspaceRoot } = deps;
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("docSearch.search", async () => {
-      await showSearchQuickPick({ workspaceRoot, store, embedProvider });
+    vscode.commands.registerCommand("docSearch.search", () => {
+      SearchPanel.createOrShow(context, { workspaceRoot, store, embedProvider });
     }),
 
     vscode.commands.registerCommand(
