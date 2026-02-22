@@ -9,15 +9,17 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
 
     strategy:
       matrix:
-        target:
-          - darwin-arm64
-          - darwin-x64
-          - linux-x64
-          - win32-x64
+        include:
+          - target: darwin-arm64
+            runner: macos-14
+          - target: linux-x64
+            runner: ubuntu-latest
+          - target: win32-x64
+            runner: windows-latest
 
     steps:
       - uses: actions/checkout@v4
