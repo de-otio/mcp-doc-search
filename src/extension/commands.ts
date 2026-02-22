@@ -7,6 +7,7 @@ import type { LanceVectorStore } from "../core/vectorstore.js";
 import type { ExtensionConfig } from "./config.js";
 import type { StatusBarManager } from "./statusBar.js";
 import { showSearchQuickPick } from "./searchPanel.js";
+import { SettingsPanel } from "./settingsPanel.js";
 
 interface CommandDeps {
   context: vscode.ExtensionContext;
@@ -68,6 +69,10 @@ export function registerCommands(
         statusBar.setError(`Reindex failed: ${msg}`);
         vscode.window.showErrorMessage(`Doc Search: Reindex failed — ${msg}`);
       }
+    }),
+
+    vscode.commands.registerCommand("docSearch.openSettings", () => {
+      SettingsPanel.createOrShow(context);
     }),
 
     vscode.commands.registerCommand(

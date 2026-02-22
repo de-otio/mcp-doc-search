@@ -31,8 +31,49 @@
         "title": "Doc Search: Reindex Documentation"
       },
       {
+        "command": "docSearch.openSettings",
+        "title": "Doc Search: Open Settings"
+      },
+      {
         "command": "docSearch.generateMcpJson",
         "title": "Doc Search: Generate .mcp.json for Claude Code"
+      }
+    ],
+    "walkthroughs": [
+      {
+        "id": "docSearch.getStarted",
+        "title": "Get Started with Doc Search",
+        "description": "Set up semantic documentation search for your workspace.",
+        "steps": [
+          {
+            "id": "chooseProvider",
+            "title": "Choose Embedding Provider",
+            "description": "Pick local (offline, no setup), Ollama (better quality), or OpenAI (best quality).\n[Open Settings](command:docSearch.openSettings)",
+            "media": { "markdown": "media/walkthrough/welcome.md" },
+            "completionEvents": ["onSettingChanged:docSearch.embedProvider"]
+          },
+          {
+            "id": "configureGlob",
+            "title": "Set Documentation Path",
+            "description": "Tell Doc Search where your markdown files live.\n[Open Settings](command:docSearch.openSettings)",
+            "media": { "markdown": "media/walkthrough/welcome.md" },
+            "completionEvents": ["onSettingChanged:docSearch.docGlob"]
+          },
+          {
+            "id": "runIndex",
+            "title": "Index Your Docs",
+            "description": "Run the first index to build the search database.\n[Reindex Now](command:docSearch.reindex)",
+            "media": { "markdown": "media/walkthrough/welcome.md" },
+            "completionEvents": ["onCommand:docSearch.reindex"]
+          },
+          {
+            "id": "searchDocs",
+            "title": "Search!",
+            "description": "Try searching your documentation.\n[Search Docs](command:docSearch.search)",
+            "media": { "markdown": "media/walkthrough/welcome.md" },
+            "completionEvents": ["onCommand:docSearch.search"]
+          }
+        ]
       }
     ],
     "configuration": {
