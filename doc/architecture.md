@@ -109,7 +109,7 @@ Thin integration layer providing UI and lifecycle management:
 
 ## MCP Server (`src/mcp/`)
 
-Standalone process that Claude Code spawns as a subprocess:
+Standalone process that an MCP client spawns as a subprocess:
 
 - **`server.ts`** — creates MCP server with `StdioServerTransport`, initializes engine from environment
 - **`tools.ts`** — registers 3 MCP tools:

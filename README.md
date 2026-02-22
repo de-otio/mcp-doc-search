@@ -3,7 +3,7 @@
 Semantic documentation search for any monorepo.
 
 - **VS Code extension**: type-ahead search in the command palette, auto-reindex on save, status bar indicator
-- **Claude Code MCP server**: `search_docs`, `list_docs`, `reindex_docs` tools so Claude can find the right document in a single call
+- **MCP server**: `search_docs`, `list_docs`, `reindex_docs` tools so any MCP-compatible AI assistant can find the right document in a single call
 - **Local embeddings**: ships with `all-MiniLM-L6-v2` (ONNX, 22MB) — no API key, no internet, works offline
 - **Heading-aware chunking**: splits markdown on `#`/`##` boundaries, skips code fences, prepends document title as breadcrumb context
 - **Hybrid search**: vector similarity + keyword re-ranking (+0.03 per matching term, camelCase-aware)
@@ -34,11 +34,11 @@ Open VS Code settings and set:
 
 - **Cmd+Shift+P → "Doc Search: Reindex Documentation"** — build the initial index (takes ~30s for large repos)
 - **Cmd+Shift+P → "Doc Search: Search Documentation"** — type-ahead semantic search, click a result to open it
-- **Cmd+Shift+P → "Doc Search: Generate .mcp.json for Claude Code"** — creates `.mcp.json` so Claude Code can use the same index
+- **Cmd+Shift+P → "Doc Search: Generate .mcp.json"** — creates `.mcp.json` so any MCP client can use the same index
 
-### Claude Code integration
+### MCP integration
 
-After running "Generate .mcp.json", restart Claude Code. The MCP tools appear automatically:
+After running "Generate .mcp.json", connect any MCP-compatible client (Claude Code, Cursor, etc.). The MCP tools appear automatically:
 
 ```
 search_docs("map view feed design")     → finds relevant docs semantically
@@ -87,7 +87,7 @@ src/
     searcher.ts  # Hybrid search: vector + keyword re-ranking
     indexer.ts   # Crawl, chunk, embed, upsert with mtime cache
   extension/     # VS Code extension shell
-  mcp/           # Standalone MCP server (Claude Code spawns this)
+  mcp/           # Standalone MCP server (spawned by any MCP client)
 ```
 
 Two build outputs:

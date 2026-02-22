@@ -97,7 +97,7 @@ When enabled, the extension automatically reindexes files when they are saved. O
 | Open Index Status | `docSearch.openIndexStatus` | View index health and statistics |
 | Open Settings | `docSearch.openSettings` | Visual settings editor |
 | Open Walkthrough | `docSearch.openWalkthrough` | Step-by-step onboarding guide |
-| Generate .mcp.json | `docSearch.generateMcpJson` | Create MCP config for Claude Code |
+| Generate .mcp.json | `docSearch.generateMcpJson` | Create MCP server config (`.mcp.json`) |
 
 ## MCP Server Environment Variables
 

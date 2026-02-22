@@ -1,6 +1,6 @@
 # MCP Doc Search
 
-MCP Doc Search is a semantic documentation search system that combines a VS Code extension with a Claude Code MCP server. It enables natural language search across markdown documentation using local AI embeddings — no API keys required by default.
+MCP Doc Search is a semantic documentation search system that combines a VS Code extension with a standalone MCP server. It enables natural language search across markdown documentation using local AI embeddings — no API keys required by default.
 
 ## Key Features
 
@@ -14,7 +14,7 @@ MCP Doc Search is a semantic documentation search system that combines a VS Code
 ## How It Works
 
 1. **Index** your markdown documentation (automatically on file save, or manually)
-2. **Search** using natural language queries from VS Code or Claude Code
+2. **Search** using natural language queries from VS Code or any MCP-compatible AI assistant
 3. **Navigate** directly to the relevant section in your docs
 
 The system chunks your markdown files at heading boundaries, generates vector embeddings for each chunk, and stores them in a local LanceDB database. When you search, your query is embedded and matched against the stored vectors, then re-ranked with keyword boosting for the best results.
@@ -25,7 +25,7 @@ The system chunks your markdown files at heading boundaries, generates vector em
 |-----------|-------------|
 | **Core Engine** (`src/core/`) | Framework-agnostic search engine — chunking, embedding, indexing, and search |
 | **VS Code Extension** (`src/extension/`) | UI integration — search panel, status bar, settings, file watcher |
-| **MCP Server** (`src/mcp/`) | Claude Code integration — exposes search, list, and reindex as MCP tools |
+| **MCP Server** (`src/mcp/`) | MCP integration — exposes search, list, and reindex as MCP tools |
 
 ## Embedding Providers
 
@@ -40,5 +40,5 @@ The system chunks your markdown files at heading boundaries, generates vector em
 - [Getting Started](getting-started.md) — installation and first-time setup
 - [Configuration](configuration.md) — all settings and options
 - [Architecture](architecture.md) — technical deep dive
-- [MCP Integration](mcp-integration.md) — using with Claude Code
+- [MCP Integration](mcp-integration.md) — using with MCP-compatible AI assistants
 - [Development](development.md) — contributing and building from source

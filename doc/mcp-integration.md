@@ -1,6 +1,6 @@
-# MCP Integration with Claude Code
+# MCP Integration
 
-MCP Doc Search exposes a Model Context Protocol (MCP) server that lets Claude Code search, list, and reindex your documentation directly. This works with both the **Claude Code VS Code extension** and the **Claude Code CLI**.
+MCP Doc Search exposes a [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that lets any MCP-compatible AI assistant search, list, and reindex your documentation directly. This works with Claude Code, Cursor, and any other client that supports MCP.
 
 ## Setup
 
@@ -28,28 +28,34 @@ The generated file includes your current settings and looks like this:
 }
 ```
 
-### Step 2: Claude Code picks it up automatically
+### Step 2: Connect your MCP client
 
-Claude Code (both the VS Code extension and the CLI) automatically reads `.mcp.json` from your workspace root. There is nothing else to configure.
+Point your MCP client at the generated `.mcp.json`. Most clients read it automatically from the workspace root.
 
-- **Claude Code VS Code extension**: The next time you open the Claude Code panel in VS Code, it detects the `.mcp.json` and starts the MCP server. You will see a prompt asking you to approve the project-scoped MCP server the first time.
-- **Claude Code CLI**: Run `claude` from the workspace root. It reads `.mcp.json` and connects to the server automatically.
+**Claude Code** (VS Code extension or CLI): detects `.mcp.json` automatically. You will see a prompt to approve the project-scoped MCP server the first time.
+
+**Claude Code CLI:**
+```bash
+claude mcp list   # verify doc-search appears
+```
+
+**Other clients:** refer to your client's documentation for how to load an `.mcp.json` or configure a stdio MCP server.
 
 ### Step 3: Verify it works
 
-Open Claude Code and ask something like:
+Ask your AI assistant something like:
 
 > "Search my docs for getting started"
 
-Claude will call the `search_docs` tool and return matching documentation sections. If you see results, everything is working.
+It will call the `search_docs` tool and return matching documentation sections.
 
 ### Troubleshooting
 
-**"Tool not found" or Claude doesn't use the MCP tools**
+**"Tool not found" or the assistant doesn't use MCP tools**
 
-- Make sure `.mcp.json` is in the **workspace root** (the folder you opened in VS Code)
-- Reload the VS Code window (`Cmd+Shift+P` → **Developer: Reload Window**)
-- In the Claude Code CLI, run `claude mcp list` to check if `doc-search` appears
+- Make sure `.mcp.json` is in the **workspace root** (the folder you opened in your editor)
+- Reload the window or restart the client
+- For Claude Code CLI: run `claude mcp list` to check if `doc-search` appears
 
 **"No results" from search**
 
@@ -66,18 +72,7 @@ Claude will call the `search_docs` tool and return matching documentation sectio
 
 ## Manual setup (without the extension command)
 
-If you prefer to configure the MCP server manually or via the CLI:
-
-### Using the Claude Code CLI
-
-```bash
-claude mcp add doc-search \
-  -s project \
-  -e DOC_SEARCH_WORKSPACE=/absolute/path/to/workspace \
-  -e DOC_SEARCH_GLOB="doc/**/*.md" \
-  -e DOC_SEARCH_INDEX_DIR=".doc-search-index" \
-  -- node ~/.vscode/extensions/de-otio-org.mcp-doc-search-*/dist/mcp-server.js
-```
+If you prefer to configure the MCP server manually:
 
 ### Creating .mcp.json by hand
 
@@ -104,9 +99,20 @@ To find the extension path:
 ls ~/.vscode/extensions/de-otio-org.mcp-doc-search-*/dist/mcp-server.js
 ```
 
+### Using the Claude Code CLI
+
+```bash
+claude mcp add doc-search \
+  -s project \
+  -e DOC_SEARCH_WORKSPACE=/absolute/path/to/workspace \
+  -e DOC_SEARCH_GLOB="doc/**/*.md" \
+  -e DOC_SEARCH_INDEX_DIR=".doc-search-index" \
+  -- node ~/.vscode/extensions/de-otio-org.mcp-doc-search-*/dist/mcp-server.js
+```
+
 ## MCP Tools
 
-Once connected, Claude Code can call three tools:
+Once connected, the assistant can call three tools:
 
 ### search_docs
 
@@ -167,16 +173,5 @@ The MCP server is configured via the `env` block in `.mcp.json`. The **Generate 
 The MCP server and VS Code extension share the same LanceDB index directory. This means:
 
 - Files indexed by the extension are immediately searchable via MCP
-- A reindex triggered from Claude Code updates the same index the extension uses
+- A reindex triggered via MCP updates the same index the extension uses
 - Both must use the same embedding provider — switching providers in one requires a full reindex
-
-## Usage Examples
-
-Once configured, you can ask Claude Code things like:
-
-- "Search my docs for how authentication works"
-- "What does the API documentation say about rate limits?"
-- "Reindex the documentation — I just added new files"
-- "List all the documentation files in the index"
-
-Claude Code will automatically call `search_docs`, `list_docs`, or `reindex_docs` as appropriate.

@@ -55,14 +55,16 @@ The status bar shows indexing progress. Subsequent reindexes are incremental —
 3. Type a natural language query
 4. Select a result to jump directly to that section
 
-### 4. Set Up Claude Code Integration (Optional)
+### 4. Set Up MCP Integration (Optional)
 
-To let Claude Code search your docs via MCP:
+To let an MCP-compatible AI assistant (Claude Code, Cursor, etc.) search your docs:
 
 1. Open the command palette (`Cmd+Shift+P`)
 2. Run **Doc Search: Generate .mcp.json**
 3. A `.mcp.json` file is created in your workspace root
-4. Claude Code will automatically detect and use the MCP server
+4. Point your MCP client at the workspace — most clients detect `.mcp.json` automatically
+
+See [MCP Integration](mcp-integration.md) for client-specific instructions.
 
 ## Walkthrough
 

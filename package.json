@@ -1,7 +1,7 @@
 {
   "name": "mcp-doc-search",
   "displayName": "MCP Doc Search",
-  "description": "Semantic documentation search for any monorepo. VS Code extension + Claude Code MCP server. Local embeddings, no API key required.",
+  "description": "Semantic documentation search for any monorepo. VS Code extension + MCP server. Local embeddings, no API key required.",
   "version": "0.1.0",
   "publisher": "de-otio-org",
   "repository": {
@@ -36,7 +36,7 @@
       },
       {
         "command": "docSearch.generateMcpJson",
-        "title": "Doc Search: Generate .mcp.json for Claude Code"
+        "title": "Doc Search: Generate .mcp.json"
       },
       {
         "command": "docSearch.openWalkthrough",
@@ -96,9 +96,9 @@
             "media": { "markdown": "media/walkthrough-search.md" }
           },
           {
-            "id": "claudeCode",
-            "title": "Use with Claude Code",
-            "description": "Generate an MCP config so Claude Code can search your docs too.\n\n[Generate .mcp.json](command:docSearch.generateMcpJson)",
+            "id": "mcpIntegration",
+            "title": "Use with an AI Assistant",
+            "description": "Generate an MCP config so any MCP-compatible AI assistant can search your docs.\n\n[Generate .mcp.json](command:docSearch.generateMcpJson)",
             "media": { "markdown": "media/walkthrough-claude.md" }
           }
         ]

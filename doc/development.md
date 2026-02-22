@@ -34,7 +34,7 @@ src/
 │   ├── indexStatusPanel.ts  # Index health panel
 │   ├── statusBar.ts      # Status bar indicator
 │   └── fileWatcher.ts    # Auto-reindex on save
-├── mcp/            # MCP server for Claude Code
+├── mcp/            # Standalone MCP server
 │   ├── server.ts      # MCP protocol entry point
 │   ├── tools.ts       # Tool handlers
 │   └── config.ts      # Environment-based configuration
