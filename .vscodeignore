@@ -1,0 +1,10 @@
+src/**
+test/**
+scripts/**
+esbuild.*.mjs
+tsconfig.json
+.prettierrc
+node_modules/**
+!node_modules/@lancedb/**
+!node_modules/@huggingface/transformers/**
+!node_modules/onnxruntime-node/**

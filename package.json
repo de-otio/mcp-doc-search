@@ -1,0 +1,122 @@
+{
+  "name": "mcp-doc-search",
+  "displayName": "MCP Doc Search",
+  "description": "Semantic documentation search for any monorepo. VS Code extension + Claude Code MCP server. Local embeddings, no API key required.",
+  "version": "0.1.0",
+  "publisher": "skybber",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/skybber/mcp-doc-search"
+  },
+  "homepage": "https://github.com/skybber/mcp-doc-search#readme",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "vscode": "^1.85.0",
+    "node": ">=18.0.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [
+    "workspaceContains:**/*.md"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "docSearch.search",
+        "title": "Doc Search: Search Documentation"
+      },
+      {
+        "command": "docSearch.reindex",
+        "title": "Doc Search: Reindex Documentation"
+      },
+      {
+        "command": "docSearch.generateMcpJson",
+        "title": "Doc Search: Generate .mcp.json for Claude Code"
+      }
+    ],
+    "configuration": {
+      "title": "Doc Search",
+      "properties": {
+        "docSearch.docGlob": {
+          "type": "string",
+          "default": "doc/**/*.md",
+          "description": "Glob pattern for documentation files to index"
+        },
+        "docSearch.indexDir": {
+          "type": "string",
+          "default": ".claude/doc-index",
+          "description": "Directory to store the vector index (relative to workspace root)"
+        },
+        "docSearch.headingDepth": {
+          "type": "number",
+          "default": 2,
+          "enum": [1, 2],
+          "description": "Split chunks on # only (1) or both # and ## (2)"
+        },
+        "docSearch.maxChunkChars": {
+          "type": "number",
+          "default": 4000,
+          "description": "Maximum characters per chunk"
+        },
+        "docSearch.embedProvider": {
+          "type": "string",
+          "default": "local",
+          "enum": ["local", "ollama", "openai"],
+          "description": "Embedding provider: local (bundled ONNX model), ollama, or openai"
+        },
+        "docSearch.ollamaUrl": {
+          "type": "string",
+          "default": "http://localhost:11434",
+          "description": "Ollama server URL (used when embedProvider is 'ollama')"
+        },
+        "docSearch.ollamaModel": {
+          "type": "string",
+          "default": "nomic-embed-text",
+          "description": "Ollama model name (used when embedProvider is 'ollama')"
+        },
+        "docSearch.openaiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "OpenAI API key (used when embedProvider is 'openai')"
+        },
+        "docSearch.autoReindex": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically reindex changed markdown files on save"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.extension.mjs && node esbuild.mcp.mjs",
+    "build:extension": "node esbuild.extension.mjs",
+    "build:mcp": "node esbuild.mcp.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "prettier --check .",
+    "format": "prettier -w .",
+    "package": "vsce package",
+    "package:darwin-arm": "vsce package --target darwin-arm64",
+    "package:darwin-x64": "vsce package --target darwin-x64",
+    "package:linux-x64": "vsce package --target linux-x64",
+    "package:win-x64": "vsce package --target win32-x64"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.4.0",
+    "@lancedb/lancedb": "^0.13.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "glob": "^11.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.10",
+    "@types/vscode": "^1.85.0",
+    "@vitest/coverage-v8": "^4.0.8",
+    "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.24.0",
+    "prettier": "^3.6.2",
+    "typescript": "^5.6.3",
+    "vitest": "^4.0.8"
+  }
+}

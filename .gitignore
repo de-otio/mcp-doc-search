@@ -1,0 +1,7 @@
+node_modules/
+dist/
+out/
+coverage/
+*.vsix
+.claude/doc-index/
+.mcp.json
