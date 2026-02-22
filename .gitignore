@@ -3,5 +3,5 @@ dist/
 out/
 coverage/
 *.vsix
-.claude/doc-index/
+.claude/
 .mcp.json
