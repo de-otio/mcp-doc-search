@@ -1,6 +1,6 @@
 # MCP Doc Search
 
-Semantic documentation search for any monorepo.
+Semantic documentation search for any monorepo. Instead of pasting entire docs into an AI chat, MCP Doc Search lets your AI assistant fetch only the relevant sections — reducing token usage and keeping context focused on what actually matters.
 
 - **VS Code extension**: type-ahead search in the command palette, auto-reindex on save, status bar indicator
 - **MCP server**: `search_docs`, `list_docs`, `reindex_docs` tools so any MCP-compatible AI assistant can find the right document in a single call
