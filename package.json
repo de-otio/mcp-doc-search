@@ -114,7 +114,7 @@
         },
         "docSearch.indexDir": {
           "type": "string",
-          "default": ".claude/doc-index",
+          "default": ".doc-search-index",
           "description": "Directory to store the vector index (relative to workspace root)"
         },
         "docSearch.headingDepth": {

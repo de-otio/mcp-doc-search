@@ -16,7 +16,7 @@ export function readConfig(): ExtensionConfig {
   const cfg = vscode.workspace.getConfiguration("docSearch");
   return {
     docGlob: cfg.get("docGlob", "doc/**/*.md"),
-    indexDir: cfg.get("indexDir", ".claude/doc-index"),
+    indexDir: cfg.get("indexDir", ".doc-search-index"),
     headingDepth: cfg.get("headingDepth", 2) as 1 | 2,
     maxChunkChars: cfg.get("maxChunkChars", 4000),
     embedProvider: cfg.get("embedProvider", "local") as

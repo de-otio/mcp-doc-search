@@ -22,9 +22,9 @@ src/**/*.md,wiki/**   # Multiple patterns
 ### docSearch.indexDir
 
 - **Type:** `string`
-- **Default:** `.claude/doc-index`
+- **Default:** `.doc-search-index`
 
-Directory where the vector index (LanceDB) and mtime cache are stored. Relative to the workspace root. Add this directory to `.gitignore`.
+Directory where the vector index (LanceDB) and mtime cache are stored. Relative to the workspace root. This path is automatically added to `.gitignore` on first run.
 
 ### docSearch.headingDepth
 
@@ -107,7 +107,7 @@ When running the MCP server standalone, these environment variables configure be
 |----------|---------|-------------|
 | `DOC_SEARCH_WORKSPACE` | (required) | Workspace root path |
 | `DOC_SEARCH_GLOB` | `doc/**/*.md` | File glob pattern |
-| `DOC_SEARCH_INDEX_DIR` | `.claude/doc-index` | Index directory |
+| `DOC_SEARCH_INDEX_DIR` | `.doc-search-index` | Index directory |
 | `USE_OPENAI` | `0` | Set to `1` to use OpenAI embeddings |
 | `OPENAI_API_KEY` | (empty) | OpenAI API key |
 | `OLLAMA_URL` | (empty) | Ollama server URL (enables Ollama provider) |

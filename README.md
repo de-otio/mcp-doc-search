@@ -25,7 +25,7 @@ Open VS Code settings and set:
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `docSearch.docGlob` | `doc/**/*.md` | Glob pattern for docs to index |
-| `docSearch.indexDir` | `.claude/doc-index` | Where to store the vector index |
+| `docSearch.indexDir` | `.doc-search-index` | Where to store the vector index (auto-added to `.gitignore`) |
 | `docSearch.headingDepth` | `2` | Split on `#` only (1) or `#` and `##` (2) |
 | `docSearch.embedProvider` | `local` | `local`, `ollama`, or `openai` |
 | `docSearch.autoReindex` | `true` | Auto-reindex on file save |

@@ -7,6 +7,7 @@ import { readConfig } from "./config.js";
 import { StatusBarManager } from "./statusBar.js";
 import { registerCommands } from "./commands.js";
 import { FileWatcher } from "./fileWatcher.js";
+import { ensureGitignored } from "../core/gitignore.js";
 
 export function activate(context: vscode.ExtensionContext): void {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -14,6 +15,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const config = readConfig();
   const indexDir = path.join(workspaceRoot, config.indexDir);
+  ensureGitignored(workspaceRoot, config.indexDir);
   const store = new LanceVectorStore(indexDir);
   const embedProvider = createEmbedProvider(config);
   const indexer = new Indexer(

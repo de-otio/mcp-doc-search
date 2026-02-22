@@ -1,6 +1,6 @@
 {
   "docSearch.docGlob": "doc/**/*.md",
-  "docSearch.indexDir": ".claude/doc-index",
+  "docSearch.indexDir": ".doc-search-index",
   "docSearch.headingDepth": 2,
   "docSearch.maxChunkChars": 4000,
   "docSearch.embedProvider": "ollama",

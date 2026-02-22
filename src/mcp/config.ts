@@ -4,6 +4,7 @@ import { LanceVectorStore } from "../core/vectorstore.js";
 import { Indexer } from "../core/indexer.js";
 import { LocalEmbedder, OllamaEmbedder, OpenAIEmbedder } from "../core/embedder.js";
 import type { EmbedProvider } from "../core/types.js";
+import { ensureGitignored } from "../core/gitignore.js";
 
 export interface EngineDeps {
   store: LanceVectorStore;
@@ -37,12 +38,12 @@ export async function createEngineFromEnv(): Promise<EngineDeps> {
     settings["docSearch.docGlob"] ??
     process.env.DOC_SEARCH_GLOB ??
     "doc/**/*.md";
-  const indexDir = path.join(
-    workspaceRoot,
+  const indexDirRelative =
     settings["docSearch.indexDir"] ??
-      process.env.DOC_SEARCH_INDEX_DIR ??
-      ".claude/doc-index",
-  );
+    process.env.DOC_SEARCH_INDEX_DIR ??
+    ".doc-search-index";
+  const indexDir = path.join(workspaceRoot, indexDirRelative);
+  ensureGitignored(workspaceRoot, indexDirRelative);
   const maxChunkChars = settings["docSearch.maxChunkChars"] ?? 4000;
   const headingDepth = settings["docSearch.headingDepth"] ?? 2;
 

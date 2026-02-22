@@ -21,7 +21,7 @@ The generated file includes your current settings and looks like this:
       "env": {
         "DOC_SEARCH_WORKSPACE": "/path/to/your/workspace",
         "DOC_SEARCH_GLOB": "doc/**/*.md",
-        "DOC_SEARCH_INDEX_DIR": ".claude/doc-index"
+        "DOC_SEARCH_INDEX_DIR": ".doc-search-index"
       }
     }
   }
@@ -75,7 +75,7 @@ claude mcp add doc-search \
   -s project \
   -e DOC_SEARCH_WORKSPACE=/absolute/path/to/workspace \
   -e DOC_SEARCH_GLOB="doc/**/*.md" \
-  -e DOC_SEARCH_INDEX_DIR=".claude/doc-index" \
+  -e DOC_SEARCH_INDEX_DIR=".doc-search-index" \
   -- node ~/.vscode/extensions/de-otio-org.mcp-doc-search-*/dist/mcp-server.js
 ```
 
@@ -92,7 +92,7 @@ Create `.mcp.json` in your workspace root:
       "env": {
         "DOC_SEARCH_WORKSPACE": "<absolute-path-to-workspace>",
         "DOC_SEARCH_GLOB": "doc/**/*.md",
-        "DOC_SEARCH_INDEX_DIR": ".claude/doc-index"
+        "DOC_SEARCH_INDEX_DIR": ".doc-search-index"
       }
     }
   }
@@ -156,7 +156,7 @@ The MCP server is configured via the `env` block in `.mcp.json`. The **Generate 
 |----------|---------|-------------|
 | `DOC_SEARCH_WORKSPACE` | `process.cwd()` | Absolute path to workspace root |
 | `DOC_SEARCH_GLOB` | `doc/**/*.md` | File glob pattern |
-| `DOC_SEARCH_INDEX_DIR` | `.claude/doc-index` | Index directory (relative to workspace) |
+| `DOC_SEARCH_INDEX_DIR` | `.doc-search-index` | Index directory (relative to workspace) |
 | `USE_OPENAI` | `0` | Set to `1` to use OpenAI embeddings |
 | `OPENAI_API_KEY` | — | Required if `USE_OPENAI=1` |
 | `OLLAMA_URL` | — | Ollama server URL (presence enables Ollama provider) |

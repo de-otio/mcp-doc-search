@@ -56,7 +56,7 @@ export class SettingsPanel {
           type: "config",
           config: {
             docGlob: cfg.get("docGlob", "doc/**/*.md"),
-            indexDir: cfg.get("indexDir", ".claude/doc-index"),
+            indexDir: cfg.get("indexDir", ".doc-search-index"),
             headingDepth: cfg.get("headingDepth", 2),
             maxChunkChars: cfg.get("maxChunkChars", 4000),
             embedProvider: cfg.get("embedProvider", "local"),
@@ -419,7 +419,7 @@ export class SettingsPanel {
   <div class="field">
     <label for="indexDir">Search index location</label>
     <div class="hint">Folder where the search database is stored (relative to workspace root). You can usually leave this as the default.</div>
-    <input type="text" id="indexDir" placeholder=".claude/doc-index">
+    <input type="text" id="indexDir" placeholder=".doc-search-index">
   </div>
 
   <h2>Behavior</h2>
