@@ -21,19 +21,19 @@ The system chunks your markdown files at heading boundaries, generates vector em
 
 ## Components
 
-| Component | Description |
-|-----------|-------------|
-| **Core Engine** (`src/core/`) | Framework-agnostic search engine — chunking, embedding, indexing, and search |
-| **VS Code Extension** (`src/extension/`) | UI integration — search panel, status bar, settings, file watcher |
-| **MCP Server** (`src/mcp/`) | MCP integration — exposes search, list, and reindex as MCP tools |
+| Component                                | Description                                                                  |
+| ---------------------------------------- | ---------------------------------------------------------------------------- |
+| **Core Engine** (`src/core/`)            | Framework-agnostic search engine — chunking, embedding, indexing, and search |
+| **VS Code Extension** (`src/extension/`) | UI integration — search panel, status bar, settings, file watcher            |
+| **MCP Server** (`src/mcp/`)              | MCP integration — exposes search, list, and reindex as MCP tools             |
 
 ## Embedding Providers
 
-| Provider | Dimensions | Requirements | Quality |
-|----------|-----------|--------------|---------|
-| **Local** (default) | 384 | None — bundled ONNX model | Good |
-| **Ollama** | 768 | Local Ollama server running | Better |
-| **OpenAI** | 1536 | API key | Best |
+| Provider            | Dimensions | Requirements                | Quality |
+| ------------------- | ---------- | --------------------------- | ------- |
+| **Local** (default) | 384        | None — bundled ONNX model   | Good    |
+| **Ollama**          | 768        | Local Ollama server running | Better  |
+| **OpenAI**          | 1536       | API key                     | Best    |
 
 ## Further Reading
 

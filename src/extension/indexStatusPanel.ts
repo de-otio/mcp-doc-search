@@ -7,10 +7,7 @@ export class IndexStatusPanel {
   private readonly panel: vscode.WebviewPanel;
   private readonly indexer: Indexer;
 
-  static createOrShow(
-    context: vscode.ExtensionContext,
-    indexer: Indexer,
-  ): void {
+  static createOrShow(context: vscode.ExtensionContext, indexer: Indexer): void {
     if (IndexStatusPanel.instance) {
       IndexStatusPanel.instance.panel.reveal();
       return;
@@ -61,14 +58,13 @@ export class IndexStatusPanel {
     console.log("[DocSearch] runReindex started, force =", force);
     this.panel.webview.postMessage({ type: "indexing", phase: "scanning" });
     try {
-      const stats = await this.indexer.reindex(
-        force,
-        (processed, total, _file, phase) => {
-          try {
-            this.panel.webview.postMessage({ type: "indexing", phase, processed, total });
-          } catch (_) { /* panel disposed during reindex */ }
-        },
-      );
+      const stats = await this.indexer.reindex(force, (processed, total, _file, phase) => {
+        try {
+          this.panel.webview.postMessage({ type: "indexing", phase, processed, total });
+        } catch {
+          // panel disposed during reindex
+        }
+      });
       console.log("[DocSearch] runReindex completed:", JSON.stringify(stats));
       await this.sendStatus();
       this.panel.webview.postMessage({ type: "reindexDone", stats });
@@ -78,7 +74,9 @@ export class IndexStatusPanel {
       const message = err instanceof Error ? err.message : String(err);
       try {
         this.panel.webview.postMessage({ type: "reindexError", message });
-      } catch (_) { /* panel disposed */ }
+      } catch {
+        // panel disposed
+      }
     }
   }
 
@@ -92,9 +90,7 @@ export class IndexStatusPanel {
         type: "status",
         status: {
           ...status,
-          lastIndexed: status.lastIndexed
-            ? status.lastIndexed.toISOString()
-            : null,
+          lastIndexed: status.lastIndexed ? status.lastIndexed.toISOString() : null,
         },
         embedProvider: provider,
       });

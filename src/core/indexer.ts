@@ -59,9 +59,7 @@ export class Indexer {
     const toIndex = force
       ? mdFiles
       : mdFiles.filter((f) => {
-          const rel = path
-            .relative(this.config.workspaceRoot, f)
-            .replace(/\\/g, "/");
+          const rel = path.relative(this.config.workspaceRoot, f).replace(/\\/g, "/");
           return cache[rel] !== String(statSync(f).mtimeMs);
         });
 
@@ -72,15 +70,11 @@ export class Indexer {
     let firstEmbed = true;
 
     for (const filePath of mdFiles) {
-      const rel = path
-        .relative(this.config.workspaceRoot, filePath)
-        .replace(/\\/g, "/");
+      const rel = path.relative(this.config.workspaceRoot, filePath).replace(/\\/g, "/");
 
       // Path traversal validation
       if (rel.startsWith("..") || path.isAbsolute(rel)) {
-        console.warn(
-          `Path traversal blocked: ${filePath} is outside workspace`,
-        );
+        console.warn(`Path traversal blocked: ${filePath} is outside workspace`);
         continue;
       }
 
@@ -115,10 +109,7 @@ export class Indexer {
           onProgress?.(0, toIndex.length, rel, "loading");
           firstEmbed = false;
         }
-        embeddings = await this.config.embedProvider.embed(
-          texts,
-          "search_document: ",
-        );
+        embeddings = await this.config.embedProvider.embed(texts, "search_document: ");
       } catch (err) {
         console.error(
           `Warning: embedding failed for ${rel}: ${err instanceof Error ? err.message : err}`,
@@ -167,17 +158,13 @@ export class Indexer {
     });
 
     const fileSet = new Set(
-      mdFiles.map((f) =>
-        path.relative(this.config.workspaceRoot, f).replace(/\\/g, "/"),
-      ),
+      mdFiles.map((f) => path.relative(this.config.workspaceRoot, f).replace(/\\/g, "/")),
     );
 
     let changedFiles = 0;
     let newFiles = 0;
     for (const filePath of mdFiles) {
-      const rel = path
-        .relative(this.config.workspaceRoot, filePath)
-        .replace(/\\/g, "/");
+      const rel = path.relative(this.config.workspaceRoot, filePath).replace(/\\/g, "/");
       if (!(rel in cache)) {
         newFiles++;
       } else if (cache[rel] !== String(statSync(filePath).mtimeMs)) {
@@ -185,14 +172,10 @@ export class Indexer {
       }
     }
 
-    const deletedFiles = Object.keys(cache).filter(
-      (rel) => !fileSet.has(rel),
-    ).length;
+    const deletedFiles = Object.keys(cache).filter((rel) => !fileSet.has(rel)).length;
 
     const cachePath = this.mtimeCachePath();
-    const lastIndexed = existsSync(cachePath)
-      ? new Date(statSync(cachePath).mtimeMs)
-      : null;
+    const lastIndexed = existsSync(cachePath) ? new Date(statSync(cachePath).mtimeMs) : null;
 
     const chunkCount = await this.store.count();
 

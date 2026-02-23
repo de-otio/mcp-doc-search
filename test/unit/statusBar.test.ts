@@ -19,9 +19,7 @@ describe("StatusBar", () => {
       dispose: vi.fn(),
     };
 
-    vi.mocked(vscode.window.createStatusBarItem).mockReturnValue(
-      mockStatusBarItem,
-    );
+    vi.mocked(vscode.window.createStatusBarItem).mockReturnValue(mockStatusBarItem);
 
     context = {
       subscriptions: [],

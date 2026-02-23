@@ -41,9 +41,7 @@ describe("Commands", () => {
     it("should register all 6 commands", () => {
       registerCommands(mockContext, deps);
 
-      expect(vi.mocked(vscode.commands.registerCommand)).toHaveBeenCalledTimes(
-        6,
-      );
+      expect(vi.mocked(vscode.commands.registerCommand)).toHaveBeenCalledTimes(6);
     });
 
     it("should register docSearch.reindex command", () => {

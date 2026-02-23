@@ -10,8 +10,8 @@ Semantic search for your documentation — right inside VS Code and any MCP-comp
 
 ## Embedding providers
 
-| Provider | Setup | Quality | Offline |
-|----------|-------|---------|---------|
-| **Local** | None | Good | Yes |
-| **Ollama** | Install Ollama | Better | Yes |
-| **OpenAI** | API key | Best | No |
+| Provider   | Setup          | Quality | Offline |
+| ---------- | -------------- | ------- | ------- |
+| **Local**  | None           | Good    | Yes     |
+| **Ollama** | Install Ollama | Better  | Yes     |
+| **OpenAI** | API key        | Best    | No      |

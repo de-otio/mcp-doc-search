@@ -15,10 +15,8 @@ function safeLanceFilter(file: string): string {
   if (file.length > 2048) {
     throw new Error(`File path too long (max 2048 chars): ${file}`);
   }
-  if (!/^[a-zA-Z0-9_.\/-]+$/.test(file)) {
-    throw new Error(
-      `File path contains suspicious characters: ${file}. Allowed: [a-zA-Z0-9_./-]`,
-    );
+  if (!/^[a-zA-Z0-9_./-]+$/.test(file)) {
+    throw new Error(`File path contains suspicious characters: ${file}. Allowed: [a-zA-Z0-9_./-]`);
   }
   // Escape single quotes for SQL
   return file.replace(/'/g, "''");
@@ -118,17 +116,10 @@ export class LanceVectorStore {
     await this.table.add(records);
   }
 
-  async query(
-    queryVector: number[],
-    n: number,
-  ): Promise<VectorQueryResult[]> {
+  async query(queryVector: number[], n: number): Promise<VectorQueryResult[]> {
     if (!this.table) return [];
 
-    const results = await this.table
-      .search(queryVector)
-      .distanceType("cosine")
-      .limit(n)
-      .toArray();
+    const results = await this.table.search(queryVector).distanceType("cosine").limit(n).toArray();
 
     return results.map((r: any) => ({
       file: r.file,

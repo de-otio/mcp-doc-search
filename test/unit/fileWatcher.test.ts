@@ -41,18 +41,14 @@ describe("FileWatcher", () => {
       setError: vi.fn(),
     };
 
-    vi.mocked(vscode.workspace.createFileSystemWatcher).mockReturnValue(
-      mockWatcher,
-    );
+    vi.mocked(vscode.workspace.createFileSystemWatcher).mockReturnValue(mockWatcher);
   });
 
   describe("FileWatcher", () => {
     it("should create file watcher with docGlob pattern", () => {
       new FileWatcher("/workspace", "doc/**/*.md", mockIndexer, mockStatusBar);
 
-      expect(vscode.workspace.createFileSystemWatcher).toHaveBeenCalledWith(
-        expect.any(Object),
-      );
+      expect(vscode.workspace.createFileSystemWatcher).toHaveBeenCalledWith(expect.any(Object));
     });
 
     it("should register change listeners", () => {
@@ -64,12 +60,7 @@ describe("FileWatcher", () => {
     });
 
     it("should debounce rapid file changes", async () => {
-      const watcher = new FileWatcher(
-        "/workspace",
-        "doc/**/*.md",
-        mockIndexer,
-        mockStatusBar,
-      );
+      const watcher = new FileWatcher("/workspace", "doc/**/*.md", mockIndexer, mockStatusBar);
 
       // Get the registered handlers
       const changeHandler = vi.mocked(mockWatcher.onDidChange).mock.calls[0]?.[0];
@@ -90,12 +81,7 @@ describe("FileWatcher", () => {
     });
 
     it("should update status bar during reindex", async () => {
-      const watcher = new FileWatcher(
-        "/workspace",
-        "doc/**/*.md",
-        mockIndexer,
-        mockStatusBar,
-      );
+      const watcher = new FileWatcher("/workspace", "doc/**/*.md", mockIndexer, mockStatusBar);
 
       const changeHandler = vi.mocked(mockWatcher.onDidChange).mock.calls[0]?.[0];
 
@@ -109,12 +95,7 @@ describe("FileWatcher", () => {
     });
 
     it("should dispose watcher and clear timers", () => {
-      const watcher = new FileWatcher(
-        "/workspace",
-        "doc/**/*.md",
-        mockIndexer,
-        mockStatusBar,
-      );
+      const watcher = new FileWatcher("/workspace", "doc/**/*.md", mockIndexer, mockStatusBar);
 
       watcher.dispose();
 

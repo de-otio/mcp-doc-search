@@ -73,9 +73,7 @@ export type SettingsResultMessage =
 /**
  * Index status panel message types
  */
-export type IndexStatusMessage =
-  | { type: "ready" }
-  | { type: "reindex" };
+export type IndexStatusMessage = { type: "ready" } | { type: "reindex" };
 
 export type IndexStatusResultMessage = {
   type: "status" | "progress";

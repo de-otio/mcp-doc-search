@@ -18,9 +18,7 @@ export function ensureGitignored(workspaceRoot: string, entry: string): void {
 
   // Check if already covered by an exact match on any non-comment line
   const lines = existing.split("\n").map((l) => l.trim());
-  const alreadyCovered = lines.some(
-    (l) => !l.startsWith("#") && l !== "" && entry === l,
-  );
+  const alreadyCovered = lines.some((l) => !l.startsWith("#") && l !== "" && entry === l);
   if (alreadyCovered) return;
 
   const separator = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";

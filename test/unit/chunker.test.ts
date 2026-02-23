@@ -29,13 +29,13 @@ describe("findFenceRanges", () => {
   it("correctly identifies multiple fence ranges in a file", () => {
     const content = [
       "line 0",
-      "```typescript",   // line 1 — fence start
+      "```typescript", // line 1 — fence start
       "const x = 1;",
-      "```",              // line 3 — fence end
+      "```", // line 3 — fence end
       "line 4",
-      "```",              // line 5 — fence start
+      "```", // line 5 — fence start
       "const y = 2;",
-      "```",              // line 7 — fence end
+      "```", // line 7 — fence end
       "line 8",
     ].join("\n");
 
@@ -48,7 +48,7 @@ describe("findFenceRanges", () => {
   it("treats an unclosed fence as extending to end-of-file sentinel", () => {
     const content = [
       "intro",
-      "```",   // line 1 — opens, never closes
+      "```", // line 1 — opens, never closes
       "code here",
     ].join("\n");
 
@@ -82,7 +82,10 @@ describe("inFence", () => {
   });
 
   it("returns false for line outside all fence ranges", () => {
-    const ranges: Array<[number, number]> = [[3, 7], [10, 15]];
+    const ranges: Array<[number, number]> = [
+      [3, 7],
+      [10, 15],
+    ];
     expect(inFence(8, ranges)).toBe(false);
     expect(inFence(0, ranges)).toBe(false);
     expect(inFence(20, ranges)).toBe(false);
@@ -148,14 +151,9 @@ describe("chunkMarkdown — H1/H2 splitting", () => {
   });
 
   it("prepends the doc title as a breadcrumb to every chunk's text", () => {
-    const content = [
-      "# My Doc",
-      "",
-      "## Alpha",
-      "Alpha content.",
-      "## Beta",
-      "Beta content.",
-    ].join("\n");
+    const content = ["# My Doc", "", "## Alpha", "Alpha content.", "## Beta", "Beta content."].join(
+      "\n",
+    );
     const filePath = writeTemp("breadcrumb-doc.md", content);
 
     const chunks = chunkMarkdown(filePath, tmpDir);
@@ -245,13 +243,7 @@ describe("chunkMarkdown — repeated heading names", () => {
 
 describe("chunkMarkdown — stable IDs", () => {
   it("produces the same chunk ID on repeated calls for the same file+lineNumber", () => {
-    const content = [
-      "# Stable",
-      "",
-      "## SubSection",
-      "",
-      "Content.",
-    ].join("\n");
+    const content = ["# Stable", "", "## SubSection", "", "Content."].join("\n");
     const filePath = writeTemp("stable-id.md", content);
 
     const chunksA = chunkMarkdown(filePath, tmpDir);

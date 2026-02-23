@@ -22,10 +22,7 @@ export class SettingsPanel {
     SettingsPanel.instance = new SettingsPanel(panel, context);
   }
 
-  private constructor(
-    panel: vscode.WebviewPanel,
-    context: vscode.ExtensionContext,
-  ) {
+  private constructor(panel: vscode.WebviewPanel, context: vscode.ExtensionContext) {
     this.panel = panel;
     this.panel.webview.html = this.getHtml();
 
@@ -106,12 +103,9 @@ export class SettingsPanel {
       }
 
       case "checkOllama": {
-        const url = (msg.ollamaUrl || "http://localhost:11434").replace(
-          /\/$/,
-          "",
-        );
+        const url = (msg.ollamaUrl || "http://localhost:11434").replace(/\/$/, "");
         let running = false;
-        let installed = false;
+        let installed: boolean;
 
         // Check if server is reachable
         try {

@@ -53,8 +53,7 @@ describe("McpSetupPanel", () => {
     it("should handle copy message", async () => {
       McpSetupPanel.createOrShow(mockContext, deps);
 
-      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock
-        .calls[0]?.[0];
+      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
 
       if (messageHandler) {
         await messageHandler({ type: "copy" });
@@ -69,8 +68,7 @@ describe("McpSetupPanel", () => {
     it("should include MCP server configuration in clipboard", async () => {
       McpSetupPanel.createOrShow(mockContext, deps);
 
-      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock
-        .calls[0]?.[0];
+      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
 
       if (messageHandler) {
         await messageHandler({ type: "copy" });
@@ -83,8 +81,7 @@ describe("McpSetupPanel", () => {
     it("should show confirmation message after copy", async () => {
       McpSetupPanel.createOrShow(mockContext, deps);
 
-      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock
-        .calls[0]?.[0];
+      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
 
       if (messageHandler) {
         await messageHandler({ type: "copy" });
@@ -94,14 +91,11 @@ describe("McpSetupPanel", () => {
     });
 
     it("should handle copy errors gracefully", async () => {
-      vi.mocked(vscode.env.clipboard.writeText).mockRejectedValue(
-        new Error("Clipboard error"),
-      );
+      vi.mocked(vscode.env.clipboard.writeText).mockRejectedValue(new Error("Clipboard error"));
 
       McpSetupPanel.createOrShow(mockContext, deps);
 
-      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock
-        .calls[0]?.[0];
+      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
 
       if (messageHandler) {
         await messageHandler({ type: "copy" });

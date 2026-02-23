@@ -132,9 +132,7 @@ describe("LanceVectorStore", () => {
         },
       ];
 
-      await expect(store.upsert(records)).rejects.toThrow(
-        "Table not initialized",
-      );
+      await expect(store.upsert(records)).rejects.toThrow("Table not initialized");
     });
   });
 

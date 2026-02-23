@@ -43,10 +43,7 @@ describe("Indexer", () => {
       const { chunkMarkdown } = await import("../../src/core/chunker.js");
       const { statSync } = await import("node:fs");
 
-      vi.mocked(glob).mockResolvedValue([
-        "/workspace/doc/test.md",
-        "/workspace/doc/broken.md",
-      ]);
+      vi.mocked(glob).mockResolvedValue(["/workspace/doc/test.md", "/workspace/doc/broken.md"]);
       vi.mocked(statSync).mockReturnValue({ mtimeMs: 1000 } as any);
       vi.mocked(chunkMarkdown)
         .mockReturnValueOnce([
@@ -142,12 +139,7 @@ describe("Indexer", () => {
       mockStore.upsert.mockResolvedValue(undefined);
 
       const progressCalls: any[] = [];
-      const onProgress = (
-        processed: number,
-        total: number,
-        file: string,
-        phase: string,
-      ) => {
+      const onProgress = (processed: number, total: number, file: string, phase: string) => {
         progressCalls.push({ processed, total, file, phase });
       };
 

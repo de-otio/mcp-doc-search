@@ -109,10 +109,7 @@ function mockEmbedder(vector: number[]): EmbedProvider {
 }
 
 /** Create a mock LanceVectorStore with configurable count and query results. */
-function mockStore(
-  totalCount: number,
-  queryResults: VectorQueryResult[],
-): LanceVectorStore {
+function mockStore(totalCount: number, queryResults: VectorQueryResult[]): LanceVectorStore {
   return {
     count: vi.fn(async () => totalCount),
     query: vi.fn(async () => queryResults),
@@ -223,20 +220,19 @@ describe("search", () => {
   });
 
   it("passes search_query prefix to the embedder", async () => {
-    const store = mockStore(1, [{
-      file: "doc/test.md",
-      heading: "Test",
-      lineStart: 0,
-      text: "test content",
-      _distance: 0.1,
-    }]);
+    const store = mockStore(1, [
+      {
+        file: "doc/test.md",
+        heading: "Test",
+        lineStart: 0,
+        text: "test content",
+        _distance: 0.1,
+      },
+    ]);
     const embedder = mockEmbedder([0.1]);
 
     await search("test query", 5, store, embedder);
 
-    expect(embedder.embed).toHaveBeenCalledWith(
-      ["test query"],
-      "search_query: ",
-    );
+    expect(embedder.embed).toHaveBeenCalledWith(["test query"], "search_query: ");
   });
 });

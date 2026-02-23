@@ -1,8 +1,5 @@
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { search } from "../core/searcher.js";
 import type { EngineDeps } from "./config.js";
 
@@ -92,9 +89,7 @@ export function registerTools(server: Server, deps: EngineDeps): void {
         };
       } catch (err) {
         return {
-          content: [
-            { type: "text", text: JSON.stringify({ error: String(err) }) },
-          ],
+          content: [{ type: "text", text: JSON.stringify({ error: String(err) }) }],
         };
       }
     }
@@ -107,9 +102,7 @@ export function registerTools(server: Server, deps: EngineDeps): void {
         };
       } catch (err) {
         return {
-          content: [
-            { type: "text", text: JSON.stringify({ error: String(err) }) },
-          ],
+          content: [{ type: "text", text: JSON.stringify({ error: String(err) }) }],
         };
       }
     }
@@ -128,9 +121,7 @@ export function registerTools(server: Server, deps: EngineDeps): void {
         };
       } catch (err) {
         return {
-          content: [
-            { type: "text", text: JSON.stringify({ error: String(err) }) },
-          ],
+          content: [{ type: "text", text: JSON.stringify({ error: String(err) }) }],
         };
       }
     }

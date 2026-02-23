@@ -84,7 +84,10 @@ export interface LanceConnection {
  * Embedder pipeline interface for local transformers
  */
 export interface EmbedderPipeline {
-  (text: string, options?: { pooling?: string; normalize?: boolean }): Promise<{
+  (
+    text: string,
+    options?: { pooling?: string; normalize?: boolean },
+  ): Promise<{
     tolist(): number[];
     data: Float32Array;
   }>;

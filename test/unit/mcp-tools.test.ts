@@ -37,15 +37,12 @@ describe("MCP Tools", () => {
         embedProvider: mockEmbedProvider,
       });
 
-      const listToolsHandler = vi.mocked(mockServer.setRequestHandler).mock
-        .calls[0]?.[1];
+      const listToolsHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[0]?.[1];
       expect(listToolsHandler).toBeDefined();
     });
 
     it("should validate search_docs query parameter", async () => {
-      const { CallToolRequestSchema } = await import(
-        "@modelcontextprotocol/sdk/types.js"
-      );
+      const { CallToolRequestSchema } = await import("@modelcontextprotocol/sdk/types.js");
 
       registerTools(mockServer, {
         store: mockStore,
@@ -53,8 +50,7 @@ describe("MCP Tools", () => {
         embedProvider: mockEmbedProvider,
       });
 
-      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock
-        .calls[1]?.[1];
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
 
       if (callToolHandler) {
         const result = await callToolHandler({
@@ -75,8 +71,7 @@ describe("MCP Tools", () => {
         embedProvider: mockEmbedProvider,
       });
 
-      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock
-        .calls[1]?.[1];
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
 
       if (callToolHandler) {
         mockStore.query.mockResolvedValue([]);
@@ -99,8 +94,7 @@ describe("MCP Tools", () => {
         embedProvider: mockEmbedProvider,
       });
 
-      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock
-        .calls[1]?.[1];
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
 
       if (callToolHandler) {
         mockIndexer.reindex.mockResolvedValue({
@@ -129,8 +123,7 @@ describe("MCP Tools", () => {
         embedProvider: mockEmbedProvider,
       });
 
-      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock
-        .calls[1]?.[1];
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
 
       if (callToolHandler) {
         const result = await callToolHandler({

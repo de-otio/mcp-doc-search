@@ -65,8 +65,7 @@ describe("SettingsPanel", () => {
     it("should handle getConfig message", async () => {
       SettingsPanel.createOrShow(mockContext);
 
-      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock
-        .calls[0]?.[0];
+      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
 
       if (messageHandler) {
         await messageHandler({ type: "getConfig" });
@@ -80,8 +79,7 @@ describe("SettingsPanel", () => {
     it("should handle saveConfig message", async () => {
       SettingsPanel.createOrShow(mockContext);
 
-      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock
-        .calls[0]?.[0];
+      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
 
       if (messageHandler) {
         const newConfig = {
@@ -106,8 +104,7 @@ describe("SettingsPanel", () => {
     it("should handle testConnection message for Ollama", async () => {
       SettingsPanel.createOrShow(mockContext);
 
-      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock
-        .calls[0]?.[0];
+      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
 
       if (messageHandler) {
         await messageHandler({
@@ -125,8 +122,7 @@ describe("SettingsPanel", () => {
     it("should handle testConnection message for OpenAI", async () => {
       SettingsPanel.createOrShow(mockContext);
 
-      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock
-        .calls[0]?.[0];
+      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
 
       if (messageHandler) {
         await messageHandler({
@@ -144,8 +140,7 @@ describe("SettingsPanel", () => {
     it("should handle errors in message processing", async () => {
       SettingsPanel.createOrShow(mockContext);
 
-      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock
-        .calls[0]?.[0];
+      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
 
       if (messageHandler) {
         await messageHandler({ type: "saveConfig", config: null });

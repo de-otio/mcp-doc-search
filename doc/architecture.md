@@ -130,6 +130,7 @@ src/mcp/server.ts           →  esbuild  →  dist/mcp-server.js  (MCP)
 ```
 
 External dependencies (not bundled):
+
 - `vscode` — provided by the VS Code runtime
 - `@lancedb/lancedb` — native bindings, must ship as-is
 - `@huggingface/transformers` — large dependency, loaded at runtime

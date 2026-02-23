@@ -64,8 +64,7 @@ describe("SearchPanel", () => {
 
       SearchPanel.createOrShow(mockContext, deps);
 
-      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock
-        .calls[0]?.[0];
+      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
 
       if (messageHandler) {
         await messageHandler({ type: "search", query: "test" });
@@ -83,8 +82,7 @@ describe("SearchPanel", () => {
 
       SearchPanel.createOrShow(mockContext, deps);
 
-      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock
-        .calls[0]?.[0];
+      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
 
       if (messageHandler) {
         await messageHandler({ type: "search", query: "test" });
@@ -106,8 +104,7 @@ describe("SearchPanel", () => {
         disposeHandler();
       }
 
-      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock
-        .calls[0]?.[0];
+      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
 
       if (messageHandler) {
         await messageHandler({ type: "search", query: "test" });
@@ -119,8 +116,7 @@ describe("SearchPanel", () => {
     it("should handle empty query", async () => {
       SearchPanel.createOrShow(mockContext, deps);
 
-      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock
-        .calls[0]?.[0];
+      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
 
       if (messageHandler) {
         await messageHandler({ type: "search", query: "   " });

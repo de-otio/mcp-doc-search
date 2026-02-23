@@ -6,10 +6,7 @@ await esbuild.build({
   platform: "node",
   target: "node18",
   outfile: "dist/mcp-server.js",
-  external: [
-    "@lancedb/lancedb",
-    "@huggingface/transformers",
-  ],
+  external: ["@lancedb/lancedb", "@huggingface/transformers"],
   format: "cjs",
   banner: { js: "#!/usr/bin/env node" },
   sourcemap: true,

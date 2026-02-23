@@ -17,7 +17,9 @@ async function main() {
   await server.connect(transport);
 }
 
-main().catch(err => {
-  process.stderr.write(`Doc Search MCP server error: ${err instanceof Error ? err.message : String(err)}\n`);
+main().catch((err) => {
+  process.stderr.write(
+    `Doc Search MCP server error: ${err instanceof Error ? err.message : String(err)}\n`,
+  );
   process.exit(1);
 });

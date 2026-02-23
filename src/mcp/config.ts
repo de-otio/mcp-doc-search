@@ -35,14 +35,9 @@ export async function createEngineFromEnv(): Promise<EngineDeps> {
   const settings = readWorkspaceSettings(workspaceRoot);
 
   // Settings cascade: .vscode/settings.json → env vars → defaults
-  const docGlob =
-    settings["docSearch.docGlob"] ??
-    process.env.DOC_SEARCH_GLOB ??
-    "doc/**/*.md";
+  const docGlob = settings["docSearch.docGlob"] ?? process.env.DOC_SEARCH_GLOB ?? "doc/**/*.md";
   const indexDirRelative =
-    settings["docSearch.indexDir"] ??
-    process.env.DOC_SEARCH_INDEX_DIR ??
-    ".doc-search-index";
+    settings["docSearch.indexDir"] ?? process.env.DOC_SEARCH_INDEX_DIR ?? ".doc-search-index";
   const indexDir = path.join(workspaceRoot, indexDirRelative);
   ensureGitignored(workspaceRoot, indexDirRelative);
   const maxChunkChars = settings["docSearch.maxChunkChars"] ?? 4000;
@@ -57,20 +52,13 @@ export async function createEngineFromEnv(): Promise<EngineDeps> {
 
   let embedProvider: EmbedProvider;
   if (providerName === "openai") {
-    const apiKey =
-      settings["docSearch.openaiApiKey"] ??
-      process.env.OPENAI_API_KEY ??
-      "";
+    const apiKey = settings["docSearch.openaiApiKey"] ?? process.env.OPENAI_API_KEY ?? "";
     embedProvider = new OpenAIEmbedder(apiKey);
   } else if (providerName === "ollama") {
     const ollamaModel =
-      settings["docSearch.ollamaModel"] ??
-      process.env.OLLAMA_MODEL ??
-      "nomic-embed-text";
+      settings["docSearch.ollamaModel"] ?? process.env.OLLAMA_MODEL ?? "nomic-embed-text";
     const ollamaUrl =
-      settings["docSearch.ollamaUrl"] ??
-      process.env.OLLAMA_URL ??
-      "http://localhost:11434";
+      settings["docSearch.ollamaUrl"] ?? process.env.OLLAMA_URL ?? "http://localhost:11434";
     embedProvider = new OllamaEmbedder(ollamaModel, ollamaUrl);
   } else {
     embedProvider = new LocalEmbedder();

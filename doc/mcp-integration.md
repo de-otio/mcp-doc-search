@@ -35,6 +35,7 @@ Point your MCP client at the generated `.mcp.json`. Most clients read it automat
 **Claude Code** (VS Code extension or CLI): detects `.mcp.json` automatically. You will see a prompt to approve the project-scoped MCP server the first time.
 
 **Claude Code CLI:**
+
 ```bash
 claude mcp list   # verify doc-search appears
 ```
@@ -95,6 +96,7 @@ Create `.mcp.json` in your workspace root:
 ```
 
 To find the extension path:
+
 ```bash
 ls ~/.vscode/extensions/de-otio-org.mcp-doc-search-*/dist/mcp-server.js
 ```
@@ -125,6 +127,7 @@ Search documentation using natural language.
 | `n` | number | 5 | Maximum number of results to return |
 
 **Returns:** Array of search results, each containing:
+
 - `file` — relative path to the source file
 - `heading` — the section heading
 - `text` — chunk text content
@@ -149,6 +152,7 @@ Trigger a documentation reindex.
 | `force` | boolean | false | If true, reindex all files. If false, only changed files. |
 
 **Returns:** Index statistics:
+
 - `indexed` — number of files processed
 - `skipped` — number of unchanged files skipped
 - `totalChunks` — total chunks in the index
@@ -158,15 +162,15 @@ Trigger a documentation reindex.
 
 The MCP server is configured via the `env` block in `.mcp.json`. The **Generate .mcp.json** command fills these in automatically from your extension settings.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DOC_SEARCH_WORKSPACE` | `process.cwd()` | Absolute path to workspace root |
-| `DOC_SEARCH_GLOB` | `doc/**/*.md` | File glob pattern |
-| `DOC_SEARCH_INDEX_DIR` | `.doc-search-index` | Index directory (relative to workspace) |
-| `USE_OPENAI` | `0` | Set to `1` to use OpenAI embeddings |
-| `OPENAI_API_KEY` | — | Required if `USE_OPENAI=1` |
-| `OLLAMA_URL` | — | Ollama server URL (presence enables Ollama provider) |
-| `OLLAMA_MODEL` | `nomic-embed-text` | Ollama model name |
+| Variable               | Default             | Description                                          |
+| ---------------------- | ------------------- | ---------------------------------------------------- |
+| `DOC_SEARCH_WORKSPACE` | `process.cwd()`     | Absolute path to workspace root                      |
+| `DOC_SEARCH_GLOB`      | `doc/**/*.md`       | File glob pattern                                    |
+| `DOC_SEARCH_INDEX_DIR` | `.doc-search-index` | Index directory (relative to workspace)              |
+| `USE_OPENAI`           | `0`                 | Set to `1` to use OpenAI embeddings                  |
+| `OPENAI_API_KEY`       | —                   | Required if `USE_OPENAI=1`                           |
+| `OLLAMA_URL`           | —                   | Ollama server URL (presence enables Ollama provider) |
+| `OLLAMA_MODEL`         | `nomic-embed-text`  | Ollama model name                                    |
 
 ## Shared Index
 

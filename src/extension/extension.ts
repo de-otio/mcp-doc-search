@@ -45,12 +45,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
 
   if (config.autoReindex) {
-    const watcher = new FileWatcher(
-      workspaceRoot,
-      config.docGlob,
-      indexer,
-      statusBar,
-    );
+    const watcher = new FileWatcher(workspaceRoot, config.docGlob, indexer, statusBar);
     context.subscriptions.push(watcher);
   }
 
@@ -60,7 +55,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       `Doc Search: Failed to open index — ${err instanceof Error ? err.message : String(err)}`,
     );
   });
-
 }
 
 export function deactivate(): void {}

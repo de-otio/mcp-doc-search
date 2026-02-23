@@ -95,17 +95,12 @@ describe("Extension Config", () => {
       };
 
       vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(mockCfg as any);
-      vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(
-        undefined as any,
-      );
+      vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(undefined as any);
 
       const key = await readOpenAIApiKey(mockSecrets as any);
 
       expect(key).toBe("old-key");
-      expect(mockSecrets.store).toHaveBeenCalledWith(
-        "docSearch.openaiApiKey",
-        "old-key",
-      );
+      expect(mockSecrets.store).toHaveBeenCalledWith("docSearch.openaiApiKey", "old-key");
       expect(mockCfg.update).toHaveBeenCalled();
     });
 

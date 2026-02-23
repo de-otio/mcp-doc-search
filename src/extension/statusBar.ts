@@ -4,10 +4,7 @@ export class StatusBarManager implements vscode.Disposable {
   private item: vscode.StatusBarItem;
 
   constructor(context: vscode.ExtensionContext) {
-    this.item = vscode.window.createStatusBarItem(
-      vscode.StatusBarAlignment.Right,
-      100,
-    );
+    this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     this.setReady();
     this.item.show();
     context.subscriptions.push(this);
@@ -31,9 +28,7 @@ export class StatusBarManager implements vscode.Disposable {
     this.item.text = "$(error) DocSearch";
     this.item.tooltip = message;
     this.item.command = "docSearch.reindex";
-    this.item.backgroundColor = new vscode.ThemeColor(
-      "statusBarItem.errorBackground",
-    );
+    this.item.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground");
   }
 
   dispose(): void {

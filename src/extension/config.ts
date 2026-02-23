@@ -19,10 +19,7 @@ export function readConfig(apiKey = ""): ExtensionConfig {
     indexDir: cfg.get("indexDir", ".doc-search-index"),
     headingDepth: cfg.get("headingDepth", 2) as 1 | 2,
     maxChunkChars: cfg.get("maxChunkChars", 4000),
-    embedProvider: cfg.get("embedProvider", "local") as
-      | "local"
-      | "ollama"
-      | "openai",
+    embedProvider: cfg.get("embedProvider", "local") as "local" | "ollama" | "openai",
     ollamaUrl: cfg.get("ollamaUrl", "http://localhost:11434"),
     ollamaModel: cfg.get("ollamaModel", "nomic-embed-text"),
     openaiApiKey: apiKey || cfg.get("openaiApiKey", ""),
@@ -34,9 +31,7 @@ export function readConfig(apiKey = ""): ExtensionConfig {
  * Read OpenAI API key from secure storage with fallback to settings.
  * On first activation, migrate from settings to secrets if key exists.
  */
-export async function readOpenAIApiKey(
-  secrets: vscode.SecretStorage,
-): Promise<string> {
+export async function readOpenAIApiKey(secrets: vscode.SecretStorage): Promise<string> {
   const secretKey = "docSearch.openaiApiKey";
 
   // Try to read from secure storage first

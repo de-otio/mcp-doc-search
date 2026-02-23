@@ -54,6 +54,7 @@ npm run watch
 ```
 
 The build uses esbuild with two separate configurations:
+
 - `esbuild.extension.mjs` — bundles `src/extension/extension.ts` → `dist/extension.js`
 - `esbuild.mcp.mjs` — bundles `src/mcp/server.ts` → `dist/mcp-server.js`
 
@@ -62,6 +63,7 @@ Both outputs are **CommonJS** (`format: "cjs"`). This is required because VS Cod
 ### External Dependencies
 
 These are not bundled by esbuild and must ship with the extension:
+
 - `vscode` — provided by the VS Code runtime
 - `@lancedb/lancedb` — native bindings (platform-specific)
 - `@huggingface/transformers` — loaded at runtime
@@ -101,18 +103,23 @@ Platform-specific builds are necessary because `@lancedb/lancedb` includes nativ
 ## Key Design Decisions
 
 ### CommonJS output
+
 Source files use ESM imports, but esbuild transpiles to CommonJS. The `package.json` must not have `"type": "module"` or VS Code will fail to load the extension.
 
 ### Heading-aware chunking
+
 Splitting on markdown headings (rather than fixed character counts) preserves document structure and produces more semantically meaningful chunks.
 
 ### Hybrid search
+
 Pure vector search can miss exact keyword matches. The keyword boost (0.03 per matching term, with camelCase expansion) ensures that documents containing the exact search terms rank higher.
 
 ### Stable chunk IDs
+
 Using `MD5(file:lineNumber)` for chunk IDs means the same section always gets the same ID, allowing safe re-indexing without orphaned entries.
 
 ### Shared index
+
 Both the VS Code extension and MCP server read/write the same LanceDB directory, keeping them in sync without coordination.
 
 ## Debugging

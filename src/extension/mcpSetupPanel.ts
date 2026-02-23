@@ -10,10 +10,7 @@ export class McpSetupPanel {
   private static instance: McpSetupPanel | undefined;
   private readonly panel: vscode.WebviewPanel;
 
-  static createOrShow(
-    context: vscode.ExtensionContext,
-    deps: McpSetupDeps,
-  ): void {
+  static createOrShow(context: vscode.ExtensionContext, deps: McpSetupDeps): void {
     if (McpSetupPanel.instance) {
       McpSetupPanel.instance.panel.reveal();
       return;
@@ -60,8 +57,6 @@ export class McpSetupPanel {
     const nonce = getNonce();
     const { mcpServerPath, env } = deps;
 
-    const envJson = JSON.stringify(env, null, 6).replace(/\n/g, "\n      ");
-
     // Build the various config snippets
     const claudeCodeJson = JSON.stringify(
       {
@@ -78,7 +73,9 @@ export class McpSetupPanel {
       .join(" \\\n  ");
     const claudeCliCmd = `claude mcp add doc-search \\\n  -s project \\\n  ${envFlags} \\\n  -- node "${mcpServerPath}"`;
 
-    const continueYaml = `name: Doc Search MCP\nversion: 0.0.1\nschema: v1\nmcpServers:\n  - name: Doc Search\n    type: stdio\n    command: node\n    args:\n      - "${mcpServerPath}"\n    env:\n${Object.entries(env)
+    const continueYaml = `name: Doc Search MCP\nversion: 0.0.1\nschema: v1\nmcpServers:\n  - name: Doc Search\n    type: stdio\n    command: node\n    args:\n      - "${mcpServerPath}"\n    env:\n${Object.entries(
+      env,
+    )
       .map(([k, v]) => `      ${k}: "${v}"`)
       .join("\n")}`;
 

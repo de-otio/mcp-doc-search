@@ -12,6 +12,7 @@ All settings use the `docSearch.*` namespace and can be configured via VS Code S
 Glob pattern for files to index. Supports standard glob syntax relative to the workspace root.
 
 Examples:
+
 ```
 doc/**/*.md           # Default — doc/ folder
 docs/**/*.md          # Alternative docs/ folder
@@ -32,6 +33,7 @@ Directory where the vector index (LanceDB) and mtime cache are stored. Relative 
 - **Default:** `2`
 
 Controls which heading levels trigger chunk splits:
+
 - `1` — Split only on `#` (h1) headings
 - `2` — Split on `#` (h1) and `##` (h2) headings
 
@@ -52,11 +54,11 @@ Maximum characters per chunk. Chunks exceeding this limit are truncated. Most em
 
 Which embedding provider to use:
 
-| Provider | Model | Dimensions | Notes |
-|----------|-------|-----------|-------|
-| `local` | all-MiniLM-L6-v2 | 384 | No setup required. ONNX model (~22MB) downloaded on first use. |
-| `ollama` | Configurable | 768 | Requires a running Ollama server. |
-| `openai` | text-embedding-3-small | 1536 | Requires API key. Best quality. |
+| Provider | Model                  | Dimensions | Notes                                                          |
+| -------- | ---------------------- | ---------- | -------------------------------------------------------------- |
+| `local`  | all-MiniLM-L6-v2       | 384        | No setup required. ONNX model (~22MB) downloaded on first use. |
+| `ollama` | Configurable           | 768        | Requires a running Ollama server.                              |
+| `openai` | text-embedding-3-small | 1536       | Requires API key. Best quality.                                |
 
 Changing the provider requires a full reindex since embedding dimensions differ.
 
@@ -90,25 +92,25 @@ When enabled, the extension automatically reindexes files when they are saved. O
 
 ## Commands
 
-| Command | ID | Description |
-|---------|----|-------------|
-| Search Documentation | `docSearch.search` | Opens a quick-pick with type-ahead semantic search |
-| Reindex Documentation | `docSearch.reindex` | Reindex with choice of incremental or full |
-| Open Index Status | `docSearch.openIndexStatus` | View index health and statistics |
-| Open Settings | `docSearch.openSettings` | Visual settings editor |
-| Open Walkthrough | `docSearch.openWalkthrough` | Step-by-step onboarding guide |
-| Generate .mcp.json | `docSearch.generateMcpJson` | Create MCP server config (`.mcp.json`) |
+| Command               | ID                          | Description                                        |
+| --------------------- | --------------------------- | -------------------------------------------------- |
+| Search Documentation  | `docSearch.search`          | Opens a quick-pick with type-ahead semantic search |
+| Reindex Documentation | `docSearch.reindex`         | Reindex with choice of incremental or full         |
+| Open Index Status     | `docSearch.openIndexStatus` | View index health and statistics                   |
+| Open Settings         | `docSearch.openSettings`    | Visual settings editor                             |
+| Open Walkthrough      | `docSearch.openWalkthrough` | Step-by-step onboarding guide                      |
+| Generate .mcp.json    | `docSearch.generateMcpJson` | Create MCP server config (`.mcp.json`)             |
 
 ## MCP Server Environment Variables
 
 When running the MCP server standalone, these environment variables configure behavior:
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DOC_SEARCH_WORKSPACE` | (required) | Workspace root path |
-| `DOC_SEARCH_GLOB` | `doc/**/*.md` | File glob pattern |
-| `DOC_SEARCH_INDEX_DIR` | `.doc-search-index` | Index directory |
-| `USE_OPENAI` | `0` | Set to `1` to use OpenAI embeddings |
-| `OPENAI_API_KEY` | (empty) | OpenAI API key |
-| `OLLAMA_URL` | (empty) | Ollama server URL (enables Ollama provider) |
-| `OLLAMA_MODEL` | `nomic-embed-text` | Ollama model name |
+| Variable               | Default             | Description                                 |
+| ---------------------- | ------------------- | ------------------------------------------- |
+| `DOC_SEARCH_WORKSPACE` | (required)          | Workspace root path                         |
+| `DOC_SEARCH_GLOB`      | `doc/**/*.md`       | File glob pattern                           |
+| `DOC_SEARCH_INDEX_DIR` | `.doc-search-index` | Index directory                             |
+| `USE_OPENAI`           | `0`                 | Set to `1` to use OpenAI embeddings         |
+| `OPENAI_API_KEY`       | (empty)             | OpenAI API key                              |
+| `OLLAMA_URL`           | (empty)             | Ollama server URL (enables Ollama provider) |
+| `OLLAMA_MODEL`         | `nomic-embed-text`  | Ollama model name                           |

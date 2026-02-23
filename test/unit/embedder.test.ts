@@ -11,10 +11,7 @@ import {
 // ---------------------------------------------------------------------------
 
 /** Build a fake Response-like object that fetch resolves to. */
-function makeFakeResponse(
-  body: unknown,
-  status = 200,
-): Response {
+function makeFakeResponse(body: unknown, status = 200): Response {
   const bodyText = JSON.stringify(body);
   return {
     ok: status >= 200 && status < 300,
@@ -133,9 +130,7 @@ describe("OpenAIEmbedder", () => {
   it("throws an error when the OpenAI API returns a 401 response", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () =>
-        makeFakeResponse("Unauthorized", 401),
-      ),
+      vi.fn(async () => makeFakeResponse("Unauthorized", 401)),
     );
 
     const embedder = new OpenAIEmbedder("sk-bad-key");
@@ -174,9 +169,7 @@ describe("LocalEmbedder", () => {
 
   it("calls the transformers pipeline and returns float arrays", async () => {
     // Re-import after doMock to pick up the mock
-    const { LocalEmbedder: MockedLocalEmbedder } = await import(
-      "../../src/core/embedder.js"
-    );
+    const { LocalEmbedder: MockedLocalEmbedder } = await import("../../src/core/embedder.js");
     const embedder = new MockedLocalEmbedder();
     const result = await embedder.embed(["hello world"]);
 
@@ -189,9 +182,7 @@ describe("LocalEmbedder", () => {
   });
 
   it("ignores the prefix parameter", async () => {
-    const { LocalEmbedder: MockedLocalEmbedder } = await import(
-      "../../src/core/embedder.js"
-    );
+    const { LocalEmbedder: MockedLocalEmbedder } = await import("../../src/core/embedder.js");
     const embedder = new MockedLocalEmbedder();
     await embedder.embed(["test"], "search_document: ");
 
@@ -203,9 +194,7 @@ describe("LocalEmbedder", () => {
   });
 
   it("sets localModelPath on env when modelPath is provided", async () => {
-    const { LocalEmbedder: MockedLocalEmbedder } = await import(
-      "../../src/core/embedder.js"
-    );
+    const { LocalEmbedder: MockedLocalEmbedder } = await import("../../src/core/embedder.js");
     const embedder = new MockedLocalEmbedder({ modelPath: "/tmp/models" });
     await embedder.embed(["test"]);
 
@@ -213,9 +202,7 @@ describe("LocalEmbedder", () => {
   });
 
   it("reuses the pipeline across multiple embed calls", async () => {
-    const { LocalEmbedder: MockedLocalEmbedder } = await import(
-      "../../src/core/embedder.js"
-    );
+    const { LocalEmbedder: MockedLocalEmbedder } = await import("../../src/core/embedder.js");
     const embedder = new MockedLocalEmbedder();
     await embedder.embed(["first"]);
     await embedder.embed(["second"]);

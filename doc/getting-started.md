@@ -16,6 +16,7 @@ code --install-extension mcp-doc-search-0.1.0.vsix
 ```
 
 Platform-specific builds are available for:
+
 - macOS ARM (`darwin-arm64`)
 - macOS Intel (`darwin-x64`)
 - Linux (`linux-x64`)
@@ -34,6 +35,7 @@ By default, the extension indexes files matching `doc/**/*.md`. If your document
 3. Change the **Doc Glob** to match your documentation structure
 
 Common patterns:
+
 - `docs/**/*.md` — a `docs/` folder
 - `**/*.md` — all markdown files in the workspace
 - `wiki/**/*.md,guides/**/*.md` — multiple directories

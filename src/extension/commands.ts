@@ -21,10 +21,7 @@ interface CommandDeps {
   config: ExtensionConfig;
 }
 
-export function registerCommands(
-  context: vscode.ExtensionContext,
-  deps: CommandDeps,
-): void {
+export function registerCommands(context: vscode.ExtensionContext, deps: CommandDeps): void {
   const { indexer, store, embedProvider, statusBar, workspaceRoot } = deps;
 
   context.subscriptions.push(
@@ -32,9 +29,7 @@ export function registerCommands(
       SearchPanel.createOrShow(context, { workspaceRoot, store, embedProvider });
     }),
 
-    vscode.commands.registerCommand(
-      "docSearch.reindex",
-      async (forceArg?: boolean) => {
+    vscode.commands.registerCommand("docSearch.reindex", async (forceArg?: boolean) => {
       let force: boolean;
       if (forceArg !== undefined) {
         force = forceArg;
@@ -68,29 +63,25 @@ export function registerCommands(
           },
           async (progress) => {
             let lastIncrement = 0;
-            return indexer.reindex(
-              force,
-              (processed, total, file, phase) => {
-                const baseName = file ? path.basename(file) : "";
-                if (phase === "scanning") {
-                  progress.report({ message: "Scanning files…" });
-                } else if (phase === "loading") {
-                  progress.report({
-                    message: total > 0
-                      ? `Loading AI model… (0 / ${total} files)`
-                      : "Loading AI model…",
-                  });
-                } else {
-                  const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
-                  const increment = pct - lastIncrement;
-                  lastIncrement = pct;
-                  progress.report({
-                    message: `${processed} / ${total} files — ${baseName}`,
-                    increment,
-                  });
-                }
-              },
-            );
+            return indexer.reindex(force, (processed, total, file, phase) => {
+              const baseName = file ? path.basename(file) : "";
+              if (phase === "scanning") {
+                progress.report({ message: "Scanning files…" });
+              } else if (phase === "loading") {
+                progress.report({
+                  message:
+                    total > 0 ? `Loading AI model… (0 / ${total} files)` : "Loading AI model…",
+                });
+              } else {
+                const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
+                const increment = pct - lastIncrement;
+                lastIncrement = pct;
+                progress.report({
+                  message: `${processed} / ${total} files — ${baseName}`,
+                  increment,
+                });
+              }
+            });
           },
         );
 
@@ -121,35 +112,28 @@ export function registerCommands(
       );
     }),
 
-    vscode.commands.registerCommand(
-      "docSearch.generateMcpJson",
-      async () => {
-        const extensionDir = context.extensionPath;
-        const mcpServerPath = path.join(extensionDir, "dist", "mcp-server.js");
-        const mcpJsonPath = path.join(workspaceRoot, ".mcp.json");
+    vscode.commands.registerCommand("docSearch.generateMcpJson", async () => {
+      const extensionDir = context.extensionPath;
+      const mcpServerPath = path.join(extensionDir, "dist", "mcp-server.js");
+      const mcpJsonPath = path.join(workspaceRoot, ".mcp.json");
 
-        const env: Record<string, string> = {
-          DOC_SEARCH_WORKSPACE: workspaceRoot,
-        };
+      const env: Record<string, string> = {
+        DOC_SEARCH_WORKSPACE: workspaceRoot,
+      };
 
-        const mcpConfig = {
-          mcpServers: {
-            "doc-search": {
-              command: "node",
-              args: [mcpServerPath],
-              env,
-            },
+      const mcpConfig = {
+        mcpServers: {
+          "doc-search": {
+            command: "node",
+            args: [mcpServerPath],
+            env,
           },
-        };
+        },
+      };
 
-        fs.writeFileSync(
-          mcpJsonPath,
-          JSON.stringify(mcpConfig, null, 2) + "\n",
-          "utf8",
-        );
+      fs.writeFileSync(mcpJsonPath, JSON.stringify(mcpConfig, null, 2) + "\n", "utf8");
 
-        McpSetupPanel.createOrShow(context, { mcpServerPath, env });
-      },
-    ),
+      McpSetupPanel.createOrShow(context, { mcpServerPath, env });
+    }),
   );
 }

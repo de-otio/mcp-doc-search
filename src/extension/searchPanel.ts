@@ -18,10 +18,7 @@ export class SearchPanel {
   private readonly deps: SearchDeps;
   private disposed = false;
 
-  static createOrShow(
-    context: vscode.ExtensionContext,
-    deps: SearchDeps,
-  ): void {
+  static createOrShow(context: vscode.ExtensionContext, deps: SearchDeps): void {
     if (SearchPanel.instance) {
       SearchPanel.instance.panel.reveal();
       return;
@@ -86,14 +83,8 @@ export class SearchPanel {
       }
 
       case "openResult": {
-        const absPath = vscode.Uri.joinPath(
-          vscode.Uri.file(this.deps.workspaceRoot),
-          msg.file,
-        );
-        await vscode.commands.executeCommand(
-          "markdown.showPreviewToSide",
-          absPath,
-        );
+        const absPath = vscode.Uri.joinPath(vscode.Uri.file(this.deps.workspaceRoot), msg.file);
+        await vscode.commands.executeCommand("markdown.showPreviewToSide", absPath);
         break;
       }
     }

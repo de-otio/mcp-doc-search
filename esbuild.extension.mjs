@@ -6,11 +6,7 @@ await esbuild.build({
   platform: "node",
   target: "node18",
   outfile: "dist/extension.js",
-  external: [
-    "vscode",
-    "@lancedb/lancedb",
-    "@huggingface/transformers",
-  ],
+  external: ["vscode", "@lancedb/lancedb", "@huggingface/transformers"],
   format: "cjs",
   sourcemap: true,
 });

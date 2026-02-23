@@ -40,13 +40,8 @@ export function findFenceRanges(content: string): Array<[number, number]> {
 /**
  * Check if a given line number falls inside any code fence range.
  */
-export function inFence(
-  lineNum: number,
-  fenceRanges: Array<[number, number]>,
-): boolean {
-  return fenceRanges.some(
-    ([start, end]) => lineNum >= start && lineNum <= end,
-  );
+export function inFence(lineNum: number, fenceRanges: Array<[number, number]>): boolean {
+  return fenceRanges.some(([start, end]) => lineNum >= start && lineNum <= end);
 }
 
 /**
@@ -68,9 +63,7 @@ export function chunkMarkdown(
 
   // Path traversal validation
   if (rel.startsWith("..") || path.isAbsolute(rel)) {
-    throw new Error(
-      `Path traversal blocked: ${absolutePath} is outside workspace`,
-    );
+    throw new Error(`Path traversal blocked: ${absolutePath} is outside workspace`);
   }
 
   // Find the document title (first # heading, or filename stem)
@@ -81,14 +74,10 @@ export function chunkMarkdown(
   const fenceRanges = findFenceRanges(content);
 
   // Build heading pattern based on depth
-  const pattern =
-    headingDepth === 1
-      ? /^(#\s+.+)$/gm
-      : /^(#{1,2}\s+.+)$/gm;
+  const pattern = headingDepth === 1 ? /^(#\s+.+)$/gm : /^(#{1,2}\s+.+)$/gm;
 
   // Find heading positions, skipping those inside code fences
-  const positions: Array<{ offset: number; heading: string; lineNum: number }> =
-    [];
+  const positions: Array<{ offset: number; heading: string; lineNum: number }> = [];
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(content)) !== null) {
     const lineNum = content.slice(0, match.index).split("\n").length - 1;
@@ -120,8 +109,7 @@ export function chunkMarkdown(
   const chunks: DocChunk[] = [];
   for (let i = 0; i < positions.length; i++) {
     const start = positions[i].offset;
-    const end =
-      i + 1 < positions.length ? positions[i + 1].offset : content.length;
+    const end = i + 1 < positions.length ? positions[i + 1].offset : content.length;
     const rawText = content.slice(start, end).trim();
 
     if (!rawText) continue;

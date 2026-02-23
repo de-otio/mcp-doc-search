@@ -15,19 +15,14 @@ describe("gitignore", () => {
   });
 
   it("should create .gitignore if it does not exist", async () => {
-    const readMock = vi
-      .spyOn(fs, "readFileSync")
-      .mockImplementation(() => {
-        throw new Error("ENOENT");
-      });
+    const readMock = vi.spyOn(fs, "readFileSync").mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
     const appendMock = vi.spyOn(fs, "appendFileSync").mockImplementation(() => {});
 
     ensureGitignored("/workspace", ".doc-search-index");
 
-    expect(readMock).toHaveBeenCalledWith(
-      path.join("/workspace", ".gitignore"),
-      "utf8",
-    );
+    expect(readMock).toHaveBeenCalledWith(path.join("/workspace", ".gitignore"), "utf8");
     expect(appendMock).toHaveBeenCalledWith(
       path.join("/workspace", ".gitignore"),
       "/.doc-search-index\n",
@@ -35,9 +30,7 @@ describe("gitignore", () => {
   });
 
   it("should append entry when .gitignore exists but does not contain the pattern", () => {
-    const readMock = vi
-      .spyOn(fs, "readFileSync")
-      .mockReturnValue("node_modules/\n");
+    const readMock = vi.spyOn(fs, "readFileSync").mockReturnValue("node_modules/\n");
     const appendMock = vi.spyOn(fs, "appendFileSync").mockImplementation(() => {});
 
     ensureGitignored("/workspace", ".doc-search-index");
@@ -50,9 +43,7 @@ describe("gitignore", () => {
   });
 
   it("should skip when entry already exists in .gitignore", () => {
-    vi.spyOn(fs, "readFileSync").mockReturnValue(
-      "node_modules/\n/.doc-search-index\n",
-    );
+    vi.spyOn(fs, "readFileSync").mockReturnValue("node_modules/\n/.doc-search-index\n");
     const appendMock = vi.spyOn(fs, "appendFileSync").mockImplementation(() => {});
 
     ensureGitignored("/workspace", ".doc-search-index");

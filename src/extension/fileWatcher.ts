@@ -17,12 +17,12 @@ export class FileWatcher implements vscode.Disposable {
     const pattern = new vscode.RelativePattern(workspaceRoot, docGlob);
     this.watcher = vscode.workspace.createFileSystemWatcher(pattern);
 
-    this.watcher.onDidChange((uri) => this.schedule(uri.fsPath));
-    this.watcher.onDidCreate((uri) => this.schedule(uri.fsPath));
-    this.watcher.onDidDelete((uri) => this.schedule(uri.fsPath));
+    this.watcher.onDidChange(() => this.schedule());
+    this.watcher.onDidCreate(() => this.schedule());
+    this.watcher.onDidDelete(() => this.schedule());
   }
 
-  private schedule(_filePath: string): void {
+  private schedule(): void {
     if (this.timer !== undefined) {
       clearTimeout(this.timer);
     }
@@ -37,8 +37,7 @@ export class FileWatcher implements vscode.Disposable {
       await this.indexer.reindex(false);
       this.statusBar.setReady();
     } catch (err) {
-      const msg =
-        err instanceof Error ? err.message : String(err);
+      const msg = err instanceof Error ? err.message : String(err);
       this.statusBar.setError(`Reindex failed: ${msg}`);
     }
   }

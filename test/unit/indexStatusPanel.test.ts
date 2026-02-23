@@ -67,8 +67,7 @@ describe("IndexStatusPanel", () => {
     it("should send index status on ready", async () => {
       IndexStatusPanel.createOrShow(mockContext, mockIndexer);
 
-      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock
-        .calls[0]?.[0];
+      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
 
       if (messageHandler) {
         await messageHandler({ type: "ready" });
@@ -83,8 +82,7 @@ describe("IndexStatusPanel", () => {
     it("should handle reindex message", async () => {
       IndexStatusPanel.createOrShow(mockContext, mockIndexer);
 
-      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock
-        .calls[0]?.[0];
+      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
 
       if (messageHandler) {
         await messageHandler({ type: "reindex" });
@@ -101,26 +99,23 @@ describe("IndexStatusPanel", () => {
     it("should report progress during reindex", async () => {
       let progressHandler: any = null;
 
-      mockIndexer.reindex.mockImplementation(
-        async (force: boolean, onProgress?: any) => {
-          if (onProgress) {
-            onProgress(1, 10, "file1.md", "indexing");
-            onProgress(2, 10, "file2.md", "indexing");
-          }
-          return {
-            indexed: 2,
-            skipped: 8,
-            failedFiles: 0,
-            totalChunks: 10,
-            durationMs: 1000,
-          };
-        },
-      );
+      mockIndexer.reindex.mockImplementation(async (force: boolean, onProgress?: any) => {
+        if (onProgress) {
+          onProgress(1, 10, "file1.md", "indexing");
+          onProgress(2, 10, "file2.md", "indexing");
+        }
+        return {
+          indexed: 2,
+          skipped: 8,
+          failedFiles: 0,
+          totalChunks: 10,
+          durationMs: 1000,
+        };
+      });
 
       IndexStatusPanel.createOrShow(mockContext, mockIndexer);
 
-      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock
-        .calls[0]?.[0];
+      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
 
       if (messageHandler) {
         await messageHandler({ type: "reindex" });
@@ -134,8 +129,7 @@ describe("IndexStatusPanel", () => {
 
       IndexStatusPanel.createOrShow(mockContext, mockIndexer);
 
-      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock
-        .calls[0]?.[0];
+      const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
 
       if (messageHandler) {
         await messageHandler({ type: "reindex" });

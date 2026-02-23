@@ -51,16 +51,13 @@ export class LocalEmbedder implements EmbedProvider {
     this.modelPath = options?.modelPath;
   }
 
-  async embed(texts: string[], _prefix?: string): Promise<number[][]> {
+  async embed(texts: string[]): Promise<number[][]> {
     if (!this.pipeline) {
       const { pipeline, env } = await import("@huggingface/transformers");
       if (this.modelPath) {
         env.localModelPath = this.modelPath;
       }
-      this.pipeline = await pipeline(
-        "feature-extraction",
-        "Xenova/all-MiniLM-L6-v2",
-      );
+      this.pipeline = await pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2");
     }
 
     const results: number[][] = [];
@@ -93,18 +90,13 @@ export class OllamaEmbedder implements EmbedProvider {
     const results: number[][] = [];
     for (const text of texts) {
       const prompt = prefix ? `${prefix}${text}` : text;
-      const response = await fetchWithTimeout(
-        `${this.baseUrl}/api/embeddings`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model: this.model, prompt }),
-        },
-      );
+      const response = await fetchWithTimeout(`${this.baseUrl}/api/embeddings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: this.model, prompt }),
+      });
       if (!response.ok) {
-        throw new Error(
-          `Ollama embedding failed (${response.status}): ${await response.text()}`,
-        );
+        throw new Error(`Ollama embedding failed (${response.status}): ${await response.text()}`);
       }
       const data = (await response.json()) as { embedding: number[] };
       results.push(data.embedding);
@@ -130,21 +122,16 @@ export class OpenAIEmbedder implements EmbedProvider {
 
   async embed(texts: string[], prefix = ""): Promise<number[][]> {
     const input = prefix ? texts.map((t) => `${prefix}${t}`) : texts;
-    const response = await fetchWithTimeout(
-      "https://api.openai.com/v1/embeddings",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.apiKey}`,
-        },
-        body: JSON.stringify({ model: this.model, input }),
+    const response = await fetchWithTimeout("https://api.openai.com/v1/embeddings", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.apiKey}`,
       },
-    );
+      body: JSON.stringify({ model: this.model, input }),
+    });
     if (!response.ok) {
-      throw new Error(
-        `OpenAI embedding failed (${response.status}): ${await response.text()}`,
-      );
+      throw new Error(`OpenAI embedding failed (${response.status}): ${await response.text()}`);
     }
     const data = (await response.json()) as {
       data: Array<{ embedding: number[] }>;
