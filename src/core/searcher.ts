@@ -74,8 +74,8 @@ export async function search(
   // Embed query with search_query prefix (for providers that use task prefixes)
   const [queryVector] = await embedder.embed([query], "search_query: ");
 
-  // Over-fetch 3x candidates for keyword re-ranking
-  const fetchN = Math.min(n * 3, totalCount);
+  // Over-fetch 3x candidates for keyword re-ranking, cap at 300 for performance
+  const fetchN = Math.min(n * 3, 300, totalCount);
   const candidates = await store.query(queryVector, fetchN);
 
   // Apply keyword boost and compute final scores

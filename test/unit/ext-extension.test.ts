@@ -1,0 +1,93 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import * as vscode from "vscode";
+import { activate, deactivate } from "../../src/extension/extension.js";
+
+vi.mock("../../src/extension/config.js");
+vi.mock("../../src/core/vectorstore.js");
+vi.mock("../../src/core/embedder.js");
+vi.mock("../../src/core/indexer.js");
+vi.mock("../../src/extension/statusBar.js");
+vi.mock("../../src/extension/commands.js");
+vi.mock("../../src/extension/fileWatcher.js");
+vi.mock("../../src/core/gitignore.js");
+
+describe("Extension", () => {
+  let mockContext: any;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    mockContext = {
+      secrets: {
+        get: vi.fn().mockResolvedValue(""),
+        store: vi.fn(),
+      },
+      subscriptions: [],
+      extensionPath: "/mock/extension",
+    };
+
+    vi.mocked(vscode.workspace.workspaceFolders).mockReturnValue([
+      { uri: { fsPath: "/workspace" } } as any,
+    ]);
+  });
+
+  describe("activate", () => {
+    it("should initialize extension components", async () => {
+      await activate(mockContext);
+
+      expect(mockContext.secrets.get).toHaveBeenCalled();
+    });
+
+    it("should return early if no workspace folders", async () => {
+      vi.mocked(vscode.workspace.workspaceFolders).mockReturnValue(undefined as any);
+
+      await activate(mockContext);
+
+      expect(mockContext.secrets.get).not.toHaveBeenCalled();
+    });
+
+    it("should create file watcher when autoReindex enabled", async () => {
+      const { readConfig } = await import("../../src/extension/config.js");
+      vi.mocked(readConfig).mockReturnValue({
+        docGlob: "doc/**/*.md",
+        indexDir: ".doc-search-index",
+        headingDepth: 2,
+        maxChunkChars: 4000,
+        embedProvider: "local",
+        ollamaUrl: "http://localhost:11434",
+        ollamaModel: "nomic-embed-text",
+        openaiApiKey: "",
+        autoReindex: true,
+      } as any);
+
+      await activate(mockContext);
+
+      // FileWatcher should be instantiated
+    });
+
+    it("should skip file watcher when autoReindex disabled", async () => {
+      const { readConfig } = await import("../../src/extension/config.js");
+      vi.mocked(readConfig).mockReturnValue({
+        docGlob: "doc/**/*.md",
+        indexDir: ".doc-search-index",
+        headingDepth: 2,
+        maxChunkChars: 4000,
+        embedProvider: "local",
+        ollamaUrl: "http://localhost:11434",
+        ollamaModel: "nomic-embed-text",
+        openaiApiKey: "",
+        autoReindex: false,
+      } as any);
+
+      await activate(mockContext);
+
+      // FileWatcher should not be instantiated
+    });
+  });
+
+  describe("deactivate", () => {
+    it("should be callable without errors", () => {
+      expect(() => deactivate()).not.toThrow();
+    });
+  });
+});

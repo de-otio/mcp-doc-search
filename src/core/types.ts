@@ -29,6 +29,7 @@ export interface SearchResult {
 export interface IndexStats {
   indexed: number;
   skipped: number;
+  failedFiles: number;
   totalChunks: number;
   durationMs: number;
 }
@@ -54,6 +55,41 @@ export interface IndexStatus {
   docGlob: string;
 }
 
+/**
+ * LanceDB table interface (minimal shape for type safety)
+ */
+export interface LanceTable {
+  schema(): Promise<{ fields: Array<{ name: string; type?: { listSize?: number } }> }>;
+  search(vector: number[]): {
+    distanceType(type: string): {
+      limit(n: number): { toArray(): Promise<any[]> };
+    };
+  };
+  delete(filter: string): Promise<void>;
+  add(records: any[]): Promise<void>;
+  query(): { toArray(): Promise<any[]> };
+  countRows(): Promise<number>;
+}
+
+/**
+ * LanceDB database connection interface (minimal shape for type safety)
+ */
+export interface LanceConnection {
+  openTable(name: string): Promise<LanceTable>;
+  createTable(name: string, records: any[], options?: any): Promise<LanceTable>;
+  dropTable(name: string): Promise<void>;
+}
+
+/**
+ * Embedder pipeline interface for local transformers
+ */
+export interface EmbedderPipeline {
+  (text: string, options?: { pooling?: string; normalize?: boolean }): Promise<{
+    tolist(): number[];
+    data: Float32Array;
+  }>;
+}
+
 export interface EmbedProvider {
   /**
    * Generate embeddings for a batch of texts.
@@ -70,4 +106,22 @@ export interface IndexerConfig {
   maxChunkChars: number;
   headingDepth: 1 | 2;
   embedProvider: EmbedProvider;
+}
+
+/**
+ * Validate and normalize configuration values.
+ * Returns a valid IndexerConfig with sensible defaults and clamped values.
+ */
+export function validateConfig(
+  raw: Partial<IndexerConfig>,
+  embedProvider: EmbedProvider,
+): IndexerConfig {
+  return {
+    workspaceRoot: raw.workspaceRoot || process.cwd(),
+    docGlob: raw.docGlob && raw.docGlob.trim() ? raw.docGlob.trim() : "doc/**/*.md",
+    indexDir: raw.indexDir && raw.indexDir.trim() ? raw.indexDir.trim() : ".doc-search-index",
+    headingDepth: raw.headingDepth === 1 ? 1 : 2,
+    maxChunkChars: Math.max(100, Math.min(50_000, Number(raw.maxChunkChars) || 4000)),
+    embedProvider,
+  };
 }

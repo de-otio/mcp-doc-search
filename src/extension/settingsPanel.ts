@@ -1,20 +1,12 @@
 import * as vscode from "vscode";
 import { execFile } from "node:child_process";
 import { OllamaEmbedder, OpenAIEmbedder } from "../core/embedder.js";
-
-function getNonce(): string {
-  let text = "";
-  const chars =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) {
-    text += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return text;
-}
+import { getNonce } from "./utils.js";
 
 export class SettingsPanel {
   private static instance: SettingsPanel | undefined;
   private readonly panel: vscode.WebviewPanel;
+  private disposed = false;
 
   static createOrShow(context: vscode.ExtensionContext): void {
     if (SettingsPanel.instance) {
@@ -38,6 +30,7 @@ export class SettingsPanel {
     this.panel.webview.html = this.getHtml();
 
     this.panel.onDidDispose(() => {
+      this.disposed = true;
       SettingsPanel.instance = undefined;
     });
 

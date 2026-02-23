@@ -6,7 +6,6 @@ const DEBOUNCE_MS = 2000;
 
 export class FileWatcher implements vscode.Disposable {
   private watcher: vscode.FileSystemWatcher;
-  private changed = new Set<string>();
   private timer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
@@ -23,8 +22,7 @@ export class FileWatcher implements vscode.Disposable {
     this.watcher.onDidDelete((uri) => this.schedule(uri.fsPath));
   }
 
-  private schedule(filePath: string): void {
-    this.changed.add(filePath);
+  private schedule(_filePath: string): void {
     if (this.timer !== undefined) {
       clearTimeout(this.timer);
     }
@@ -33,7 +31,6 @@ export class FileWatcher implements vscode.Disposable {
 
   private async flush(): Promise<void> {
     this.timer = undefined;
-    this.changed.clear();
 
     this.statusBar.setIndexing();
     try {

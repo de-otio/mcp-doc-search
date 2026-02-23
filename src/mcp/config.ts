@@ -1,9 +1,11 @@
 import path from "node:path";
 import { existsSync, readFileSync } from "node:fs";
+import { parse } from "jsonc-parser";
 import { LanceVectorStore } from "../core/vectorstore.js";
 import { Indexer } from "../core/indexer.js";
 import { LocalEmbedder, OllamaEmbedder, OpenAIEmbedder } from "../core/embedder.js";
 import type { EmbedProvider } from "../core/types.js";
+import { validateConfig } from "../core/types.js";
 import { ensureGitignored } from "../core/gitignore.js";
 
 export interface EngineDeps {
@@ -14,6 +16,7 @@ export interface EngineDeps {
 
 /**
  * Read VS Code workspace settings from .vscode/settings.json.
+ * Properly parses JSONC (JSON with comments) format.
  * Returns the parsed object, or {} if the file doesn't exist or can't be parsed.
  */
 function readWorkspaceSettings(workspaceRoot: string): Record<string, any> {
@@ -21,9 +24,7 @@ function readWorkspaceSettings(workspaceRoot: string): Record<string, any> {
   if (!existsSync(settingsPath)) return {};
   try {
     const raw = readFileSync(settingsPath, "utf8");
-    // Strip single-line comments (VS Code settings.json allows them)
-    const stripped = raw.replace(/\/\/.*$/gm, "");
-    return JSON.parse(stripped);
+    return parse(raw) as Record<string, any>;
   } catch {
     return {};
   }
@@ -78,14 +79,18 @@ export async function createEngineFromEnv(): Promise<EngineDeps> {
   const store = new LanceVectorStore(indexDir);
   await store.open();
 
-  const indexer = new Indexer({
-    workspaceRoot,
-    docGlob,
-    indexDir,
-    maxChunkChars,
-    headingDepth: headingDepth as 1 | 2,
+  const config = validateConfig(
+    {
+      workspaceRoot,
+      docGlob,
+      indexDir,
+      maxChunkChars,
+      headingDepth: headingDepth as 1 | 2,
+    },
     embedProvider,
-  }, store);
+  );
+
+  const indexer = new Indexer(config, store);
 
   return { store, indexer, embedProvider };
 }

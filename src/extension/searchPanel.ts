@@ -2,18 +2,9 @@ import * as vscode from "vscode";
 import { search } from "../core/searcher.js";
 import type { EmbedProvider } from "../core/types.js";
 import type { LanceVectorStore } from "../core/vectorstore.js";
+import { getNonce } from "./utils.js";
 
 const RESULT_COUNT = 10;
-
-function getNonce(): string {
-  let text = "";
-  const chars =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) {
-    text += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return text;
-}
 
 interface SearchDeps {
   workspaceRoot: string;
@@ -25,6 +16,7 @@ export class SearchPanel {
   private static instance: SearchPanel | undefined;
   private readonly panel: vscode.WebviewPanel;
   private readonly deps: SearchDeps;
+  private disposed = false;
 
   static createOrShow(
     context: vscode.ExtensionContext,
@@ -53,6 +45,7 @@ export class SearchPanel {
     this.panel.webview.html = this.getHtml();
 
     this.panel.onDidDispose(() => {
+      this.disposed = true;
       SearchPanel.instance = undefined;
     });
 
@@ -67,8 +60,8 @@ export class SearchPanel {
     switch (msg.type) {
       case "search": {
         const query = msg.query?.trim();
-        if (!query) return;
-        this.panel.webview.postMessage({ type: "searching" });
+        if (!query || this.disposed) return;
+        if (!this.disposed) this.panel.webview.postMessage({ type: "searching" });
         try {
           const results = await search(
             query,
@@ -76,14 +69,18 @@ export class SearchPanel {
             this.deps.store,
             this.deps.embedProvider,
           );
-          this.panel.webview.postMessage({ type: "results", query, results });
+          if (!this.disposed) {
+            this.panel.webview.postMessage({ type: "results", query, results });
+          }
         } catch (err) {
-          this.panel.webview.postMessage({
-            type: "results",
-            query,
-            results: [],
-            error: err instanceof Error ? err.message : String(err),
-          });
+          if (!this.disposed) {
+            this.panel.webview.postMessage({
+              type: "results",
+              query,
+              results: [],
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
         }
         break;
       }

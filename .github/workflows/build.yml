@@ -31,9 +31,16 @@ jobs:
 
       - run: npm ci
 
-      - run: npm run build
+      - name: Lint
+        run: npm run lint
 
-      - run: npm test
+      - name: Test with coverage
+        run: npm run test:coverage
+
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+
+      - run: npm run build
 
       - name: Prune dev dependencies before packaging
         run: npm prune --omit=dev

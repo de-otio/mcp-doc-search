@@ -4,6 +4,25 @@
  */
 
 import { mkdirSync } from "node:fs";
+import type { LanceTable, LanceConnection } from "./types.js";
+
+/**
+ * Validate and escape a file path for use in LanceDB SQL queries.
+ * Rejects paths with suspicious characters (outside [a-zA-Z0-9_./-])
+ * and enforces a maximum length of 2048 characters.
+ */
+function safeLanceFilter(file: string): string {
+  if (file.length > 2048) {
+    throw new Error(`File path too long (max 2048 chars): ${file}`);
+  }
+  if (!/^[a-zA-Z0-9_.\/-]+$/.test(file)) {
+    throw new Error(
+      `File path contains suspicious characters: ${file}. Allowed: [a-zA-Z0-9_./-]`,
+    );
+  }
+  // Escape single quotes for SQL
+  return file.replace(/'/g, "''");
+}
 
 /** Record stored in LanceDB. */
 export interface VectorRecord {
@@ -26,8 +45,8 @@ export interface VectorQueryResult {
 }
 
 export class LanceVectorStore {
-  private db: any = null;
-  private table: any = null;
+  private db: LanceConnection | null = null;
+  private table: LanceTable | undefined;
   private indexDir: string;
   private tableName: string;
 
@@ -83,8 +102,8 @@ export class LanceVectorStore {
 
   async deleteByFile(file: string): Promise<void> {
     if (!this.table) return;
-    const escaped = file.replace(/'/g, "''");
     try {
+      const escaped = safeLanceFilter(file);
       await this.table.delete(`file = '${escaped}'`);
     } catch {
       // Table may be empty or file not yet indexed
@@ -148,5 +167,10 @@ export class LanceVectorStore {
 
   hasTable(): boolean {
     return this.table !== null;
+  }
+
+  async close(): Promise<void> {
+    this.table = undefined;
+    this.db = undefined;
   }
 }

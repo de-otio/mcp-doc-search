@@ -14,7 +14,9 @@
     "vscode": "^1.85.0",
     "node": ">=18.0.0"
   },
-  "categories": ["Other"],
+  "categories": [
+    "Other"
+  ],
   "activationEvents": [
     "onStartupFinished",
     "workspaceContains:**/*.md"
@@ -81,25 +83,33 @@
             "id": "configureSettings",
             "title": "Configure Settings",
             "description": "Choose your AI model and set which files to index.\n\n[Open Settings](command:docSearch.openSettings)",
-            "media": { "markdown": "media/walkthrough-settings.md" }
+            "media": {
+              "markdown": "media/walkthrough-settings.md"
+            }
           },
           {
             "id": "buildIndex",
             "title": "Build Search Index",
             "description": "Index your documentation so it becomes searchable by meaning.\n\n[Build Index](command:docSearch.openIndexStatus)",
-            "media": { "markdown": "media/walkthrough-index.md" }
+            "media": {
+              "markdown": "media/walkthrough-index.md"
+            }
           },
           {
             "id": "searchDocs",
             "title": "Search Your Docs",
             "description": "Find relevant documentation using natural language queries.\n\n[Search Docs](command:docSearch.search)",
-            "media": { "markdown": "media/walkthrough-search.md" }
+            "media": {
+              "markdown": "media/walkthrough-search.md"
+            }
           },
           {
             "id": "mcpIntegration",
             "title": "Use with an AI Assistant",
             "description": "Generate an MCP config so any MCP-compatible AI assistant can search your docs.\n\n[Generate .mcp.json](command:docSearch.generateMcpJson)",
-            "media": { "markdown": "media/walkthrough-claude.md" }
+            "media": {
+              "markdown": "media/walkthrough-claude.md"
+            }
           }
         ]
       }
@@ -120,7 +130,10 @@
         "docSearch.headingDepth": {
           "type": "number",
           "default": 2,
-          "enum": [1, 2],
+          "enum": [
+            1,
+            2
+          ],
           "description": "Split chunks on # only (1) or both # and ## (2)"
         },
         "docSearch.maxChunkChars": {
@@ -131,7 +144,11 @@
         "docSearch.embedProvider": {
           "type": "string",
           "default": "local",
-          "enum": ["local", "ollama", "openai"],
+          "enum": [
+            "local",
+            "ollama",
+            "openai"
+          ],
           "description": "Embedding provider: local (bundled ONNX model), ollama, or openai"
         },
         "docSearch.ollamaUrl": {
@@ -164,7 +181,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "lint": "prettier --check .",
+    "lint": "prettier --check . && eslint src/",
+    "lint:eslint": "eslint src/",
     "format": "prettier -w .",
     "package": "npm prune --omit=dev && vsce package; npm install",
     "package:darwin-arm": "npm prune --omit=dev && vsce package --target darwin-arm64; npm install",
@@ -176,16 +194,20 @@
     "@huggingface/transformers": "^3.4.0",
     "@lancedb/lancedb": "^0.13.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "glob": "^11.0.0"
+    "glob": "^11.0.0",
+    "jsonc-parser": "^3.3.1"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^20.17.10",
     "@types/vscode": "^1.85.0",
     "@vitest/coverage-v8": "^4.0.8",
     "@vscode/vsce": "^3.0.0",
     "esbuild": "^0.24.0",
+    "eslint-plugin-security": "^4.0.0",
     "prettier": "^3.6.2",
     "typescript": "^5.6.3",
+    "typescript-eslint": "^8.56.0",
     "vitest": "^4.0.8"
   }
 }

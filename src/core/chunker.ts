@@ -66,6 +66,13 @@ export function chunkMarkdown(
   const content = readFileSync(absolutePath, "utf8");
   const rel = path.relative(workspaceRoot, absolutePath).replace(/\\/g, "/");
 
+  // Path traversal validation
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error(
+      `Path traversal blocked: ${absolutePath} is outside workspace`,
+    );
+  }
+
   // Find the document title (first # heading, or filename stem)
   const titleMatch = content.match(/^#\s+(.+)$/m);
   const docTitle = titleMatch ? titleMatch[1].trim() : path.parse(absolutePath).name;

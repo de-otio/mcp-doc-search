@@ -3,7 +3,39 @@
  * All implement the EmbedProvider interface.
  */
 
-import type { EmbedProvider } from "./types.js";
+import type { EmbedProvider, EmbedderPipeline } from "./types.js";
+
+/**
+ * Fetch with timeout and single retry on network errors.
+ * Does not retry on 4xx/5xx HTTP errors.
+ */
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs = 30_000,
+): Promise<Response> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      return await fetch(url, { ...init, signal: controller.signal });
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      // On network error, only retry if not a 4xx/5xx (those won't change on retry)
+      if (attempt === 0) {
+        // Wait briefly before retry on network timeout/error
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  throw lastError || new Error("Fetch failed after retries");
+}
 
 /**
  * Local embeddings using @huggingface/transformers with all-MiniLM-L6-v2.
@@ -12,7 +44,7 @@ import type { EmbedProvider } from "./types.js";
  * Note: all-MiniLM-L6-v2 does NOT use task prefixes — the prefix param is ignored.
  */
 export class LocalEmbedder implements EmbedProvider {
-  private pipeline: any = null;
+  private pipeline: EmbedderPipeline | null = null;
   private modelPath: string | undefined;
 
   constructor(options?: { modelPath?: string }) {
@@ -61,11 +93,14 @@ export class OllamaEmbedder implements EmbedProvider {
     const results: number[][] = [];
     for (const text of texts) {
       const prompt = prefix ? `${prefix}${text}` : text;
-      const response = await fetch(`${this.baseUrl}/api/embeddings`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: this.model, prompt }),
-      });
+      const response = await fetchWithTimeout(
+        `${this.baseUrl}/api/embeddings`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: this.model, prompt }),
+        },
+      );
       if (!response.ok) {
         throw new Error(
           `Ollama embedding failed (${response.status}): ${await response.text()}`,
@@ -95,14 +130,17 @@ export class OpenAIEmbedder implements EmbedProvider {
 
   async embed(texts: string[], prefix = ""): Promise<number[][]> {
     const input = prefix ? texts.map((t) => `${prefix}${t}`) : texts;
-    const response = await fetch("https://api.openai.com/v1/embeddings", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.apiKey}`,
+    const response = await fetchWithTimeout(
+      "https://api.openai.com/v1/embeddings",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({ model: this.model, input }),
       },
-      body: JSON.stringify({ model: this.model, input }),
-    });
+    );
     if (!response.ok) {
       throw new Error(
         `OpenAI embedding failed (${response.status}): ${await response.text()}`,

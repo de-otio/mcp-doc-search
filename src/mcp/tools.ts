@@ -79,8 +79,13 @@ export function registerTools(server: Server, deps: EngineDeps): void {
 
     if (name === "search_docs") {
       try {
-        const query = String(input.query ?? "");
-        const n = typeof input.n === "number" ? input.n : 5;
+        const query = String(input.query ?? "").trim();
+        if (!query) {
+          return {
+            content: [{ type: "text", text: JSON.stringify({ error: "Query is required." }) }],
+          };
+        }
+        const n = Math.max(1, Math.min(100, Math.floor(Number(input.n) || 5)));
         const results = await search(query, n, store, embedProvider);
         return {
           content: [{ type: "text", text: JSON.stringify(results) }],

@@ -67,6 +67,7 @@ export class Indexer {
 
     let indexed = 0;
     let skipped = 0;
+    let failedFiles = 0;
     let totalChunks = 0;
     let firstEmbed = true;
 
@@ -74,6 +75,15 @@ export class Indexer {
       const rel = path
         .relative(this.config.workspaceRoot, filePath)
         .replace(/\\/g, "/");
+
+      // Path traversal validation
+      if (rel.startsWith("..") || path.isAbsolute(rel)) {
+        console.warn(
+          `Path traversal blocked: ${filePath} is outside workspace`,
+        );
+        continue;
+      }
+
       const mtime = String(statSync(filePath).mtimeMs);
 
       if (!force && cache[rel] === mtime) {
@@ -113,6 +123,7 @@ export class Indexer {
         console.error(
           `Warning: embedding failed for ${rel}: ${err instanceof Error ? err.message : err}`,
         );
+        failedFiles++;
         continue;
       }
 
@@ -141,6 +152,7 @@ export class Indexer {
     return {
       indexed,
       skipped,
+      failedFiles,
       totalChunks,
       durationMs: Date.now() - t0,
     };
