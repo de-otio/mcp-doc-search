@@ -6,7 +6,7 @@ Large repos can have hundreds or thousands of markdown files of documentation. T
 
 - **VS Code extension**: type-ahead search in the command palette, auto-reindex on save, status bar indicator
 - **MCP server**: `search_docs`, `list_docs`, `reindex_docs` tools so any MCP-compatible AI assistant can find the right document in a single call
-- **Local embeddings**: ships with `all-MiniLM-L6-v2` (ONNX, 22MB) — no API key, no internet, works offline
+- **Local embeddings**: auto-downloads `all-MiniLM-L6-v2` (ONNX, 22MB) on first use, then works fully offline — no API key required
 - **Heading-aware chunking**: splits markdown on `#`/`##` boundaries, skips code fences, prepends document title as breadcrumb context
 - **Hybrid search**: vector similarity + keyword re-ranking (+0.03 per matching term, camelCase-aware)
 
