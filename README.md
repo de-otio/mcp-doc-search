@@ -13,6 +13,7 @@ Large repos can have hundreds or thousands of markdown files of documentation. T
 ## Quick start
 
 ### Install the VS Code extension
+
 Download the extension from the latest pipeline run.
 
 ```bash
