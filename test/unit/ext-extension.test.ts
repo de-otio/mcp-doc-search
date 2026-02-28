@@ -28,7 +28,11 @@ describe("Extension", () => {
 
     (vscode.workspace as any).workspaceFolders = [{ uri: { fsPath: "/workspace" } }];
 
-    const { readConfig } = await import("../../src/extension/config.js");
+    const { readConfig, readOpenAIApiKey } = await import("../../src/extension/config.js");
+    vi.mocked(readOpenAIApiKey).mockImplementation(async (secrets: any) => {
+      await secrets.get("openaiApiKey");
+      return "";
+    });
     vi.mocked(readConfig).mockReturnValue({
       docGlob: "doc/**/*.md",
       indexDir: ".doc-search-index",
