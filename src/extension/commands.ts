@@ -33,7 +33,11 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
       const apiKey = await readOpenAIApiKey(deps.context.secrets);
       const freshConfig = readConfig(apiKey);
       const freshEmbedProvider = createEmbedProvider(freshConfig);
-      SearchPanel.createOrShow(context, { workspaceRoot, store, embedProvider: freshEmbedProvider });
+      SearchPanel.createOrShow(context, {
+        workspaceRoot,
+        store,
+        embedProvider: freshEmbedProvider,
+      });
     }),
 
     vscode.commands.registerCommand("docSearch.reindex", async (forceArg?: boolean) => {

@@ -82,8 +82,7 @@ export class SettingsPanel {
 
           const providerChanged =
             oldProvider !== msg.config.embedProvider ||
-            (msg.config.embedProvider === "ollama" &&
-              oldOllamaModel !== msg.config.ollamaModel);
+            (msg.config.embedProvider === "ollama" && oldOllamaModel !== msg.config.ollamaModel);
 
           this.panel.webview.postMessage({ type: "saveResult", ok: true, providerChanged });
           if (providerChanged) {
