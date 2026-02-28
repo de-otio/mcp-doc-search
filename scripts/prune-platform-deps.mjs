@@ -6,14 +6,14 @@
  * Usage: node scripts/prune-platform-deps.mjs <target>
  *   target: darwin-arm64 | darwin-x64 | linux-x64 | win32-x64
  */
-import { rmSync, readdirSync, existsSync } from 'fs';
-import { join } from 'path';
+import { rmSync, readdirSync, existsSync } from "fs";
+import { join } from "path";
 
 const targetToPlatform = {
-  'darwin-arm64': 'darwin',
-  'darwin-x64': 'darwin',
-  'linux-x64': 'linux',
-  'win32-x64': 'win32',
+  "darwin-arm64": "darwin",
+  "darwin-x64": "darwin",
+  "linux-x64": "linux",
+  "win32-x64": "win32",
 };
 
 const target = process.argv[2];
@@ -26,7 +26,7 @@ if (!platform) {
 }
 
 // onnxruntime-node ships all platform binaries in one package
-const onnxDir = 'node_modules/onnxruntime-node/bin/napi-v3';
+const onnxDir = "node_modules/onnxruntime-node/bin/napi-v3";
 if (existsSync(onnxDir)) {
   for (const dir of readdirSync(onnxDir)) {
     if (dir !== platform) {
@@ -37,10 +37,10 @@ if (existsSync(onnxDir)) {
 }
 
 // @lancedb installs platform-specific optional packages (e.g. lancedb-linux-x64-gnu)
-const lancedbDir = 'node_modules/@lancedb';
+const lancedbDir = "node_modules/@lancedb";
 if (existsSync(lancedbDir)) {
   for (const pkg of readdirSync(lancedbDir)) {
-    if (pkg !== 'lancedb' && !pkg.startsWith(`lancedb-${platform}`)) {
+    if (pkg !== "lancedb" && !pkg.startsWith(`lancedb-${platform}`)) {
       console.log(`Removing @lancedb/${pkg}`);
       rmSync(join(lancedbDir, pkg), { recursive: true, force: true });
     }
