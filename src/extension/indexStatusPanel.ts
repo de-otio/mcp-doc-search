@@ -4,11 +4,42 @@ import { getNonce } from "./utils.js";
 
 export class IndexStatusPanel {
   private static instance: IndexStatusPanel | undefined;
+  /** True while any reindex (from command or panel) is running. */
+  static busy = false;
   private readonly panel: vscode.WebviewPanel;
   private readonly indexer: Indexer;
 
   static reset(): void {
     this.instance = undefined;
+  }
+
+  /** Called by the reindex command to push progress into the panel if it's open. */
+  static notifyProgress(phase: string, processed?: number, total?: number): void {
+    IndexStatusPanel.busy = true;
+    IndexStatusPanel.instance?.panel.webview.postMessage({
+      type: "indexing",
+      phase,
+      processed,
+      total,
+    });
+  }
+
+  static async notifyDone(stats: {
+    indexed: number;
+    totalChunks: number;
+    skipped: number;
+    durationMs: number;
+  }): Promise<void> {
+    IndexStatusPanel.busy = false;
+    const inst = IndexStatusPanel.instance;
+    if (!inst) return;
+    await inst.sendStatus();
+    inst.panel.webview.postMessage({ type: "reindexDone", stats });
+  }
+
+  static notifyError(message: string): void {
+    IndexStatusPanel.busy = false;
+    IndexStatusPanel.instance?.panel.webview.postMessage({ type: "reindexError", message });
   }
 
   static createOrShow(context: vscode.ExtensionContext, indexer: Indexer): void {
@@ -50,6 +81,10 @@ export class IndexStatusPanel {
       case "ready":
       case "refresh":
         await this.sendStatus();
+        // If a reindex is already running, restore the indexing state in the panel
+        if (IndexStatusPanel.busy) {
+          this.panel.webview.postMessage({ type: "indexing", phase: "scanning" });
+        }
         break;
 
       case "reindex":
@@ -59,7 +94,8 @@ export class IndexStatusPanel {
   }
 
   private async runReindex(force: boolean): Promise<void> {
-    console.log("[DocSearch] runReindex started, force =", force);
+    if (IndexStatusPanel.busy) return;
+    IndexStatusPanel.busy = true;
     this.panel.webview.postMessage({ type: "indexing", phase: "scanning" });
     try {
       const stats = await this.indexer.reindex(force, (processed, total, _file, phase) => {
@@ -69,12 +105,12 @@ export class IndexStatusPanel {
           // panel disposed during reindex
         }
       });
-      console.log("[DocSearch] runReindex completed:", JSON.stringify(stats));
+      IndexStatusPanel.busy = false;
       await this.sendStatus();
       this.panel.webview.postMessage({ type: "reindexDone", stats });
       this.panel.reveal();
     } catch (err) {
-      console.error("[DocSearch] runReindex error:", err);
+      IndexStatusPanel.busy = false;
       const message = err instanceof Error ? err.message : String(err);
       try {
         this.panel.webview.postMessage({ type: "reindexError", message });
@@ -389,6 +425,13 @@ export class IndexStatusPanel {
       $("incrementalBtn").disabled = busy || !incrementalEnabled;
       $("fullBtn").disabled = busy;
       $("refreshBtn").disabled = busy;
+      if (busy) {
+        const badge = $("badge");
+        badge.textContent = "Indexing\u2026";
+        badge.className = "badge badge-warn";
+        $("loading").style.display = "none";
+        $("content").style.display = "block";
+      }
     }
 
     let incrementalEnabled = false;

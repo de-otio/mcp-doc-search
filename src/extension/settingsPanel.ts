@@ -67,6 +67,9 @@ export class SettingsPanel {
         const cfg = vscode.workspace.getConfiguration("docSearch");
         const target = vscode.ConfigurationTarget.Workspace;
         try {
+          const oldProvider = cfg.get("embedProvider", "local");
+          const oldOllamaModel = cfg.get("ollamaModel", "nomic-embed-text");
+
           await cfg.update("docGlob", msg.config.docGlob, target);
           await cfg.update("indexDir", msg.config.indexDir, target);
           await cfg.update("headingDepth", msg.config.headingDepth, target);
@@ -77,7 +80,16 @@ export class SettingsPanel {
           await cfg.update("openaiApiKey", msg.config.openaiApiKey, target);
           await cfg.update("autoReindex", msg.config.autoReindex, target);
 
-          this.panel.webview.postMessage({ type: "saveResult", ok: true });
+          const providerChanged =
+            oldProvider !== msg.config.embedProvider ||
+            (msg.config.embedProvider === "ollama" &&
+              oldOllamaModel !== msg.config.ollamaModel);
+
+          this.panel.webview.postMessage({ type: "saveResult", ok: true, providerChanged });
+          if (providerChanged) {
+            // Reindex immediately with the new provider — no window reload needed
+            vscode.commands.executeCommand("docSearch.reindex", true);
+          }
         } catch (err) {
           this.panel.webview.postMessage({
             type: "saveResult",
@@ -608,7 +620,9 @@ export class SettingsPanel {
       if (msg.type === "ollamaStatus") updateOllamaStatus(msg.running, msg.installed);
       if (msg.type === "saveResult") {
         if (msg.ok) {
-          $("savedBanner").classList.add("visible");
+          if (!msg.providerChanged) {
+            $("savedBanner").classList.add("visible");
+          }
           $("whatNext").scrollIntoView({ behavior: "smooth" });
           $("saveBtn").disabled = false;
           $("saveBtn").textContent = "Save Settings";

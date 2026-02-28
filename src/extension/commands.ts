@@ -1,10 +1,13 @@
 import * as vscode from "vscode";
 import * as path from "node:path";
 import * as fs from "node:fs";
-import type { Indexer } from "../core/indexer.js";
+import { Indexer } from "../core/indexer.js";
 import type { EmbedProvider } from "../core/types.js";
+import { validateConfig } from "../core/types.js";
+import { createEmbedProvider } from "../core/embedder.js";
 import type { LanceVectorStore } from "../core/vectorstore.js";
 import type { ExtensionConfig } from "./config.js";
+import { readConfig, readOpenAIApiKey } from "./config.js";
 import type { StatusBarManager } from "./statusBar.js";
 import { SearchPanel } from "./searchPanel.js";
 import { SettingsPanel } from "./settingsPanel.js";
@@ -22,11 +25,15 @@ interface CommandDeps {
 }
 
 export function registerCommands(context: vscode.ExtensionContext, deps: CommandDeps): void {
-  const { indexer, store, embedProvider, statusBar, workspaceRoot } = deps;
+  const { store, statusBar, workspaceRoot } = deps;
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("docSearch.search", () => {
-      SearchPanel.createOrShow(context, { workspaceRoot, store, embedProvider });
+    vscode.commands.registerCommand("docSearch.search", async () => {
+      // Re-read config so the search uses whichever provider is currently configured
+      const apiKey = await readOpenAIApiKey(deps.context.secrets);
+      const freshConfig = readConfig(apiKey);
+      const freshEmbedProvider = createEmbedProvider(freshConfig);
+      SearchPanel.createOrShow(context, { workspaceRoot, store, embedProvider: freshEmbedProvider });
     }),
 
     vscode.commands.registerCommand("docSearch.reindex", async (forceArg?: boolean) => {
@@ -53,7 +60,24 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         force = choice.force;
       }
 
+      // Re-read config so provider changes take effect without a window reload
+      const apiKey = await readOpenAIApiKey(deps.context.secrets);
+      const freshConfig = readConfig(apiKey);
+      const freshEmbedProvider = createEmbedProvider(freshConfig);
+      const freshIndexerConfig = validateConfig(
+        {
+          workspaceRoot,
+          docGlob: freshConfig.docGlob,
+          indexDir: path.join(workspaceRoot, freshConfig.indexDir),
+          maxChunkChars: freshConfig.maxChunkChars,
+          headingDepth: freshConfig.headingDepth,
+        },
+        freshEmbedProvider,
+      );
+      const freshIndexer = new Indexer(freshIndexerConfig, store);
+
       statusBar.setIndexing();
+      IndexStatusPanel.notifyProgress("scanning");
       try {
         const stats = await vscode.window.withProgress(
           {
@@ -63,7 +87,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
           },
           async (progress) => {
             let lastIncrement = 0;
-            return indexer.reindex(force, (processed, total, file, phase) => {
+            return freshIndexer.reindex(force, (processed, total, file, phase) => {
               const baseName = file ? path.basename(file) : "";
               if (phase === "scanning") {
                 progress.report({ message: "Scanning files…" });
@@ -81,23 +105,26 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
                   increment,
                 });
               }
+              IndexStatusPanel.notifyProgress(phase, processed, total);
             });
           },
         );
 
         statusBar.setReady();
+        await IndexStatusPanel.notifyDone(stats);
         vscode.window.showInformationMessage(
           `Doc Search: Indexed ${stats.indexed} file(s), ${stats.totalChunks} chunk(s) in ${stats.durationMs}ms (${stats.skipped} skipped).`,
         );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         statusBar.setError(`Reindex failed: ${msg}`);
+        IndexStatusPanel.notifyError(msg);
         vscode.window.showErrorMessage(`Doc Search: Reindex failed — ${msg}`);
       }
     }),
 
     vscode.commands.registerCommand("docSearch.openIndexStatus", () => {
-      IndexStatusPanel.createOrShow(context, indexer);
+      IndexStatusPanel.createOrShow(context, deps.indexer);
     }),
 
     vscode.commands.registerCommand("docSearch.openSettings", () => {

@@ -96,7 +96,15 @@ export class OllamaEmbedder implements EmbedProvider {
         body: JSON.stringify({ model: this.model, prompt }),
       });
       if (!response.ok) {
-        throw new Error(`Ollama embedding failed (${response.status}): ${await response.text()}`);
+        const body = await response.text();
+        if (response.status === 404 && body.includes("not found")) {
+          throw new Error(
+            `Ollama model "${this.model}" is required but has not been downloaded yet. ` +
+              `Open a terminal and run: ollama pull ${this.model}\n` +
+              `Once the download completes, try again.`,
+          );
+        }
+        throw new Error(`Ollama embedding failed (${response.status}): ${body}`);
       }
       const data = (await response.json()) as { embedding: number[] };
       results.push(data.embedding);
