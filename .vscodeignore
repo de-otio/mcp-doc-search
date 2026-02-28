@@ -8,3 +8,6 @@ esbuild.*.mjs
 tsconfig.json
 .prettierrc
 dist/**/*.map
+node_modules/onnxruntime-web/**
+node_modules/@huggingface/transformers/src/**
+node_modules/**/*.map
