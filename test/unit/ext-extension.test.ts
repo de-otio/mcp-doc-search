@@ -14,7 +14,7 @@ vi.mock("../../src/core/gitignore.js");
 describe("Extension", () => {
   let mockContext: any;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
 
     mockContext = {
@@ -27,6 +27,24 @@ describe("Extension", () => {
     };
 
     (vscode.workspace as any).workspaceFolders = [{ uri: { fsPath: "/workspace" } }];
+
+    const { readConfig } = await import("../../src/extension/config.js");
+    vi.mocked(readConfig).mockReturnValue({
+      docGlob: "doc/**/*.md",
+      indexDir: ".doc-search-index",
+      headingDepth: 2,
+      maxChunkChars: 4000,
+      embedProvider: "local",
+      ollamaUrl: "http://localhost:11434",
+      ollamaModel: "nomic-embed-text",
+      openaiApiKey: "",
+      autoReindex: false,
+    } as any);
+
+    const { LanceVectorStore } = await import("../../src/core/vectorstore.js");
+    vi.mocked(LanceVectorStore).mockImplementation(
+      () => ({ open: vi.fn().mockResolvedValue(undefined) }) as any,
+    );
   });
 
   describe("activate", () => {

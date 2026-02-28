@@ -69,7 +69,7 @@ describe("SettingsPanel", () => {
       const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
 
       if (messageHandler) {
-        await messageHandler({ type: "getConfig" });
+        await messageHandler({ type: "ready" });
 
         expect(mockPanel.webview.postMessage).toHaveBeenCalledWith(
           expect.objectContaining({ type: "config" }),
