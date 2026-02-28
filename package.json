@@ -185,10 +185,10 @@
     "lint:eslint": "eslint src/",
     "format": "prettier -w .",
     "package": "npm prune --omit=dev && vsce package; npm install",
-    "package:darwin-arm": "npm prune --omit=dev && vsce package --target darwin-arm64; npm install",
-    "package:darwin-x64": "npm prune --omit=dev && vsce package --target darwin-x64; npm install",
-    "package:linux-x64": "npm prune --omit=dev && vsce package --target linux-x64; npm install",
-    "package:win-x64": "npm prune --omit=dev && vsce package --target win32-x64; npm install"
+    "package:darwin-arm": "npm prune --omit=dev && node scripts/prune-platform-deps.mjs darwin-arm64 && vsce package --target darwin-arm64; npm install",
+    "package:darwin-x64": "npm prune --omit=dev && node scripts/prune-platform-deps.mjs darwin-x64 && vsce package --target darwin-x64; npm install",
+    "package:linux-x64": "npm prune --omit=dev && node scripts/prune-platform-deps.mjs linux-x64 && vsce package --target linux-x64; npm install",
+    "package:win-x64": "npm prune --omit=dev && node scripts/prune-platform-deps.mjs win32-x64 && vsce package --target win32-x64; npm install"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.4.0",

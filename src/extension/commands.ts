@@ -13,6 +13,7 @@ import { SearchPanel } from "./searchPanel.js";
 import { SettingsPanel } from "./settingsPanel.js";
 import { IndexStatusPanel } from "./indexStatusPanel.js";
 import { McpSetupPanel } from "./mcpSetupPanel.js";
+import { ensureGitignored } from "../core/gitignore.js";
 
 interface CommandDeps {
   context: vscode.ExtensionContext;
@@ -163,6 +164,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
       };
 
       fs.writeFileSync(mcpJsonPath, JSON.stringify(mcpConfig, null, 2) + "\n", "utf8");
+      ensureGitignored(workspaceRoot, ".mcp.json");
 
       McpSetupPanel.createOrShow(context, { mcpServerPath, env });
     }),

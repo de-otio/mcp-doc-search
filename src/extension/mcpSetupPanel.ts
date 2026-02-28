@@ -264,7 +264,7 @@ export class McpSetupPanel {
     <p>Claude will call the <code>search_docs</code> tool and return results from your documentation.</p>
 
     <div class="note">
-      The generated <code>.mcp.json</code> file is at your workspace root. You can commit it to version control so your team gets the same setup.
+      ⚠️ The generated <code>.mcp.json</code> file contains absolute paths specific to your machine and has been added to <code>.gitignore</code>. Do not commit it to version control.
     </div>
 
     <h3>Generated .mcp.json</h3>
