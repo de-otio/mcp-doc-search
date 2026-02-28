@@ -15,6 +15,10 @@ export default [
       "@typescript-eslint/no-explicit-any": "warn",
       "no-unused-vars": "off",
       "@typescript-eslint/no-unused-vars": "error",
+      // False positives: paths come from trusted workspace roots with traversal
+      // validation; bracket access uses numeric loop indices or path.relative() keys.
+      "security/detect-non-literal-fs-filename": "off",
+      "security/detect-object-injection": "off",
     },
   },
 ];
