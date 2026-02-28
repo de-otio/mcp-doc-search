@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createEngineFromEnv } from "../../src/mcp/config.js";
 
@@ -32,7 +33,7 @@ describe("MCP Config", () => {
       await createEngineFromEnv();
 
       expect(readFileSync).toHaveBeenCalledWith(
-        expect.stringContaining("/custom/workspace"),
+        expect.stringContaining(path.join("custom", "workspace")),
         "utf8",
       );
     });
