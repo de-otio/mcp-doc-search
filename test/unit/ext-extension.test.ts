@@ -26,9 +26,7 @@ describe("Extension", () => {
       extensionPath: "/mock/extension",
     };
 
-    vi.mocked(vscode.workspace.workspaceFolders).mockReturnValue([
-      { uri: { fsPath: "/workspace" } } as any,
-    ]);
+    (vscode.workspace as any).workspaceFolders = [{ uri: { fsPath: "/workspace" } }];
   });
 
   describe("activate", () => {
@@ -39,7 +37,7 @@ describe("Extension", () => {
     });
 
     it("should return early if no workspace folders", async () => {
-      vi.mocked(vscode.workspace.workspaceFolders).mockReturnValue(undefined as any);
+      (vscode.workspace as any).workspaceFolders = undefined;
 
       await activate(mockContext);
 

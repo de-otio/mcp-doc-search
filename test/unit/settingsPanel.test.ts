@@ -25,6 +25,7 @@ describe("SettingsPanel", () => {
       subscriptions: [],
     };
 
+    SettingsPanel.reset();
     vi.mocked(vscode.window.createWebviewPanel).mockReturnValue(mockPanel);
 
     const mockCfg = {

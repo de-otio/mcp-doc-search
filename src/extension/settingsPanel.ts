@@ -8,6 +8,10 @@ export class SettingsPanel {
   private readonly panel: vscode.WebviewPanel;
   private disposed = false;
 
+  static reset(): void {
+    this.instance = undefined;
+  }
+
   static createOrShow(context: vscode.ExtensionContext): void {
     if (SettingsPanel.instance) {
       SettingsPanel.instance.panel.reveal();

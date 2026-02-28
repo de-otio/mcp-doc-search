@@ -19,10 +19,11 @@ describe("MCP Config", () => {
 
   describe("createEngineFromEnv", () => {
     it("should use DOC_SEARCH_WORKSPACE env var", async () => {
-      const { readFileSync } = await import("node:fs");
+      const { readFileSync, existsSync } = await import("node:fs");
       const { connect } = await import("@lancedb/lancedb");
 
       process.env.DOC_SEARCH_WORKSPACE = "/custom/workspace";
+      vi.mocked(existsSync).mockReturnValue(true);
       vi.mocked(readFileSync).mockReturnValue("{}");
       vi.mocked(connect).mockResolvedValue({
         openTable: vi.fn().mockRejectedValue(new Error("Not found")),

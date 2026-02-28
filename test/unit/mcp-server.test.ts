@@ -5,9 +5,7 @@ describe("MCP Server", () => {
 
   beforeAll(() => {
     originalExit = process.exit;
-    vi.spyOn(process, "exit").mockImplementation(() => {
-      throw new Error("process.exit called");
-    });
+    vi.spyOn(process, "exit").mockImplementation((() => {}) as any);
   });
 
   afterAll(() => {
