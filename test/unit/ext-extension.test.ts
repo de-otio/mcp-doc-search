@@ -42,9 +42,7 @@ describe("Extension", () => {
     } as any);
 
     const { LanceVectorStore } = await import("../../src/core/vectorstore.js");
-    vi.mocked(LanceVectorStore).mockImplementation(
-      () => ({ open: vi.fn().mockResolvedValue(undefined) }) as any,
-    );
+    vi.mocked(LanceVectorStore).prototype.open = vi.fn().mockResolvedValue(undefined);
   });
 
   describe("activate", () => {
