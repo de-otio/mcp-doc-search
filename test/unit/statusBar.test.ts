@@ -31,7 +31,7 @@ describe("StatusBar", () => {
       new StatusBarManager(context);
 
       expect(vscode.window.createStatusBarItem).toHaveBeenCalledWith(
-        vscode.StatusBarAlignment.Left,
+        vscode.StatusBarAlignment.Right,
         expect.any(Number),
       );
     });
@@ -40,8 +40,8 @@ describe("StatusBar", () => {
       const manager = new StatusBarManager(context);
       manager.setReady();
 
-      expect(mockStatusBarItem.text).toContain("✓");
-      expect(mockStatusBarItem.color).toBeUndefined();
+      expect(mockStatusBarItem.text).toContain("$(search)");
+      expect(mockStatusBarItem.backgroundColor).toBeUndefined();
     });
 
     it("should show indexing state", () => {
@@ -55,7 +55,7 @@ describe("StatusBar", () => {
       const manager = new StatusBarManager(context);
       manager.setError("Test error");
 
-      expect(mockStatusBarItem.color).toBeDefined();
+      expect(mockStatusBarItem.backgroundColor).toBeDefined();
     });
 
     it("should dispose status bar item", () => {

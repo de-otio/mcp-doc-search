@@ -28,6 +28,7 @@ export const Uri = {
 };
 
 export const StatusBarAlignment = { Left: 1, Right: 2 };
+export const ConfigurationTarget = { Global: 1, Workspace: 2, WorkspaceFolder: 3 };
 export const ThemeColor = vi.fn();
 export const ViewColumn = { One: 1 };
 export const ProgressLocation = { Notification: 15 };

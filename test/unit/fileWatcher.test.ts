@@ -87,7 +87,7 @@ describe("FileWatcher", () => {
 
       if (changeHandler) {
         changeHandler({ fsPath: "/workspace/doc/test.md" });
-        vi.advanceTimersByTime(2000);
+        await vi.runAllTimersAsync();
 
         expect(mockStatusBar.setIndexing).toHaveBeenCalled();
         expect(mockStatusBar.setReady).toHaveBeenCalled();

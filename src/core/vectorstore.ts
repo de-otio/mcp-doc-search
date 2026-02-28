@@ -15,8 +15,8 @@ function safeLanceFilter(file: string): string {
   if (file.length > 2048) {
     throw new Error(`File path too long (max 2048 chars): ${file}`);
   }
-  if (!/^[a-zA-Z0-9_./-]+$/.test(file)) {
-    throw new Error(`File path contains suspicious characters: ${file}. Allowed: [a-zA-Z0-9_./-]`);
+  if (!/^[a-zA-Z0-9_.'/-]+$/.test(file)) {
+    throw new Error(`File path contains suspicious characters: ${file}. Allowed: [a-zA-Z0-9_.'/-]`);
   }
   // Escape single quotes for SQL
   return file.replace(/'/g, "''");
@@ -153,7 +153,7 @@ export class LanceVectorStore {
   }
 
   isOpen(): boolean {
-    return this.db !== null;
+    return this.db != null;
   }
 
   hasTable(): boolean {

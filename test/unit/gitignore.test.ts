@@ -25,7 +25,8 @@ describe("gitignore", () => {
     expect(readMock).toHaveBeenCalledWith(path.join("/workspace", ".gitignore"), "utf8");
     expect(appendMock).toHaveBeenCalledWith(
       path.join("/workspace", ".gitignore"),
-      "/.doc-search-index\n",
+      "# doc-search index\n.doc-search-index\n",
+      "utf8",
     );
   });
 
@@ -38,12 +39,13 @@ describe("gitignore", () => {
     expect(readMock).toHaveBeenCalled();
     expect(appendMock).toHaveBeenCalledWith(
       path.join("/workspace", ".gitignore"),
-      "/.doc-search-index\n",
+      "# doc-search index\n.doc-search-index\n",
+      "utf8",
     );
   });
 
   it("should skip when entry already exists in .gitignore", () => {
-    vi.spyOn(fs, "readFileSync").mockReturnValue("node_modules/\n/.doc-search-index\n");
+    vi.spyOn(fs, "readFileSync").mockReturnValue("node_modules/\n.doc-search-index\n");
     const appendMock = vi.spyOn(fs, "appendFileSync").mockImplementation(() => {});
 
     ensureGitignored("/workspace", ".doc-search-index");
@@ -52,7 +54,7 @@ describe("gitignore", () => {
   });
 
   it("should skip when pattern already covers the entry", () => {
-    vi.spyOn(fs, "readFileSync").mockReturnValue("**/.doc-search-index\n");
+    vi.spyOn(fs, "readFileSync").mockReturnValue(".doc-search-index\n");
     const appendMock = vi.spyOn(fs, "appendFileSync").mockImplementation(() => {});
 
     ensureGitignored("/workspace", ".doc-search-index");
@@ -68,7 +70,8 @@ describe("gitignore", () => {
 
     expect(appendMock).toHaveBeenCalledWith(
       path.join("/workspace", ".gitignore"),
-      "/dir/.doc-search-index\n",
+      "# doc-search index\ndir/.doc-search-index\n",
+      "utf8",
     );
   });
 });

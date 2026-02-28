@@ -7,6 +7,10 @@ export class IndexStatusPanel {
   private readonly panel: vscode.WebviewPanel;
   private readonly indexer: Indexer;
 
+  static reset(): void {
+    this.instance = undefined;
+  }
+
   static createOrShow(context: vscode.ExtensionContext, indexer: Indexer): void {
     if (IndexStatusPanel.instance) {
       IndexStatusPanel.instance.panel.reveal();

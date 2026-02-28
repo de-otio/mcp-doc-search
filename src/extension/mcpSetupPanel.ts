@@ -10,6 +10,10 @@ export class McpSetupPanel {
   private static instance: McpSetupPanel | undefined;
   private readonly panel: vscode.WebviewPanel;
 
+  static reset(): void {
+    this.instance = undefined;
+  }
+
   static createOrShow(context: vscode.ExtensionContext, deps: McpSetupDeps): void {
     if (McpSetupPanel.instance) {
       McpSetupPanel.instance.panel.reveal();

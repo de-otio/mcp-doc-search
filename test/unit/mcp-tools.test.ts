@@ -2,6 +2,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { registerTools } from "../../src/mcp/tools.js";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 
+vi.mock("../../src/core/searcher.js", () => ({
+  search: vi.fn(),
+}));
+
 describe("MCP Tools", () => {
   let mockServer: any;
   let mockStore: any;
@@ -65,6 +69,17 @@ describe("MCP Tools", () => {
     });
 
     it("should clamp search n parameter between 1 and 100", async () => {
+      const { search } = await import("../../src/core/searcher.js");
+
+      vi.mocked(search).mockResolvedValue([
+        {
+          file: "test.md",
+          heading: "Test",
+          content: "Test content",
+          score: 0.95,
+        },
+      ]);
+
       registerTools(mockServer, {
         store: mockStore,
         indexer: mockIndexer,
@@ -74,8 +89,6 @@ describe("MCP Tools", () => {
       const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
 
       if (callToolHandler) {
-        mockStore.query.mockResolvedValue([]);
-
         const result = await callToolHandler({
           params: {
             name: "search_docs",
@@ -83,7 +96,8 @@ describe("MCP Tools", () => {
           },
         });
 
-        expect(mockStore.query).toHaveBeenCalled();
+        // Verify that search was called with clamped n value (100, not 500)
+        expect(search).toHaveBeenCalledWith("test", 100, mockStore, mockEmbedProvider);
       }
     });
 

@@ -11,6 +11,7 @@ describe("IndexStatusPanel", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    IndexStatusPanel.reset();
 
     mockPanel = {
       webview: {
@@ -48,6 +49,9 @@ describe("IndexStatusPanel", () => {
     };
 
     vi.mocked(vscode.window.createWebviewPanel).mockReturnValue(mockPanel);
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+      get: vi.fn(() => "local"),
+    } as any);
   });
 
   describe("IndexStatusPanel", () => {
@@ -85,12 +89,13 @@ describe("IndexStatusPanel", () => {
       const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
 
       if (messageHandler) {
-        await messageHandler({ type: "reindex" });
+        await messageHandler({ type: "reindex", force: false });
 
-        expect(mockIndexer.reindex).toHaveBeenCalledWith(false);
+        expect(mockIndexer.reindex).toHaveBeenCalledWith(false, expect.any(Function));
         expect(mockPanel.webview.postMessage).toHaveBeenCalledWith(
           expect.objectContaining({
-            type: expect.stringMatching(/status|progress/),
+            type: "indexing",
+            phase: "scanning",
           }),
         );
       }

@@ -18,6 +18,10 @@ export class SearchPanel {
   private readonly deps: SearchDeps;
   private disposed = false;
 
+  static reset(): void {
+    this.instance = undefined;
+  }
+
   static createOrShow(context: vscode.ExtensionContext, deps: SearchDeps): void {
     if (SearchPanel.instance) {
       SearchPanel.instance.panel.reveal();

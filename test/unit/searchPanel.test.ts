@@ -11,6 +11,7 @@ describe("SearchPanel", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    SearchPanel.reset();
 
     mockPanel = {
       webview: {
