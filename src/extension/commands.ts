@@ -121,15 +121,22 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         DOC_SEARCH_WORKSPACE: workspaceRoot,
       };
 
-      const mcpConfig = {
-        mcpServers: {
-          "doc-search": {
-            command: "node",
-            args: [mcpServerPath],
-            env,
-          },
-        },
+      let mcpConfig: Record<string, unknown> = {};
+      if (fs.existsSync(mcpJsonPath)) {
+        try {
+          mcpConfig = JSON.parse(fs.readFileSync(mcpJsonPath, "utf8"));
+        } catch {
+          // If the file is malformed, start fresh
+        }
+      }
+
+      const mcpServers = (mcpConfig.mcpServers as Record<string, unknown>) ?? {};
+      mcpServers["doc-search"] = {
+        command: "node",
+        args: [mcpServerPath],
+        env,
       };
+      mcpConfig.mcpServers = mcpServers;
 
       fs.writeFileSync(mcpJsonPath, JSON.stringify(mcpConfig, null, 2) + "\n", "utf8");
 
