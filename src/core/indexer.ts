@@ -52,6 +52,7 @@ export class Indexer {
     const mdFiles = await glob(this.config.docGlob, {
       cwd: this.config.workspaceRoot,
       absolute: true,
+      ignore: ["**/node_modules/**"],
     });
     mdFiles.sort();
 
@@ -155,6 +156,7 @@ export class Indexer {
     const mdFiles = await glob(this.config.docGlob, {
       cwd: this.config.workspaceRoot,
       absolute: true,
+      ignore: ["**/node_modules/**"],
     });
 
     const fileSet = new Set(

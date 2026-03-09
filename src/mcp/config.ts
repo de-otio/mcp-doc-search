@@ -34,20 +34,21 @@ export async function createEngineFromEnv(): Promise<EngineDeps> {
   const workspaceRoot = process.env.DOC_SEARCH_WORKSPACE ?? process.cwd();
   const settings = readWorkspaceSettings(workspaceRoot);
 
-  // Settings cascade: .vscode/settings.json → env vars → defaults
-  const docGlob = settings["docSearch.docGlob"] ?? process.env.DOC_SEARCH_GLOB ?? "doc/**/*.md";
+  // Settings cascade: env vars → .vscode/settings.json → defaults
+  // Env vars take priority since they represent explicit MCP server configuration.
+  const docGlob = process.env.DOC_SEARCH_GLOB ?? settings["docSearch.docGlob"] ?? "doc/**/*.md";
   const indexDirRelative =
-    settings["docSearch.indexDir"] ?? process.env.DOC_SEARCH_INDEX_DIR ?? ".doc-search-index";
+    process.env.DOC_SEARCH_INDEX_DIR ?? settings["docSearch.indexDir"] ?? ".doc-search-index";
   const indexDir = path.join(workspaceRoot, indexDirRelative);
   ensureGitignored(workspaceRoot, indexDirRelative);
   const maxChunkChars = settings["docSearch.maxChunkChars"] ?? 4000;
   const headingDepth = settings["docSearch.headingDepth"] ?? 2;
 
-  // Embedding provider: settings.json → env vars → local
+  // Embedding provider: env vars → settings.json → local
   const providerName =
-    settings["docSearch.embedProvider"] ??
     (process.env.USE_OPENAI === "1" ? "openai" : undefined) ??
     (process.env.OLLAMA_URL ? "ollama" : undefined) ??
+    settings["docSearch.embedProvider"] ??
     "local";
 
   let embedProvider: EmbedProvider;
