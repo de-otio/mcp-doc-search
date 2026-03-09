@@ -48,6 +48,10 @@ jobs:
       - name: Prune platform-specific binaries for other platforms
         run: node scripts/prune-platform-deps.mjs ${{ matrix.target }}
 
+      - name: Show node_modules size breakdown
+        shell: bash
+        run: du -sh node_modules/*/ | sort -rh | head -20
+
       - name: Package VSIX for ${{ matrix.target }}
         run: npx vsce package --target ${{ matrix.target }}
 
@@ -57,3 +61,31 @@ jobs:
           name: vsix-${{ matrix.target }}
           path: "*.vsix"
           retention-days: 5
+
+  cleanup:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push'
+    permissions:
+      actions: write
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const artifacts = await github.rest.actions.listArtifactsForRepo({
+              owner, repo, per_page: 100,
+            });
+            const now = Date.now();
+            const maxAge = 5 * 24 * 60 * 60 * 1000; // 5 days
+            for (const a of artifacts.data.artifacts) {
+              if (a.expired) continue;
+              // Delete artifacts from older runs (not the current one)
+              if (a.workflow_run.id !== context.runId) {
+                const age = now - new Date(a.created_at).getTime();
+                if (age > maxAge) {
+                  console.log(`Deleting old artifact: ${a.name} (${a.workflow_run.id})`);
+                  await github.rest.actions.deleteArtifact({ owner, repo, artifact_id: a.id });
+                }
+              }
+            }

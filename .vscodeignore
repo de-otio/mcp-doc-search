@@ -13,10 +13,15 @@ tsconfig.json
 dist/**/*.map
 node_modules/**/*.map
 
-# onnxruntime-web is unused (we use onnxruntime-node)
+# onnxruntime-web is unused (we use onnxruntime-node for inference)
 node_modules/onnxruntime-web/**
 
-# HuggingFace transformers: only need the node CJS entry point
+# sharp + libvips: transitive dep of transformers for image processing.
+# We only use text embedding, so these large native binaries are unnecessary.
+node_modules/sharp/**
+node_modules/@img/**
+
+# HuggingFace transformers: only need the node CJS entry point + package.json
 node_modules/@huggingface/transformers/src/**
 node_modules/@huggingface/transformers/types/**
 node_modules/@huggingface/transformers/.cache/**
@@ -32,3 +37,8 @@ node_modules/@huggingface/transformers/dist/transformers.node.min.mjs
 node_modules/@huggingface/transformers/dist/transformers.node.min.mjs.map
 node_modules/@huggingface/transformers/dist/transformers.node.min.cjs
 node_modules/@huggingface/transformers/dist/transformers.node.min.cjs.map
+
+# onnxruntime-node: prune script handles cross-platform binaries,
+# but also exclude source/script dirs not needed at runtime
+node_modules/onnxruntime-node/lib/**
+node_modules/onnxruntime-node/script/**
