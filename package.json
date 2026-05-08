@@ -22,6 +22,9 @@
     "workspaceContains:**/*.md"
   ],
   "main": "./dist/extension.js",
+  "bin": {
+    "mcp-doc-search": "./dist/mcp-doc-search.js"
+  },
   "contributes": {
     "commands": [
       {
@@ -175,9 +178,10 @@
     }
   },
   "scripts": {
-    "build": "node esbuild.extension.mjs && node esbuild.mcp.mjs",
+    "build": "node esbuild.extension.mjs && node esbuild.mcp.mjs && node esbuild.cli.mjs",
     "build:extension": "node esbuild.extension.mjs",
     "build:mcp": "node esbuild.mcp.mjs",
+    "build:cli": "node esbuild.cli.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

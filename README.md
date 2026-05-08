@@ -78,6 +78,48 @@ reindex_docs(force=true)               → full rebuild
 | `ollama`          | Better (768-dim) | `brew install ollama && ollama pull nomic-embed-text` | Free            |
 | `openai`          | Best (1536-dim)  | Set `docSearch.openaiApiKey`                          | ~$0.02/M tokens |
 
+## CLI
+
+A standalone CLI is included — no MCP client required.
+
+```bash
+# Semantic search
+mcp-doc-search search "authentication flow" --n 5
+mcp-doc-search search "map view feed" --files          # one path per line
+mcp-doc-search search "query" --min-score 0.7 --json   # JSON output
+
+# Browse the index
+mcp-doc-search list
+mcp-doc-search list --json
+
+# Rebuild the index
+mcp-doc-search reindex
+mcp-doc-search reindex --force   # re-embed every file
+
+# Read files from the workspace
+mcp-doc-search get doc/api.md
+mcp-doc-search get doc/api.md --from-line 20 --max-lines 50
+
+# Read multiple files (glob or comma list)
+mcp-doc-search multi-get "doc/**/*.md" --files         # list matched paths
+mcp-doc-search multi-get "doc/a.md,doc/b.md" --json
+
+# Index health
+mcp-doc-search status
+mcp-doc-search status --json
+
+# Per-file context notes (if supported by your indexer version)
+mcp-doc-search context add doc/api.md "primary API reference"
+mcp-doc-search context list
+mcp-doc-search context remove doc/api.md
+```
+
+**Flags:** `--json` (machine-readable output), `--files` (paths only, for `search`/`multi-get`), `--explain` (score breakdown for `search`).
+
+**Environment:** same as the MCP server — `DOC_SEARCH_WORKSPACE`, `DOC_SEARCH_GLOB`, `DOC_SEARCH_INDEX_DIR`, `USE_OPENAI=1`, `OLLAMA_URL`.
+
+**Exit codes:** 0 = success, 1 = user error (bad args / missing file), 2 = engine error.
+
 ## Development
 
 ```bash
