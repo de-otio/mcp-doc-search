@@ -101,6 +101,57 @@ describe("Extension", () => {
 
       // FileWatcher should not be instantiated
     });
+
+    it("should trigger catch-up reindex when autoReindex enabled and needsReindex is true", async () => {
+      const { readConfig } = await import("../../src/extension/config.js");
+      vi.mocked(readConfig).mockReturnValue({
+        docGlob: "doc/**/*.md",
+        indexDir: ".doc-search-index",
+        headingDepth: 2,
+        maxChunkChars: 4000,
+        embedProvider: "local",
+        ollamaUrl: "http://localhost:11434",
+        ollamaModel: "nomic-embed-text",
+        openaiApiKey: "",
+        autoReindex: true,
+      } as any);
+
+      const { Indexer } = await import("../../src/core/indexer.js");
+      vi.mocked(Indexer).prototype.getStatus = vi.fn().mockResolvedValue({
+        totalFiles: 3,
+        cachedFiles: 2,
+        changedFiles: 0,
+        newFiles: 1,
+        deletedFiles: 2,
+        chunkCount: 10,
+        lastIndexed: new Date(),
+        needsReindex: true,
+        docGlob: "doc/**/*.md",
+      });
+      vi.mocked(Indexer).prototype.reindex = vi.fn().mockResolvedValue({
+        indexed: 1,
+        skipped: 0,
+        failedFiles: 0,
+        totalChunks: 3,
+        durationMs: 50,
+      });
+
+      const { StatusBarManager } = await import("../../src/extension/statusBar.js");
+      const setIndexingMock = vi.fn();
+      const setReadyMock = vi.fn();
+      vi.mocked(StatusBarManager).prototype.setIndexing = setIndexingMock;
+      vi.mocked(StatusBarManager).prototype.setReady = setReadyMock;
+
+      await activate(mockContext);
+
+      // store.open() is non-blocking; flush microtasks so the .then() chain runs
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(vi.mocked(Indexer).prototype.reindex).toHaveBeenCalledWith(false);
+      expect(setIndexingMock).toHaveBeenCalled();
+      expect(setReadyMock).toHaveBeenCalled();
+    });
   });
 
   describe("deactivate", () => {

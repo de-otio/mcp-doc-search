@@ -49,12 +49,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push(watcher);
   }
 
-  // Open store (async, non-blocking)
-  store.open().catch((err) => {
-    vscode.window.showWarningMessage(
-      `Doc Search: Failed to open index — ${err instanceof Error ? err.message : String(err)}`,
-    );
-  });
+  // Open store, then check if a catch-up reindex is needed (async, non-blocking)
+  store
+    .open()
+    .then(async () => {
+      if (!config.autoReindex) return;
+      const status = await indexer.getStatus();
+      if (!status.needsReindex) return;
+      statusBar.setIndexing();
+      try {
+        await indexer.reindex(false);
+        statusBar.setReady();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        statusBar.setError(`Catch-up reindex failed: ${msg}`);
+      }
+    })
+    .catch((err) => {
+      vscode.window.showWarningMessage(
+        `Doc Search: Failed to open index — ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
 }
 
 export function deactivate(): void {}
