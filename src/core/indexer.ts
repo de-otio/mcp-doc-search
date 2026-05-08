@@ -26,7 +26,7 @@ export class Indexer {
 
   /**
    * Crawl doc files, embed changed files, upsert into vector store.
-   * Returns stats: { indexed, skipped, totalChunks, durationMs }
+   * Returns stats: { indexed, skipped, totalChunks, durationMs, pruned }
    *
    * @param force - Re-index all files even if unchanged
    * @param onProgress - Optional callback invoked after each file is processed.
@@ -44,7 +44,8 @@ export class Indexer {
     ) => void,
   ): Promise<IndexStats> {
     const t0 = Date.now();
-    const cache: MtimeCache = force ? {} : this.loadMtimeCache();
+    // Always load real cache for prune sweep; force only clears the embed decision
+    const cache: MtimeCache = this.loadMtimeCache();
     const newCache: MtimeCache = {};
 
     onProgress?.(0, 0, "", "scanning");
@@ -55,6 +56,20 @@ export class Indexer {
       ignore: ["**/node_modules/**"],
     });
     mdFiles.sort();
+
+    // Prune: remove vector store entries for files no longer on disk / in glob
+    const currentSet = new Set(
+      mdFiles.map((f) => path.relative(this.config.workspaceRoot, f).replace(/\\/g, "/")),
+    );
+    const staleKeys = Object.keys(cache).filter((rel) => !currentSet.has(rel));
+    for (const rel of staleKeys) {
+      try {
+        await this.store.deleteByFile(rel);
+      } catch (err) {
+        console.warn(`Prune: failed to delete chunks for ${rel}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+    const pruned = staleKeys.length;
 
     // Files that actually need indexing (skipped ones don't count for progress)
     const toIndex = force
@@ -138,8 +153,16 @@ export class Indexer {
       onProgress?.(indexed, toIndex.length, rel, "indexing");
     }
 
-    // Merge new cache with unchanged entries from old cache
-    this.saveMtimeCache({ ...cache, ...newCache });
+    // Merge new cache with unchanged entries from old cache, excluding pruned keys
+    const staleSet = new Set(staleKeys);
+    const mergedCache: MtimeCache = {};
+    for (const [k, v] of Object.entries(cache)) {
+      if (!staleSet.has(k)) mergedCache[k] = v;
+    }
+    for (const [k, v] of Object.entries(newCache)) {
+      mergedCache[k] = v;
+    }
+    this.saveMtimeCache(mergedCache);
 
     return {
       indexed,
@@ -147,6 +170,7 @@ export class Indexer {
       failedFiles,
       totalChunks,
       durationMs: Date.now() - t0,
+      pruned,
     };
   }
 
@@ -189,7 +213,7 @@ export class Indexer {
       deletedFiles,
       chunkCount,
       lastIndexed,
-      needsReindex: changedFiles > 0 || newFiles > 0,
+      needsReindex: changedFiles > 0 || newFiles > 0 || deletedFiles > 0,
       docGlob: this.config.docGlob,
     };
   }

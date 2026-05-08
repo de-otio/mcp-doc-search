@@ -32,6 +32,8 @@ export interface IndexStats {
   failedFiles: number;
   totalChunks: number;
   durationMs: number;
+  /** Files removed from vector store (deleted/renamed/glob-excluded) */
+  pruned: number;
 }
 
 export interface IndexStatus {
