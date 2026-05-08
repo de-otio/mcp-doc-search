@@ -11,7 +11,6 @@ await esbuild.build({
     "jsonc-parser": "jsonc-parser/lib/esm/main.js",
   },
   format: "cjs",
-  banner: { js: "#!/usr/bin/env node" },
   sourcemap: true,
 });
 
