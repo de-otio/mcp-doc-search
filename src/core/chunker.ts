@@ -50,7 +50,8 @@ export function inFence(lineNum: number, fenceRanges: Array<[number, number]>): 
  * - Skips headings inside code fences
  * - Prepends [DocTitle] breadcrumb for embedding disambiguation
  * - Uses stable IDs based on md5(file:lineNumber)
- * - Truncates chunks to maxChars
+ * - Splits sections that exceed maxChars, adding overlap context between splits
+ * - Adds overlap context (up to 15% or 200 chars) when splitting mid-section
  */
 export function chunkMarkdown(
   absolutePath: string,
@@ -105,8 +106,83 @@ export function chunkMarkdown(
     ];
   }
 
+  // Helper to split a single section into multiple chunks if needed
+  interface ChunkPart {
+    text: string;
+    heading: string;
+    lineNum: number;
+    splitIndex: number;
+  }
+
+  function splitSectionIntoChunks(
+    sectionText: string,
+    heading: string,
+    lineNum: number,
+  ): ChunkPart[] {
+    const breadcrumb = `[${docTitle}]\n\n`;
+    const chunks: ChunkPart[] = [];
+
+    let remaining = sectionText;
+    let splitIndex = 0;
+
+    while (remaining.length > 0) {
+      let fullText: string;
+
+      if (splitIndex === 0) {
+        // First chunk: prepend breadcrumb and heading
+        fullText = `${breadcrumb}${remaining}`;
+      } else {
+        // Subsequent chunks: add overlap from the previous chunk
+        const prevChunkBody = chunks[chunks.length - 1].text.slice(
+          chunks[chunks.length - 1].text.indexOf("\n\n") + 2,
+        );
+        const overlapSize = Math.min(Math.ceil(prevChunkBody.length * 0.15), 200);
+        const overlap = prevChunkBody.slice(-overlapSize);
+        fullText = `${breadcrumb}${overlap}\n\n${remaining}`;
+      }
+
+      // Truncate to maxChars (overlap is not counted toward budget)
+      const truncatedText = fullText.slice(0, maxChars);
+      chunks.push({
+        text: truncatedText,
+        heading,
+        lineNum,
+        splitIndex,
+      });
+
+      // Calculate how much of the remaining text was consumed
+      // The consumed text is everything after the breadcrumb+overlap
+      let consumedFromRemaining: number;
+
+      if (splitIndex === 0) {
+        // First chunk: consumed = truncated - breadcrumb
+        consumedFromRemaining = truncatedText.length - breadcrumb.length;
+      } else {
+        // Later chunks: consumed = truncated - breadcrumb - overlap - separator
+        const prevChunkBody = chunks[chunks.length - 2].text.slice(
+          chunks[chunks.length - 2].text.indexOf("\n\n") + 2,
+        );
+        const overlapSize = Math.min(Math.ceil(prevChunkBody.length * 0.15), 200);
+        // -2 accounts for the "\n\n" separator between overlap and remaining text
+        consumedFromRemaining = truncatedText.length - breadcrumb.length - overlapSize - 2;
+      }
+
+      // Stop if we consumed less than what we tried to add (reached end of text)
+      if (consumedFromRemaining >= remaining.length) {
+        break;
+      }
+
+      // Move forward in remaining text
+      remaining = remaining.slice(consumedFromRemaining);
+      splitIndex++;
+    }
+
+    return chunks;
+  }
+
   // Extract chunks between consecutive headings
   const chunks: DocChunk[] = [];
+
   for (let i = 0; i < positions.length; i++) {
     const start = positions[i].offset;
     const end = i + 1 < positions.length ? positions[i + 1].offset : content.length;
@@ -114,22 +190,28 @@ export function chunkMarkdown(
 
     if (!rawText) continue;
 
-    // Prepend doc title as breadcrumb context, then truncate
-    const text = `[${docTitle}]\n\n${rawText}`.slice(0, maxChars);
+    // Split this section into chunks if needed
+    const sectionChunks = splitSectionIntoChunks(
+      rawText,
+      positions[i].heading.replace(/^#+\s+/, ""),
+      positions[i].lineNum,
+    );
 
-    // Stable ID based on file path and line number
-    const chunkId = createHash("md5")
-      .update(`${rel}:${positions[i].lineNum}`)
-      .digest("hex")
-      .slice(0, 12);
+    // Generate stable IDs and add to chunks list
+    for (const sectionChunk of sectionChunks) {
+      const chunkId = createHash("md5")
+        .update(`${rel}:${sectionChunk.lineNum}:${sectionChunk.splitIndex}`)
+        .digest("hex")
+        .slice(0, 12);
 
-    chunks.push({
-      id: chunkId,
-      text,
-      file: rel,
-      heading: positions[i].heading.replace(/^#+\s+/, ""),
-      lineStart: positions[i].lineNum,
-    });
+      chunks.push({
+        id: chunkId,
+        text: sectionChunk.text,
+        file: rel,
+        heading: sectionChunk.heading,
+        lineStart: sectionChunk.lineNum,
+      });
+    }
   }
 
   return chunks;

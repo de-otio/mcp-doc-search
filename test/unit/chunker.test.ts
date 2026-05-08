@@ -258,15 +258,19 @@ describe("chunkMarkdown — stable IDs", () => {
 // ---------------------------------------------------------------------------
 
 describe("chunkMarkdown — truncation", () => {
-  it("truncates chunk text to maxChars when content exceeds the limit", () => {
+  it("splits content when exceeding maxChars limit", () => {
     const longBody = "x".repeat(200);
     const content = `# Short\n\n${longBody}`;
     const filePath = writeTemp("truncation.md", content);
 
     const chunks = chunkMarkdown(filePath, tmpDir, /* maxChars= */ 100);
 
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0].text.length).toBeLessThanOrEqual(100);
+    // Should produce multiple chunks due to size cap
+    expect(chunks.length).toBeGreaterThan(1);
+    // All chunks must respect the size limit
+    for (const chunk of chunks) {
+      expect(chunk.text.length).toBeLessThanOrEqual(100);
+    }
   });
 });
 
@@ -275,7 +279,7 @@ describe("chunkMarkdown — truncation", () => {
 // ---------------------------------------------------------------------------
 
 describe("chunkMarkdown — headingDepth option", () => {
-  it("with headingDepth:1 only splits on # headings, ignoring ##", () => {
+  it("headingDepth:1 only splits on # headings", () => {
     const content = [
       "# TopLevel",
       "",
@@ -316,6 +320,107 @@ describe("chunkMarkdown — Windows path normalization", () => {
 
     for (const chunk of chunks) {
       expect(chunk.file).not.toContain("\\");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// chunkMarkdown — mid-section split overlap
+// ---------------------------------------------------------------------------
+
+describe("chunkMarkdown — mid-section split overlap", () => {
+  it("adds overlap context when chunk exceeds maxChars", () => {
+    // Create a long section that exceeds the cap
+    const longSection = "x".repeat(5000);
+    const content = `# Title\n\n${longSection}`;
+    const filePath = writeTemp("overlap-test.md", content);
+
+    // Use a smaller maxChars to force truncation
+    const chunks = chunkMarkdown(filePath, tmpDir, /* maxChars= */ 1000);
+
+    // Should produce multiple chunks due to size cap
+    expect(chunks.length).toBeGreaterThan(1);
+
+    // Chunk2 should start with overlap tail from chunk1
+    const chunk1 = chunks[0];
+    const chunk2 = chunks[1];
+
+    const breadcrumbEnd = chunk2.text.indexOf("\n\n") + 2;
+    const chunk2Start = chunk2.text.slice(breadcrumbEnd, breadcrumbEnd + 50);
+
+    const chunk1BreadcrumbEnd = chunk1.text.indexOf("\n\n") + 2;
+    const chunk1End = chunk1.text.slice(-50);
+
+    // They should have overlap (same 'x' pattern)
+    expect(chunk2Start).toContain("x");
+    expect(chunk1End).toContain("x");
+  });
+
+  it("respects 200-character overlap cap", () => {
+    // Create a very long section
+    const longSection = "y".repeat(3000);
+    const content = `# Title\n\n${longSection}`;
+    const filePath = writeTemp("overlap-cap-test.md", content);
+
+    const chunks = chunkMarkdown(filePath, tmpDir, /* maxChars= */ 1000);
+
+    if (chunks.length > 1) {
+      const chunk1 = chunks[0];
+      const chunk2 = chunks[1];
+
+      const breadcrumbEnd = chunk1.text.indexOf("\n\n") + 2;
+      const chunk1Body = chunk1.text.slice(breadcrumbEnd);
+
+      const chunk2BreadcrumbEnd = chunk2.text.indexOf("\n\n") + 2;
+      const chunk2TextAfterBreadcrumb = chunk2.text.slice(chunk2BreadcrumbEnd);
+      const overlapEndIdx = chunk2TextAfterBreadcrumb.indexOf("\n\n");
+      const overlapText =
+        overlapEndIdx > 0 ? chunk2TextAfterBreadcrumb.slice(0, overlapEndIdx) : "";
+
+      // Overlap must not exceed 200 chars
+      expect(overlapText.length).toBeLessThanOrEqual(200);
+    }
+  });
+
+  it("produces no overlap at heading boundaries", () => {
+    const content = [
+      "# Title",
+      "",
+      "First section content.",
+      "",
+      "## Section2",
+      "",
+      "Second section content.",
+    ].join("\n");
+    const filePath = writeTemp("no-overlap-heading.md", content);
+
+    const chunks = chunkMarkdown(filePath, tmpDir);
+
+    expect(chunks).toHaveLength(2);
+
+    const chunk1 = chunks[0];
+    const chunk2 = chunks[1];
+
+    // No overlap at heading boundary; chunk2 starts with the heading
+    const chunk2BreadcrumbEnd = chunk2.text.indexOf("\n\n") + 2;
+    const chunk2Body = chunk2.text.slice(chunk2BreadcrumbEnd);
+
+    expect(chunk2Body.trim().startsWith("## Section2")).toBe(true);
+    expect(chunk2Body).not.toContain("First section");
+  });
+
+  it("accounts for overlap without double-counting size budget", () => {
+    // A section that is just under the cap, followed by content
+    const section1 = "a".repeat(900);
+    const section2 = "b".repeat(500);
+    const content = `# Title\n\n${section1}\n\n## Part2\n\n${section2}`;
+    const filePath = writeTemp("size-budget.md", content);
+
+    const chunks = chunkMarkdown(filePath, tmpDir, /* maxChars= */ 1000);
+
+    // All chunks should respect the maxChars limit
+    for (const chunk of chunks) {
+      expect(chunk.text.length).toBeLessThanOrEqual(1000);
     }
   });
 });
