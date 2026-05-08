@@ -40,12 +40,32 @@ Open VS Code settings and set:
 - **Cmd+Shift+P → "Doc Search: Search Documentation"** — type-ahead semantic search, click a result to open it
 - **Cmd+Shift+P → "Doc Search: Generate .mcp.json"** — creates `.mcp.json` so any MCP client can use the same index
 
+### Understanding scores
+
+Each result includes a `score` (0–1) computed from vector similarity plus keyword re-ranking:
+
+| Score   | Meaning             |
+| ------- | ------------------- |
+| 0.8–1.0 | Highly relevant     |
+| 0.5–0.8 | Moderately relevant |
+| 0.2–0.5 | Somewhat relevant   |
+| 0.0–0.2 | Low relevance       |
+
+Pass `explain: true` to `search_docs` to get a detailed breakdown:
+
+- `vectorScore` — raw cosine similarity from embeddings
+- `keywordTermsMatched` — query terms found in the chunk
+- `keywordBonus` — boost applied (+0.03 per matching term)
+- `finalScore` — combined score (same as `score`)
+- `rank` — position in result list (1-indexed)
+
 ### MCP integration
 
 After running "Generate .mcp.json", connect any MCP-compatible client (Claude Code, Cursor, etc.). The MCP tools appear automatically:
 
 ```
 search_docs("map view feed design")     → finds relevant docs semantically
+search_docs("map view feed", explain=true) → same, but with score breakdown
 list_docs()                             → lists all indexed files
 reindex_docs(force=true)               → full rebuild
 ```

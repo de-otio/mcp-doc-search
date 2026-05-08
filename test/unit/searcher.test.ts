@@ -235,4 +235,133 @@ describe("search", () => {
 
     expect(embedder.embed).toHaveBeenCalledWith(["test query"], "search_query: ");
   });
+
+  // ---------------------------------------------------------------------------
+  // search with explain option
+  // ---------------------------------------------------------------------------
+
+  it("does not include explanation when explain: false (default)", async () => {
+    const candidates: VectorQueryResult[] = [
+      {
+        file: "doc/guide.md",
+        heading: "Map View",
+        lineStart: 10,
+        text: "The map view component renders feeds on a map.",
+        _distance: 0.2,
+      },
+    ];
+    const store = mockStore(1, candidates);
+    const embedder = mockEmbedder([0.1]);
+
+    const results = await search("map view", 5, store, embedder, { explain: false });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].explanation).toBeUndefined();
+  });
+
+  it("includes explanation when explain: true", async () => {
+    const candidates: VectorQueryResult[] = [
+      {
+        file: "doc/guide.md",
+        heading: "Map View",
+        lineStart: 10,
+        text: "The map view component renders feeds on a map.",
+        _distance: 0.2,
+      },
+    ];
+    const store = mockStore(1, candidates);
+    const embedder = mockEmbedder([0.1]);
+
+    const results = await search("map view", 5, store, embedder, { explain: true });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].explanation).toBeDefined();
+    expect(results[0].explanation!.vectorScore).toBe(0.8);
+    expect(results[0].explanation!.keywordBonus).toBe(0.06);
+    expect(results[0].explanation!.finalScore).toBe(0.86);
+    expect(results[0].explanation!.rank).toBe(1);
+  });
+
+  it("populates keywordTermsMatched with terms that appear in the text", async () => {
+    const candidates: VectorQueryResult[] = [
+      {
+        file: "doc/guide.md",
+        heading: "Map View",
+        lineStart: 10,
+        text: "The map view component renders feeds on a map.",
+        _distance: 0.2,
+      },
+    ];
+    const store = mockStore(1, candidates);
+    const embedder = mockEmbedder([0.1]);
+
+    const results = await search("map view feed xyz", 5, store, embedder, { explain: true });
+
+    expect(results[0].explanation).toBeDefined();
+    const matched = results[0].explanation!.keywordTermsMatched;
+    expect(matched).toContain("map");
+    expect(matched).toContain("view");
+    expect(matched).toContain("feed");
+    expect(matched).not.toContain("xyz");
+  });
+
+  it("sets correct rank values after sorting", async () => {
+    const candidates: VectorQueryResult[] = [
+      {
+        file: "doc/a.md",
+        heading: "First",
+        lineStart: 0,
+        text: "general intro architecture design",
+        _distance: 0.15, // vectorScore = 0.85, no keyword match → 0.85
+      },
+      {
+        file: "doc/b.md",
+        heading: "Second",
+        lineStart: 5,
+        text: "map view component renders map view",
+        _distance: 0.2, // vectorScore = 0.80, both map and view match → 0.80 + 0.06 = 0.86
+      },
+      {
+        file: "doc/c.md",
+        heading: "Third",
+        lineStart: 15,
+        text: "feed display list items",
+        _distance: 0.25, // vectorScore = 0.75, feed matches → 0.75 + 0.03 = 0.78
+      },
+    ];
+    const store = mockStore(3, candidates);
+    const embedder = mockEmbedder([0.1]);
+
+    const results = await search("map view feed", 3, store, embedder, { explain: true });
+
+    // After sorting: b (0.86), a (0.85), c (0.78)
+    expect(results[0].file).toBe("doc/b.md");
+    expect(results[0].explanation!.rank).toBe(1);
+
+    expect(results[1].file).toBe("doc/a.md");
+    expect(results[1].explanation!.rank).toBe(2);
+
+    expect(results[2].file).toBe("doc/c.md");
+    expect(results[2].explanation!.rank).toBe(3);
+  });
+
+  it("vectorScore + keywordBonus ≈ finalScore (within float precision)", async () => {
+    const candidates: VectorQueryResult[] = [
+      {
+        file: "doc/test.md",
+        heading: "Test",
+        lineStart: 0,
+        text: "map view component map view rendering",
+        _distance: 0.123, // vectorScore = 0.877
+      },
+    ];
+    const store = mockStore(1, candidates);
+    const embedder = mockEmbedder([0.1]);
+
+    const results = await search("map view", 1, store, embedder, { explain: true });
+
+    const exp = results[0].explanation!;
+    const computed = Math.round((exp.vectorScore + exp.keywordBonus) * 1000) / 1000;
+    expect(computed).toBe(exp.finalScore);
+  });
 });

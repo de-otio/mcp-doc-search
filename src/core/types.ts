@@ -16,6 +16,19 @@ export interface DocChunk {
   lineStart: number;
 }
 
+export interface SearchExplanation {
+  /** Raw cosine similarity before keyword bonus */
+  vectorScore: number;
+  /** Query terms that matched in the chunk text/heading */
+  keywordTermsMatched: string[];
+  /** Total keyword bonus applied */
+  keywordBonus: number;
+  /** Final score (same as SearchResult.score, for completeness) */
+  finalScore: number;
+  /** 1-indexed position in result list */
+  rank: number;
+}
+
 export interface SearchResult {
   file: string;
   heading: string;
@@ -24,6 +37,8 @@ export interface SearchResult {
   /** vector_score + keyword_boost, rounded to 3 decimals */
   score: number;
   lineStart: number;
+  /** Optional detailed score breakdown (only when explain: true) */
+  explanation?: SearchExplanation;
 }
 
 export interface IndexStats {

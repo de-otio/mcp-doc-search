@@ -106,6 +106,7 @@ export function registerTools(server: Server, deps: EngineDeps): void {
             properties: {
               query: { type: "string" },
               n: { type: "number" },
+              explain: { type: "boolean" },
             },
             required: ["query"],
           },
@@ -147,7 +148,8 @@ export function registerTools(server: Server, deps: EngineDeps): void {
           };
         }
         const n = Math.max(1, Math.min(100, Math.floor(Number(input.n) || 5)));
-        const results = await search(query, n, store, embedProvider);
+        const explain = input.explain === true;
+        const results = await search(query, n, store, embedProvider, { explain });
         return {
           content: [{ type: "text", text: JSON.stringify(results) }],
         };

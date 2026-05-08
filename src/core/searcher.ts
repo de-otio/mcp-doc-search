@@ -56,6 +56,11 @@ export function keywordBoost(query: string, docText: string): number {
   return hits * 0.03;
 }
 
+export interface SearchOptions {
+  /** Include detailed score breakdown in results (default: false) */
+  explain?: boolean;
+}
+
 /**
  * Hybrid search: embed query, over-fetch 3x from vector store,
  * apply keyword boost, re-sort, return top n.
@@ -65,11 +70,14 @@ export async function search(
   n: number,
   store: LanceVectorStore,
   embedder: EmbedProvider,
+  options?: SearchOptions,
 ): Promise<SearchResult[]> {
   if (n <= 0) return [];
 
   const totalCount = await store.count();
   if (totalCount === 0) return [];
+
+  const explain = options?.explain ?? false;
 
   // Embed query with search_query prefix (for providers that use task prefixes)
   const [queryVector] = await embedder.embed([query], "search_query: ");
@@ -78,20 +86,57 @@ export async function search(
   const fetchN = Math.min(n * 3, 300, totalCount);
   const candidates = await store.query(queryVector, fetchN);
 
+  // Extract query terms for explanation
+  const queryTerms = explain ? tokenizeQuery(query) : new Set<string>();
+
   // Apply keyword boost and compute final scores
   const scored: SearchResult[] = candidates.map((c) => {
     const vectorScore = 1 - c._distance;
     const boost = keywordBoost(query, c.text);
-    return {
+    const finalScore = Math.round((vectorScore + boost) * 1000) / 1000;
+
+    const result: SearchResult = {
       file: c.file,
       heading: c.heading,
       excerpt: c.text.slice(0, 600),
-      score: Math.round((vectorScore + boost) * 1000) / 1000,
+      score: finalScore,
       lineStart: c.lineStart,
     };
+
+    // Add explanation if requested
+    if (explain) {
+      const docLower = c.text.toLowerCase();
+      const keywordTermsMatched: string[] = [];
+      for (const term of queryTerms) {
+        if (docLower.includes(term)) {
+          keywordTermsMatched.push(term);
+        }
+      }
+
+      result.explanation = {
+        vectorScore: Math.round(vectorScore * 1000) / 1000,
+        keywordTermsMatched,
+        keywordBonus: boost,
+        finalScore,
+        rank: 0, // Will be set after sorting
+      };
+    }
+
+    return result;
   });
 
   // Re-sort by boosted score (descending) and return top n
   scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, n);
+  const results = scored.slice(0, n);
+
+  // Update rank after sorting if explain was requested
+  if (explain) {
+    results.forEach((result, index) => {
+      if (result.explanation) {
+        result.explanation.rank = index + 1;
+      }
+    });
+  }
+
+  return results;
 }

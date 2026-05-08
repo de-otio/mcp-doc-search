@@ -111,7 +111,10 @@ describe("MCP Tools", () => {
         });
 
         // Verify that search was called with clamped n value (100, not 500)
-        expect(search).toHaveBeenCalledWith("test", 100, mockStore, mockEmbedProvider);
+        const searchMock = vi.mocked(search);
+        expect(searchMock).toHaveBeenCalledWith("test", 100, mockStore, mockEmbedProvider, {
+          explain: false,
+        });
       }
     });
 
