@@ -65,7 +65,9 @@ function buildListDesc(status: IndexStatus | null): string {
   if (!status || status.totalFiles === 0) {
     return "List indexed markdown files. Index is currently empty — run `reindex_docs` first.";
   }
-  const stale = status.needsReindex ? " (index may be stale — consider running `reindex_docs`)" : "";
+  const stale = status.needsReindex
+    ? " (index may be stale — consider running `reindex_docs`)"
+    : "";
   return `List all ${status.totalFiles} markdown files currently in the index, with their top-level heading/title${stale}. Use before searching to confirm docs exist.`;
 }
 

@@ -66,7 +66,9 @@ export class Indexer {
       try {
         await this.store.deleteByFile(rel);
       } catch (err) {
-        console.warn(`Prune: failed to delete chunks for ${rel}: ${err instanceof Error ? err.message : err}`);
+        console.warn(
+          `Prune: failed to delete chunks for ${rel}: ${err instanceof Error ? err.message : err}`,
+        );
       }
     }
     const pruned = staleKeys.length;
