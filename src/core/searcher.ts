@@ -110,6 +110,7 @@ export async function search(
       excerpt,
       score: finalScore,
       lineStart: c.lineStart,
+      docid: c.docid ?? "",
     };
 
     // Add explanation if requested

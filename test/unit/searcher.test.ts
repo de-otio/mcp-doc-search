@@ -18,7 +18,6 @@ describe("tokenizeQuery", () => {
   });
 
   it("splits camelCase into parts and keeps the full token", () => {
-    // "PostGeoIndex" → parts "post","geo","index" + full "postgeoindex"
     const result = tokenizeQuery("PostGeoIndex");
 
     expect(result.has("post")).toBe(true);
@@ -28,7 +27,6 @@ describe("tokenizeQuery", () => {
   });
 
   it("splits PascalCase into parts and keeps the full token", () => {
-    // "MapView" → parts "map","view" + full "mapview"
     const result = tokenizeQuery("MapView");
 
     expect(result.has("map")).toBe(true);
@@ -37,17 +35,14 @@ describe("tokenizeQuery", () => {
   });
 
   it("filters out short words with fewer than 3 characters", () => {
-    // "a", "of", "in", "the" are all < 3 chars; only "map" passes
     const result = tokenizeQuery("a of in the map");
 
     expect(result.has("map")).toBe(true);
     expect(result.has("a")).toBe(false);
     expect(result.has("of")).toBe(false);
     expect(result.has("in")).toBe(false);
-    // "the" is exactly 3 chars — should be included
     expect(result.has("the")).toBe(true);
-    // Verify size to ensure no unexpected tokens sneak through
-    expect(result.size).toBe(2); // "map" + "the"
+    expect(result.size).toBe(2);
   });
 
   it("returns an empty set for an empty query string", () => {
@@ -94,19 +89,30 @@ describe("keywordBoost", () => {
 // search (hybrid search function)
 // ---------------------------------------------------------------------------
 
-/** Create a mock EmbedProvider that returns a fixed vector. */
 function mockEmbedder(vector: number[]): EmbedProvider {
   return {
     embed: vi.fn(async () => [vector]),
   };
 }
 
-/** Create a mock LanceVectorStore with configurable count and query results. */
 function mockStore(totalCount: number, queryResults: VectorQueryResult[]): LanceVectorStore {
   return {
     count: vi.fn(async () => totalCount),
     query: vi.fn(async () => queryResults),
   } as unknown as LanceVectorStore;
+}
+
+/** Build a VectorQueryResult with optional docid. */
+function makeCandidate(
+  overrides: Partial<VectorQueryResult> & Pick<VectorQueryResult, "file" | "heading">,
+): VectorQueryResult {
+  return {
+    lineStart: 0,
+    text: "default text",
+    _distance: 0.2,
+    docid: "",
+    ...overrides,
+  };
 }
 
 describe("search", () => {
@@ -126,13 +132,13 @@ describe("search", () => {
 
   it("returns results with scores computed from vector distance + keyword boost", async () => {
     const candidates: VectorQueryResult[] = [
-      {
+      makeCandidate({
         file: "doc/guide.md",
         heading: "Map View",
         lineStart: 10,
         text: "The map view component renders feeds on a map.",
         _distance: 0.2,
-      },
+      }),
     ];
     const store = mockStore(1, candidates);
     const embedder = mockEmbedder([0.1]);
@@ -148,20 +154,19 @@ describe("search", () => {
 
   it("re-ranks results so keyword-boosted items can jump ahead", async () => {
     const candidates: VectorQueryResult[] = [
-      {
+      makeCandidate({
         file: "doc/general.md",
         heading: "Introduction",
-        lineStart: 0,
         text: "A general introduction to the system architecture and design.",
         _distance: 0.15,
-      },
-      {
+      }),
+      makeCandidate({
         file: "doc/mapview.md",
         heading: "MapView Component",
         lineStart: 5,
         text: "The MapView component shows feed items on a map view.",
         _distance: 0.2,
-      },
+      }),
     ];
     const store = mockStore(2, candidates);
     const embedder = mockEmbedder([0.1]);
@@ -175,13 +180,12 @@ describe("search", () => {
   it("truncates excerpt to 600 chars", async () => {
     const longText = "x".repeat(1000);
     const candidates: VectorQueryResult[] = [
-      {
+      makeCandidate({
         file: "doc/long.md",
         heading: "Long Section",
-        lineStart: 0,
         text: longText,
         _distance: 0.1,
-      },
+      }),
     ];
     const store = mockStore(1, candidates);
     const embedder = mockEmbedder([0.1]);
@@ -191,13 +195,15 @@ describe("search", () => {
   });
 
   it("limits results to n even when more candidates exist", async () => {
-    const candidates: VectorQueryResult[] = Array.from({ length: 9 }, (_, i) => ({
-      file: `doc/file${i}.md`,
-      heading: `Section ${i}`,
-      lineStart: i * 10,
-      text: `Content for section ${i}`,
-      _distance: 0.1 + i * 0.05,
-    }));
+    const candidates: VectorQueryResult[] = Array.from({ length: 9 }, (_, i) =>
+      makeCandidate({
+        file: `doc/file${i}.md`,
+        heading: `Section ${i}`,
+        lineStart: i * 10,
+        text: `Content for section ${i}`,
+        _distance: 0.1 + i * 0.05,
+      }),
+    );
     const store = mockStore(9, candidates);
     const embedder = mockEmbedder([0.1]);
 
@@ -207,13 +213,7 @@ describe("search", () => {
 
   it("passes search_query prefix to the embedder", async () => {
     const store = mockStore(1, [
-      {
-        file: "doc/test.md",
-        heading: "Test",
-        lineStart: 0,
-        text: "test content",
-        _distance: 0.1,
-      },
+      makeCandidate({ file: "doc/test.md", heading: "Test", text: "test content", _distance: 0.1 }),
     ]);
     const embedder = mockEmbedder([0.1]);
 
@@ -228,13 +228,13 @@ describe("search", () => {
 
   it("does not include explanation when explain: false (default)", async () => {
     const candidates: VectorQueryResult[] = [
-      {
+      makeCandidate({
         file: "doc/guide.md",
         heading: "Map View",
         lineStart: 10,
         text: "The map view component renders feeds on a map.",
         _distance: 0.2,
-      },
+      }),
     ];
     const store = mockStore(1, candidates);
     const embedder = mockEmbedder([0.1]);
@@ -247,13 +247,13 @@ describe("search", () => {
 
   it("includes explanation when explain: true", async () => {
     const candidates: VectorQueryResult[] = [
-      {
+      makeCandidate({
         file: "doc/guide.md",
         heading: "Map View",
         lineStart: 10,
         text: "The map view component renders feeds on a map.",
         _distance: 0.2,
-      },
+      }),
     ];
     const store = mockStore(1, candidates);
     const embedder = mockEmbedder([0.1]);
@@ -270,13 +270,13 @@ describe("search", () => {
 
   it("populates keywordTermsMatched with terms that appear in the text", async () => {
     const candidates: VectorQueryResult[] = [
-      {
+      makeCandidate({
         file: "doc/guide.md",
         heading: "Map View",
         lineStart: 10,
         text: "The map view component renders feeds on a map.",
         _distance: 0.2,
-      },
+      }),
     ];
     const store = mockStore(1, candidates);
     const embedder = mockEmbedder([0.1]);
@@ -293,27 +293,26 @@ describe("search", () => {
 
   it("sets correct rank values after sorting", async () => {
     const candidates: VectorQueryResult[] = [
-      {
+      makeCandidate({
         file: "doc/a.md",
         heading: "First",
-        lineStart: 0,
         text: "general intro architecture design",
         _distance: 0.15,
-      },
-      {
+      }),
+      makeCandidate({
         file: "doc/b.md",
         heading: "Second",
         lineStart: 5,
         text: "map view component renders map view",
         _distance: 0.2,
-      },
-      {
+      }),
+      makeCandidate({
         file: "doc/c.md",
         heading: "Third",
         lineStart: 15,
         text: "feed display list items",
         _distance: 0.25,
-      },
+      }),
     ];
     const store = mockStore(3, candidates);
     const embedder = mockEmbedder([0.1]);
@@ -332,13 +331,12 @@ describe("search", () => {
 
   it("vectorScore + keywordBonus ≈ finalScore (within float precision)", async () => {
     const candidates: VectorQueryResult[] = [
-      {
+      makeCandidate({
         file: "doc/test.md",
         heading: "Test",
-        lineStart: 0,
         text: "map view component map view rendering",
         _distance: 0.123,
-      },
+      }),
     ];
     const store = mockStore(1, candidates);
     const embedder = mockEmbedder([0.1]);
@@ -356,13 +354,12 @@ describe("search", () => {
 
   it("prepends [Context: ...] to excerpt when indexer has a matching context", async () => {
     const candidates: VectorQueryResult[] = [
-      {
+      makeCandidate({
         file: "doc/01-business/spec.md",
         heading: "Overview",
-        lineStart: 0,
         text: "Product specification content.",
         _distance: 0.1,
-      },
+      }),
     ];
     const store = mockStore(1, candidates);
     const embedder = mockEmbedder([0.1]);
@@ -378,13 +375,12 @@ describe("search", () => {
 
   it("does not prepend context prefix when indexer returns empty string", async () => {
     const candidates: VectorQueryResult[] = [
-      {
+      makeCandidate({
         file: "doc/no-context/page.md",
         heading: "Section",
-        lineStart: 0,
         text: "Some content here.",
         _distance: 0.1,
-      },
+      }),
     ];
     const store = mockStore(1, candidates);
     const embedder = mockEmbedder([0.1]);
@@ -400,13 +396,12 @@ describe("search", () => {
 
   it("does not modify excerpt format when no indexer is provided", async () => {
     const candidates: VectorQueryResult[] = [
-      {
+      makeCandidate({
         file: "doc/plain.md",
         heading: "Plain",
-        lineStart: 0,
         text: "Plain content.",
         _distance: 0.1,
-      },
+      }),
     ];
     const store = mockStore(1, candidates);
     const embedder = mockEmbedder([0.1]);
@@ -414,5 +409,44 @@ describe("search", () => {
     const results = await search("plain", 5, store, embedder);
 
     expect(results[0].excerpt).toBe("Plain content.");
+  });
+
+  // ---------------------------------------------------------------------------
+  // search returns docid (Phase 5)
+  // ---------------------------------------------------------------------------
+
+  it("includes docid from vector store in search results", async () => {
+    const store = mockStore(1, [
+      makeCandidate({
+        file: "doc/guide.md",
+        heading: "Guide",
+        text: "guide content",
+        _distance: 0.1,
+        docid: "abc123",
+      }),
+    ]);
+    const embedder = mockEmbedder([0.1]);
+
+    const results = await search("guide", 1, store, embedder);
+
+    expect(results).toHaveLength(1);
+    expect(results[0].docid).toBe("abc123");
+  });
+
+  it("returns empty docid when store record has no docid", async () => {
+    const store = mockStore(1, [
+      makeCandidate({
+        file: "doc/old.md",
+        heading: "Old",
+        text: "old content",
+        _distance: 0.2,
+        docid: "",
+      }),
+    ]);
+    const embedder = mockEmbedder([0.1]);
+
+    const results = await search("old", 1, store, embedder);
+
+    expect(results[0].docid).toBe("");
   });
 });

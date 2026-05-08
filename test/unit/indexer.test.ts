@@ -487,4 +487,135 @@ describe("Indexer context API", () => {
       expect(indexer.listContexts()).not.toHaveProperty("new-key");
     });
   });
+
+  describe("resolveRef", () => {
+    it("resolves a relative path to an absolute path and returns cached docid", async () => {
+      const { existsSync, readFileSync } = await import("node:fs");
+
+      // Cache has the file with a known docid (new object format)
+      vi.spyOn({ existsSync }, "existsSync");
+      vi.mocked(existsSync).mockImplementation((p: any) => {
+        return String(p).endsWith("mtime_cache.json") || String(p).endsWith("doc/guide.md");
+      });
+      vi.mocked(readFileSync).mockImplementation((p: any) => {
+        if (String(p).endsWith("mtime_cache.json")) {
+          return JSON.stringify({ "doc/guide.md": { mtime: "1000", docid: "abc123" } });
+        }
+        return "# Guide\n\nContent.";
+      });
+
+      const indexer = makeIndexer();
+      const result = indexer.resolveRef("doc/guide.md");
+
+      expect("error" in result).toBe(false);
+      if (!("error" in result)) {
+        expect(result.docid).toBe("abc123");
+        expect(result.file).toContain("doc/guide.md");
+      }
+    });
+
+    it("resolves a #docid ref using the docid reverse map from cache", async () => {
+      const { existsSync, readFileSync } = await import("node:fs");
+
+      vi.mocked(existsSync).mockImplementation((p: any) => {
+        return String(p).endsWith("mtime_cache.json") || String(p).endsWith("doc/guide.md");
+      });
+      vi.mocked(readFileSync).mockImplementation((p: any) => {
+        if (String(p).endsWith("mtime_cache.json")) {
+          return JSON.stringify({ "doc/guide.md": { mtime: "1000", docid: "abc123" } });
+        }
+        return "# Guide\n\nContent.";
+      });
+
+      const indexer = makeIndexer();
+      const result = indexer.resolveRef("#abc123");
+
+      expect("error" in result).toBe(false);
+      if (!("error" in result)) {
+        expect(result.docid).toBe("abc123");
+        expect(result.file).toContain("doc/guide.md");
+      }
+    });
+
+    it("resolves a bare 6-char hex docid without # prefix", async () => {
+      const { existsSync, readFileSync } = await import("node:fs");
+
+      vi.mocked(existsSync).mockImplementation((p: any) => {
+        return String(p).endsWith("mtime_cache.json") || String(p).endsWith("doc/guide.md");
+      });
+      vi.mocked(readFileSync).mockImplementation((p: any) => {
+        if (String(p).endsWith("mtime_cache.json")) {
+          return JSON.stringify({ "doc/guide.md": { mtime: "1000", docid: "abc123" } });
+        }
+        return "# Guide\n\nContent.";
+      });
+
+      const indexer = makeIndexer();
+      const result = indexer.resolveRef("abc123");
+
+      expect("error" in result).toBe(false);
+      if (!("error" in result)) {
+        expect(result.docid).toBe("abc123");
+      }
+    });
+
+    it("returns an error for a nonexistent file path", async () => {
+      const { existsSync, readFileSync } = await import("node:fs");
+
+      vi.mocked(existsSync).mockImplementation((p: any) => {
+        return String(p).endsWith("mtime_cache.json");
+      });
+      vi.mocked(readFileSync).mockImplementation((p: any) => {
+        if (String(p).endsWith("mtime_cache.json")) {
+          return JSON.stringify({});
+        }
+        return "";
+      });
+
+      const indexer = makeIndexer();
+      const result = indexer.resolveRef("doc/missing.md");
+
+      expect("error" in result).toBe(true);
+    });
+
+    it("returns an error for a docid not in cache", async () => {
+      const { existsSync, readFileSync } = await import("node:fs");
+
+      vi.mocked(existsSync).mockImplementation((p: any) => {
+        return String(p).endsWith("mtime_cache.json");
+      });
+      vi.mocked(readFileSync).mockImplementation((p: any) => {
+        if (String(p).endsWith("mtime_cache.json")) {
+          return JSON.stringify({});
+        }
+        return "";
+      });
+
+      const indexer = makeIndexer();
+      const result = indexer.resolveRef("#zzz999");
+
+      expect("error" in result).toBe(true);
+    });
+
+    it("handles old-format cache (mtime string only) gracefully", async () => {
+      const { existsSync, readFileSync } = await import("node:fs");
+
+      // Old format: cache values are plain strings (mtime only)
+      vi.mocked(existsSync).mockImplementation((p: any) => {
+        return String(p).endsWith("mtime_cache.json") || String(p).endsWith("doc/legacy.md");
+      });
+      vi.mocked(readFileSync).mockImplementation((p: any) => {
+        if (String(p).endsWith("mtime_cache.json")) {
+          return JSON.stringify({ "doc/legacy.md": "1000" }); // old format
+        }
+        return "# Legacy\n\nContent.";
+      });
+
+      const indexer = makeIndexer();
+      const result = indexer.resolveRef("doc/legacy.md");
+
+      // Should still resolve — docid will be computed from file content
+      expect("error" in result).toBe(false);
+    });
+  });
 });

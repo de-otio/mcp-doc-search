@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { chunkMarkdown, findFenceRanges, inFence } from "../../src/core/chunker.js";
+import { chunkMarkdown, computeDocid, findFenceRanges, inFence } from "../../src/core/chunker.js";
 
 let tmpDir: string;
 
@@ -325,39 +325,31 @@ describe("chunkMarkdown — Windows path normalization", () => {
 });
 
 // ---------------------------------------------------------------------------
-// chunkMarkdown — mid-section split overlap
+// chunkMarkdown — mid-section split overlap (Phase 7)
 // ---------------------------------------------------------------------------
 
 describe("chunkMarkdown — mid-section split overlap", () => {
   it("adds overlap context when chunk exceeds maxChars", () => {
-    // Create a long section that exceeds the cap
     const longSection = "x".repeat(5000);
     const content = `# Title\n\n${longSection}`;
     const filePath = writeTemp("overlap-test.md", content);
 
-    // Use a smaller maxChars to force truncation
     const chunks = chunkMarkdown(filePath, tmpDir, /* maxChars= */ 1000);
 
-    // Should produce multiple chunks due to size cap
     expect(chunks.length).toBeGreaterThan(1);
 
-    // Chunk2 should start with overlap tail from chunk1
     const chunk1 = chunks[0];
     const chunk2 = chunks[1];
 
     const breadcrumbEnd = chunk2.text.indexOf("\n\n") + 2;
     const chunk2Start = chunk2.text.slice(breadcrumbEnd, breadcrumbEnd + 50);
-
-    const chunk1BreadcrumbEnd = chunk1.text.indexOf("\n\n") + 2;
     const chunk1End = chunk1.text.slice(-50);
 
-    // They should have overlap (same 'x' pattern)
     expect(chunk2Start).toContain("x");
     expect(chunk1End).toContain("x");
   });
 
   it("respects 200-character overlap cap", () => {
-    // Create a very long section
     const longSection = "y".repeat(3000);
     const content = `# Title\n\n${longSection}`;
     const filePath = writeTemp("overlap-cap-test.md", content);
@@ -365,19 +357,13 @@ describe("chunkMarkdown — mid-section split overlap", () => {
     const chunks = chunkMarkdown(filePath, tmpDir, /* maxChars= */ 1000);
 
     if (chunks.length > 1) {
-      const chunk1 = chunks[0];
       const chunk2 = chunks[1];
-
-      const breadcrumbEnd = chunk1.text.indexOf("\n\n") + 2;
-      const chunk1Body = chunk1.text.slice(breadcrumbEnd);
-
       const chunk2BreadcrumbEnd = chunk2.text.indexOf("\n\n") + 2;
       const chunk2TextAfterBreadcrumb = chunk2.text.slice(chunk2BreadcrumbEnd);
       const overlapEndIdx = chunk2TextAfterBreadcrumb.indexOf("\n\n");
       const overlapText =
         overlapEndIdx > 0 ? chunk2TextAfterBreadcrumb.slice(0, overlapEndIdx) : "";
 
-      // Overlap must not exceed 200 chars
       expect(overlapText.length).toBeLessThanOrEqual(200);
     }
   });
@@ -398,10 +384,7 @@ describe("chunkMarkdown — mid-section split overlap", () => {
 
     expect(chunks).toHaveLength(2);
 
-    const chunk1 = chunks[0];
     const chunk2 = chunks[1];
-
-    // No overlap at heading boundary; chunk2 starts with the heading
     const chunk2BreadcrumbEnd = chunk2.text.indexOf("\n\n") + 2;
     const chunk2Body = chunk2.text.slice(chunk2BreadcrumbEnd);
 
@@ -410,7 +393,6 @@ describe("chunkMarkdown — mid-section split overlap", () => {
   });
 
   it("accounts for overlap without double-counting size budget", () => {
-    // A section that is just under the cap, followed by content
     const section1 = "a".repeat(900);
     const section2 = "b".repeat(500);
     const content = `# Title\n\n${section1}\n\n## Part2\n\n${section2}`;
@@ -418,9 +400,68 @@ describe("chunkMarkdown — mid-section split overlap", () => {
 
     const chunks = chunkMarkdown(filePath, tmpDir, /* maxChars= */ 1000);
 
-    // All chunks should respect the maxChars limit
     for (const chunk of chunks) {
       expect(chunk.text.length).toBeLessThanOrEqual(1000);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// computeDocid — stable content-based file ID (Phase 5)
+// ---------------------------------------------------------------------------
+
+describe("computeDocid", () => {
+  it("returns a 6-character hex string", () => {
+    const docid = computeDocid("some content");
+    expect(docid).toHaveLength(6);
+    expect(/^[0-9a-f]{6}$/.test(docid)).toBe(true);
+  });
+
+  it("is stable: same content always yields same docid", () => {
+    const content = "# Hello\n\nWorld.";
+    expect(computeDocid(content)).toBe(computeDocid(content));
+  });
+
+  it("produces different docids for different content", () => {
+    const a = computeDocid("content A");
+    const b = computeDocid("content B");
+    expect(a).not.toBe(b);
+  });
+
+  it("chunkMarkdown embeds the same docid on all chunks of a file", () => {
+    const content = [
+      "# Title",
+      "",
+      "## Section A",
+      "",
+      "Text A.",
+      "",
+      "## Section B",
+      "",
+      "Text B.",
+    ].join("\n");
+    const filePath = writeTemp("docid-multi.md", content);
+
+    const chunks = chunkMarkdown(filePath, tmpDir);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    const docids = chunks.map((c) => c.docid);
+    expect(new Set(docids).size).toBe(1);
+    expect(docids[0]).toBe(computeDocid(content));
+  });
+
+  it("docid changes when file content changes", () => {
+    const content1 = "# Version 1\n\nOriginal text.";
+    const content2 = "# Version 2\n\nModified text.";
+
+    const file = writeTemp("changing-file.md", content1);
+    const chunks1 = chunkMarkdown(file, tmpDir);
+    const docid1 = chunks1[0].docid;
+
+    writeFileSync(file, content2, "utf8");
+    const chunks2 = chunkMarkdown(file, tmpDir);
+    const docid2 = chunks2[0].docid;
+
+    expect(docid1).not.toBe(docid2);
   });
 });

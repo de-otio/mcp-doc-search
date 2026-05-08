@@ -45,13 +45,22 @@ export function inFence(lineNum: number, fenceRanges: Array<[number, number]>): 
 }
 
 /**
+ * Compute a stable docid for a file's content.
+ * Returns the first 6 chars of the SHA-256 hex digest of the content.
+ */
+export function computeDocid(content: string): string {
+  return createHash("sha256").update(content).digest("hex").slice(0, 6);
+}
+
+/**
  * Split a markdown file into chunks on heading boundaries.
  *
  * - Skips headings inside code fences
  * - Prepends [DocTitle] breadcrumb for embedding disambiguation
  * - Uses stable IDs based on md5(file:lineNumber)
- * - Splits sections that exceed maxChars, adding overlap context between splits
- * - Adds overlap context (up to 15% or 200 chars) when splitting mid-section
+ * - Splits sections that exceed maxChars, adding 15% (cap 200 chars) overlap
+ *   context between mid-section splits
+ * - All chunks share the same docid (SHA-256 of file content, first 6 chars)
  */
 export function chunkMarkdown(
   absolutePath: string,
@@ -66,6 +75,9 @@ export function chunkMarkdown(
   if (rel.startsWith("..") || path.isAbsolute(rel)) {
     throw new Error(`Path traversal blocked: ${absolutePath} is outside workspace`);
   }
+
+  // Stable content-based docid shared by all chunks from this file
+  const docid = computeDocid(content);
 
   // Find the document title (first # heading, or filename stem)
   const titleMatch = content.match(/^#\s+(.+)$/m);
@@ -102,6 +114,7 @@ export function chunkMarkdown(
         file: rel,
         heading: docTitle,
         lineStart: 0,
+        docid,
       },
     ];
   }
@@ -190,14 +203,12 @@ export function chunkMarkdown(
 
     if (!rawText) continue;
 
-    // Split this section into chunks if needed
     const sectionChunks = splitSectionIntoChunks(
       rawText,
       positions[i].heading.replace(/^#+\s+/, ""),
       positions[i].lineNum,
     );
 
-    // Generate stable IDs and add to chunks list
     for (const sectionChunk of sectionChunks) {
       const chunkId = createHash("md5")
         .update(`${rel}:${sectionChunk.lineNum}:${sectionChunk.splitIndex}`)
@@ -210,6 +221,7 @@ export function chunkMarkdown(
         file: rel,
         heading: sectionChunk.heading,
         lineStart: sectionChunk.lineNum,
+        docid,
       });
     }
   }

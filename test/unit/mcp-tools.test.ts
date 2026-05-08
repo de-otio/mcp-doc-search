@@ -6,6 +6,15 @@ vi.mock("../../src/core/searcher.js", () => ({
   search: vi.fn(),
 }));
 
+vi.mock("node:fs", () => ({
+  existsSync: vi.fn(() => true),
+  readFileSync: vi.fn(() => "line1\nline2\nline3\nline4\nline5"),
+}));
+
+vi.mock("glob", () => ({
+  glob: vi.fn(async () => []),
+}));
+
 describe("MCP Tools", () => {
   let mockServer: any;
   let mockStore: any;
@@ -40,6 +49,8 @@ describe("MCP Tools", () => {
       setContext: vi.fn(),
       removeContext: vi.fn(),
       getContextFor: vi.fn().mockReturnValue(""),
+      resolveRef: vi.fn(),
+      getWorkspaceRoot: vi.fn(() => "/workspace"),
     };
 
     mockEmbedProvider = {
@@ -418,6 +429,186 @@ describe("MCP Tools", () => {
       } finally {
         vi.spyOn(Date, "now").mockRestore();
       }
+    });
+
+    // -----------------------------------------------------------------------
+    // get & multi_get (Phase 5)
+    // -----------------------------------------------------------------------
+
+    it("get: returns file content with line bounds", async () => {
+      const { readFileSync } = await import("node:fs");
+      vi.mocked(readFileSync).mockReturnValue("line1\nline2\nline3\nline4\nline5");
+      mockIndexer.resolveRef.mockReturnValue({
+        file: "/workspace/doc/guide.md",
+        docid: "abc123",
+      });
+
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
+      const result = await callToolHandler({
+        params: { name: "get", arguments: { ref: "doc/guide.md" } },
+      });
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.file).toContain("doc/guide.md");
+      expect(parsed.docid).toBe("abc123");
+      expect(parsed.content).toContain("line1");
+      expect(parsed.lines).toHaveLength(2);
+      expect(parsed.truncated).toBe(false);
+    });
+
+    it("get: enforces max_bytes and sets truncated=true", async () => {
+      const { readFileSync } = await import("node:fs");
+      vi.mocked(readFileSync).mockReturnValue("a".repeat(200));
+      mockIndexer.resolveRef.mockReturnValue({
+        file: "/workspace/doc/guide.md",
+        docid: "abc123",
+      });
+
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
+      const result = await callToolHandler({
+        params: { name: "get", arguments: { ref: "doc/guide.md", max_bytes: 10 } },
+      });
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.truncated).toBe(true);
+      expect(parsed.content.length).toBeLessThanOrEqual(10);
+    });
+
+    it("get: returns error for nonexistent ref", async () => {
+      mockIndexer.resolveRef.mockReturnValue({ error: "File not found: doc/missing.md" });
+
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
+      const result = await callToolHandler({
+        params: { name: "get", arguments: { ref: "doc/missing.md" } },
+      });
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.error).toContain("not found");
+    });
+
+    it("multi_get: handles an array of refs", async () => {
+      const { readFileSync } = await import("node:fs");
+      vi.mocked(readFileSync).mockReturnValue("content here");
+      mockIndexer.resolveRef
+        .mockReturnValueOnce({ file: "/workspace/doc/a.md", docid: "aaa111" })
+        .mockReturnValueOnce({ file: "/workspace/doc/b.md", docid: "bbb222" });
+
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
+      const result = await callToolHandler({
+        params: {
+          name: "multi_get",
+          arguments: { refs: ["doc/a.md", "doc/b.md"] },
+        },
+      });
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.docs).toHaveLength(2);
+      expect(parsed.errors).toHaveLength(0);
+      expect(parsed.docs[0].docid).toBe("aaa111");
+      expect(parsed.docs[1].docid).toBe("bbb222");
+    });
+
+    it("multi_get: handles comma-separated refs", async () => {
+      const { readFileSync } = await import("node:fs");
+      vi.mocked(readFileSync).mockReturnValue("comma content");
+      mockIndexer.resolveRef
+        .mockReturnValueOnce({ file: "/workspace/doc/x.md", docid: "xxx111" })
+        .mockReturnValueOnce({ file: "/workspace/doc/y.md", docid: "yyy222" });
+
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
+      const result = await callToolHandler({
+        params: {
+          name: "multi_get",
+          arguments: { refs: "doc/x.md, doc/y.md" },
+        },
+      });
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.docs).toHaveLength(2);
+    });
+
+    it("multi_get: handles glob pattern", async () => {
+      const { glob } = await import("glob");
+      const { readFileSync } = await import("node:fs");
+      vi.mocked(glob).mockResolvedValue(["doc/a.md", "doc/b.md"]);
+      vi.mocked(readFileSync).mockReturnValue("glob content");
+      mockIndexer.resolveRef
+        .mockReturnValueOnce({ file: "/workspace/doc/a.md", docid: "aaa111" })
+        .mockReturnValueOnce({ file: "/workspace/doc/b.md", docid: "bbb222" });
+
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
+      const result = await callToolHandler({
+        params: {
+          name: "multi_get",
+          arguments: { refs: "doc/**/*.md" },
+        },
+      });
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.docs).toHaveLength(2);
+    });
+
+    it("multi_get: collects per-ref errors without failing the batch", async () => {
+      const { readFileSync } = await import("node:fs");
+      vi.mocked(readFileSync).mockReturnValue("good content");
+      mockIndexer.resolveRef
+        .mockReturnValueOnce({ file: "/workspace/doc/good.md", docid: "ggg111" })
+        .mockReturnValueOnce({ error: "File not found: doc/bad.md" });
+
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
+      const result = await callToolHandler({
+        params: {
+          name: "multi_get",
+          arguments: { refs: ["doc/good.md", "doc/bad.md"] },
+        },
+      });
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.docs).toHaveLength(1);
+      expect(parsed.errors).toHaveLength(1);
+      expect(parsed.errors[0].ref).toBe("doc/bad.md");
     });
   });
 });

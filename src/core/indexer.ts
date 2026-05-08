@@ -7,12 +7,26 @@ import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { glob } from "glob";
-import { chunkMarkdown } from "./chunker.js";
+import { chunkMarkdown, computeDocid } from "./chunker.js";
 import type { IndexerConfig, IndexStats, IndexStatus, PathContext } from "./types.js";
 import type { LanceVectorStore, VectorRecord } from "./vectorstore.js";
 
+/** Per-file entry in the mtime cache. Supports both old (string) and new (object) formats. */
+interface MtimeCacheEntry {
+  mtime: string;
+  docid: string;
+}
+
 interface MtimeCache {
-  [relPath: string]: string;
+  [relPath: string]: string | MtimeCacheEntry;
+}
+
+/** Normalize a cache entry to the new object format. */
+function normalizeCacheEntry(entry: string | MtimeCacheEntry): MtimeCacheEntry {
+  if (typeof entry === "string") {
+    return { mtime: entry, docid: "" };
+  }
+  return entry;
 }
 
 export class Indexer {
@@ -23,6 +37,11 @@ export class Indexer {
   constructor(config: IndexerConfig, store: LanceVectorStore) {
     this.config = config;
     this.store = store;
+  }
+
+  /** Returns the absolute workspace root path. */
+  getWorkspaceRoot(): string {
+    return this.config.workspaceRoot;
   }
 
   /**
@@ -79,7 +98,9 @@ export class Indexer {
       ? mdFiles
       : mdFiles.filter((f) => {
           const rel = path.relative(this.config.workspaceRoot, f).replace(/\\/g, "/");
-          return cache[rel] !== String(statSync(f).mtimeMs);
+          const entry = cache[rel];
+          const mtime = entry ? normalizeCacheEntry(entry).mtime : undefined;
+          return mtime !== String(statSync(f).mtimeMs);
         });
 
     let indexed = 0;
@@ -98,10 +119,11 @@ export class Indexer {
       }
 
       const mtime = String(statSync(filePath).mtimeMs);
+      const existingEntry = cache[rel] ? normalizeCacheEntry(cache[rel]) : undefined;
 
-      if (!force && cache[rel] === mtime) {
+      if (!force && existingEntry?.mtime === mtime) {
         skipped++;
-        newCache[rel] = mtime;
+        newCache[rel] = existingEntry;
         continue;
       }
 
@@ -112,8 +134,12 @@ export class Indexer {
         this.config.headingDepth,
       );
 
+      // Compute docid from file content (or reuse from chunks if available)
+      const fileContent = readFileSync(filePath, "utf8");
+      const docid = computeDocid(fileContent);
+
       if (chunks.length === 0) {
-        newCache[rel] = mtime;
+        newCache[rel] = { mtime, docid };
         continue;
       }
 
@@ -147,10 +173,11 @@ export class Indexer {
         heading: c.heading,
         lineStart: c.lineStart,
         text: c.text,
+        docid,
       }));
 
       await this.store.upsert(records);
-      newCache[rel] = mtime;
+      newCache[rel] = { mtime, docid };
       indexed++;
       totalChunks += chunks.length;
       onProgress?.(indexed, toIndex.length, rel, "indexing");
@@ -196,8 +223,11 @@ export class Indexer {
       const rel = path.relative(this.config.workspaceRoot, filePath).replace(/\\/g, "/");
       if (!(rel in cache)) {
         newFiles++;
-      } else if (cache[rel] !== String(statSync(filePath).mtimeMs)) {
-        changedFiles++;
+      } else {
+        const entry = normalizeCacheEntry(cache[rel]);
+        if (entry.mtime !== String(statSync(filePath).mtimeMs)) {
+          changedFiles++;
+        }
       }
     }
 
@@ -361,5 +391,76 @@ export class Indexer {
   private saveMtimeCache(cache: MtimeCache): void {
     mkdirSync(this.config.indexDir, { recursive: true });
     writeFileSync(this.mtimeCachePath(), JSON.stringify(cache, null, 2));
+  }
+
+  /**
+   * Build a reverse map from docid -> relPath from the mtime cache.
+   * Entries with empty or missing docid are skipped.
+   */
+  private buildDocidMap(): Map<string, string> {
+    const cache = this.loadMtimeCache();
+    const map = new Map<string, string>();
+    for (const [rel, entry] of Object.entries(cache)) {
+      const normalized = normalizeCacheEntry(entry);
+      if (normalized.docid) {
+        map.set(normalized.docid, rel);
+      }
+    }
+    return map;
+  }
+
+  /**
+   * Resolve a ref to { file: absolutePath, docid } or { error }.
+   *
+   * Accepted ref forms:
+   *   - "#abc123" — docid with leading hash
+   *   - "abc123"  — bare 6-char hex docid (all hex chars, exactly 6)
+   *   - "doc/foo.md" — relative path from workspace root
+   */
+  resolveRef(ref: string): { file: string; docid: string } | { error: string } {
+    const trimmed = ref.trim();
+
+    // Determine if this looks like a docid reference
+    const isHashRef = trimmed.startsWith("#");
+    const bareId = isHashRef ? trimmed.slice(1) : trimmed;
+    const isBareDocid = !isHashRef && /^[0-9a-f]{6}$/i.test(trimmed);
+
+    if (isHashRef || isBareDocid) {
+      const docid = bareId.toLowerCase();
+      const docidMap = this.buildDocidMap();
+      const rel = docidMap.get(docid);
+      if (!rel) {
+        return { error: `No file found for docid: ${docid}` };
+      }
+      const absPath = path.join(this.config.workspaceRoot, rel);
+      if (!existsSync(absPath)) {
+        return { error: `File not found: ${absPath}` };
+      }
+      return { file: absPath, docid };
+    }
+
+    // Treat as a relative path
+    const rel = trimmed.replace(/\\/g, "/");
+    // Prevent path traversal
+    if (rel.startsWith("..") || path.isAbsolute(rel)) {
+      return { error: `Path traversal blocked: ${trimmed}` };
+    }
+    const absPath = path.join(this.config.workspaceRoot, rel);
+    if (!existsSync(absPath)) {
+      return { error: `File not found: ${absPath}` };
+    }
+    // Look up docid from cache, or compute on the fly
+    const cache = this.loadMtimeCache();
+    const entry = cache[rel] ? normalizeCacheEntry(cache[rel]) : undefined;
+    let docid = entry?.docid ?? "";
+    if (!docid) {
+      try {
+        const content = readFileSync(absPath, "utf8");
+        docid = computeDocid(content);
+      } catch {
+        docid = "";
+      }
+    }
+    return { file: absPath, docid };
   }
 }

@@ -14,6 +14,8 @@ export interface DocChunk {
   heading: string;
   /** Line number where section begins (0-based) */
   lineStart: number;
+  /** Stable docid: first 6 chars of SHA-256 hex of the file's full content */
+  docid: string;
 }
 
 export interface SearchExplanation {
@@ -37,6 +39,8 @@ export interface SearchResult {
   /** vector_score + keyword_boost, rounded to 3 decimals */
   score: number;
   lineStart: number;
+  /** Stable docid: first 6 chars of SHA-256 hex of the file's full content */
+  docid: string;
   /** Optional detailed score breakdown (only when explain: true) */
   explanation?: SearchExplanation;
 }

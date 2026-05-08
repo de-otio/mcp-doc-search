@@ -30,6 +30,8 @@ export interface VectorRecord {
   heading: string;
   lineStart: number;
   text: string;
+  /** Stable docid: first 6 chars of SHA-256 hex of file content */
+  docid: string;
 }
 
 /** Result from a vector query (before keyword re-ranking). */
@@ -40,6 +42,8 @@ export interface VectorQueryResult {
   text: string;
   /** Distance from query vector (lower = more similar for cosine). */
   _distance: number;
+  /** Stable docid: first 6 chars of SHA-256 hex of file content */
+  docid: string;
 }
 
 export class LanceVectorStore {
@@ -91,6 +95,7 @@ export class LanceVectorStore {
       heading: "",
       lineStart: 0,
       text: "",
+      docid: "",
     };
     this.table = await this.db.createTable(this.tableName, [seedRecord], {
       mode: "overwrite",
@@ -127,6 +132,7 @@ export class LanceVectorStore {
       lineStart: r.lineStart,
       text: r.text,
       _distance: r._distance ?? 0,
+      docid: r.docid ?? "",
     }));
   }
 

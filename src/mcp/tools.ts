@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { glob } from "glob";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { search } from "../core/searcher.js";
@@ -56,7 +59,7 @@ function buildSearchDesc(status: IndexStatus | null): string {
     `Semantic search across ${status.totalFiles} indexed markdown files in \`${status.docGlob}\` (last reindexed ${when}, ${status.chunkCount} chunks).`,
     "",
     "**Prefer this over Grep when:** searching docs (not code), the query is conceptual rather than a known symbol, or grep would return >20 hits.",
-    "Returns ~600-char chunks with `file:line` — typically saves a Read call.",
+    "Returns ~600-char chunks with `file:line` and a stable `docid` — pass `#docid` to `get` or `multi_get` to fetch full content without a Read call.",
     "If results look stale, run `reindex_docs`.",
   ].join("\n");
 }
@@ -89,6 +92,52 @@ function buildReindexDesc(status: IndexStatus | null): string {
     "Use when: docs have changed, new files were added, or `search_docs` returns stale results.",
     "Pass `force: true` to re-embed all files (slow but thorough); default is incremental.",
   ].join("\n");
+}
+
+const DEFAULT_MAX_BYTES = 10240;
+
+/** Determine if a string looks like a glob pattern. */
+function isGlobPattern(s: string): boolean {
+  return s.includes("*") || s.includes("?") || s.includes("[");
+}
+
+/**
+ * Read file content, optionally starting from a 1-indexed line,
+ * with max_lines and max_bytes limits.
+ * Returns { content, lines: [from, to], truncated }.
+ */
+function readRef(
+  absPath: string,
+  fromLine: number,
+  maxLines: number | undefined,
+  maxBytes: number,
+): { content: string; lines: [number, number]; truncated: boolean } {
+  const rawContent = readFileSync(absPath, "utf8");
+  const allLines = rawContent.split("\n");
+  const totalLines = allLines.length;
+
+  const startIdx = Math.max(0, fromLine - 1);
+  const endIdx = maxLines !== undefined ? Math.min(startIdx + maxLines, totalLines) : totalLines;
+
+  const slice = allLines.slice(startIdx, endIdx).join("\n");
+  let content = slice;
+  let truncated = false;
+
+  const rawBytes = Buffer.byteLength(content, "utf8");
+  if (rawBytes > maxBytes) {
+    content = Buffer.from(content, "utf8").subarray(0, maxBytes).toString("utf8");
+    truncated = true;
+  }
+
+  const fromLineActual = startIdx + 1;
+  const returnedLines = content.split("\n").length;
+  const toLineActual = startIdx + returnedLines;
+
+  return {
+    content,
+    lines: [fromLineActual, toLineActual],
+    truncated,
+  };
 }
 
 export function registerTools(server: Server, deps: EngineDeps): void {
@@ -130,6 +179,66 @@ export function registerTools(server: Server, deps: EngineDeps): void {
               force: { type: "boolean" },
             },
             required: [],
+          },
+        },
+        {
+          name: "get",
+          description: [
+            "Retrieve the full content of a single documentation file.",
+            "",
+            "ref accepts:",
+            "  - A relative file path (e.g. 'doc/foo.md')",
+            "  - A docid with # prefix (e.g. '#abc123') — from search_docs results",
+            "  - A bare 6-char hex docid (e.g. 'abc123')",
+            "",
+            "Returns { file, docid, content, lines: [from, to], truncated, error? }.",
+            "Default max_bytes is 10240 (10 KB). If exceeded, content is truncated and truncated=true.",
+            "from_line is 1-indexed.",
+          ].join("\n"),
+          inputSchema: {
+            type: "object",
+            properties: {
+              ref: { type: "string", description: "File path, #docid, or bare 6-char docid" },
+              from_line: { type: "number", description: "1-indexed start line (default: 1)" },
+              max_lines: { type: "number", description: "Max lines to return (default: all)" },
+              max_bytes: {
+                type: "number",
+                description: "Max bytes to return (default: 10240)",
+              },
+            },
+            required: ["ref"],
+          },
+        },
+        {
+          name: "multi_get",
+          description: [
+            "Batch-retrieve multiple documentation files.",
+            "",
+            "refs accepts:",
+            "  - A glob string (e.g. 'doc/01-business/**/*.md') — when it contains *, ?, or [",
+            "  - A comma-separated string of refs (e.g. 'doc/foo.md, #abc123, doc/bar.md')",
+            "  - An array of ref strings",
+            "",
+            "Each ref is a path, #docid, or bare 6-char hex docid.",
+            "Returns { docs: Array<{ file, docid, content, lines, truncated }>, errors: Array<{ ref, error }> }.",
+            "max_bytes is enforced per file. Errors are collected; one bad ref doesn't fail the batch.",
+          ].join("\n"),
+          inputSchema: {
+            type: "object",
+            properties: {
+              refs: {
+                oneOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
+                description:
+                  "Glob pattern, comma-separated refs, or array of refs (paths / #docids / bare docids)",
+              },
+              from_line: { type: "number", description: "1-indexed start line (default: 1)" },
+              max_lines: { type: "number", description: "Max lines per file (default: all)" },
+              max_bytes: {
+                type: "number",
+                description: "Max bytes per file (default: 10240)",
+              },
+            },
+            required: ["refs"],
           },
         },
         {
@@ -232,6 +341,128 @@ export function registerTools(server: Server, deps: EngineDeps): void {
               text: JSON.stringify({ status: "ok", ...stats }),
             },
           ],
+        };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ error: String(err) }) }],
+        };
+      }
+    }
+
+    if (name === "get") {
+      try {
+        const ref = String(input.ref ?? "").trim();
+        if (!ref) {
+          return {
+            content: [{ type: "text", text: JSON.stringify({ error: "ref is required." }) }],
+          };
+        }
+        const fromLine = input.from_line !== undefined ? Math.max(1, Number(input.from_line)) : 1;
+        const maxLines =
+          input.max_lines !== undefined ? Math.max(1, Number(input.max_lines)) : undefined;
+        const maxBytes =
+          input.max_bytes !== undefined ? Math.max(1, Number(input.max_bytes)) : DEFAULT_MAX_BYTES;
+
+        const resolved = indexer.resolveRef(ref);
+        if ("error" in resolved) {
+          return {
+            content: [{ type: "text", text: JSON.stringify({ error: resolved.error }) }],
+          };
+        }
+
+        const { file: absPath, docid } = resolved;
+        const relFile = path.relative(indexer.getWorkspaceRoot(), absPath).replace(/\\/g, "/");
+
+        if (!existsSync(absPath)) {
+          return {
+            content: [
+              { type: "text", text: JSON.stringify({ error: `File not found: ${relFile}` }) },
+            ],
+          };
+        }
+
+        const { content, lines, truncated } = readRef(absPath, fromLine, maxLines, maxBytes);
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ file: relFile, docid, content, lines, truncated }),
+            },
+          ],
+        };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ error: String(err) }) }],
+        };
+      }
+    }
+
+    if (name === "multi_get") {
+      try {
+        const refsRaw = input.refs;
+        const fromLine = input.from_line !== undefined ? Math.max(1, Number(input.from_line)) : 1;
+        const maxLines =
+          input.max_lines !== undefined ? Math.max(1, Number(input.max_lines)) : undefined;
+        const maxBytes =
+          input.max_bytes !== undefined ? Math.max(1, Number(input.max_bytes)) : DEFAULT_MAX_BYTES;
+
+        let refList: string[] = [];
+
+        if (Array.isArray(refsRaw)) {
+          refList = refsRaw.map((r) => String(r).trim()).filter(Boolean);
+        } else {
+          const refsStr = String(refsRaw ?? "").trim();
+          if (isGlobPattern(refsStr)) {
+            const workspaceRoot = indexer.getWorkspaceRoot();
+            const matched = await glob(refsStr, {
+              cwd: workspaceRoot,
+              ignore: ["**/node_modules/**"],
+            });
+            matched.sort();
+            refList = matched;
+          } else {
+            refList = refsStr
+              .split(",")
+              .map((r) => r.trim())
+              .filter(Boolean);
+          }
+        }
+
+        const docs: Array<{
+          file: string;
+          docid: string;
+          content: string;
+          lines: [number, number];
+          truncated: boolean;
+        }> = [];
+        const errors: Array<{ ref: string; error: string }> = [];
+
+        for (const ref of refList) {
+          const resolved = indexer.resolveRef(ref);
+          if ("error" in resolved) {
+            errors.push({ ref, error: resolved.error });
+            continue;
+          }
+
+          const { file: absPath, docid } = resolved;
+          const relFile = path.relative(indexer.getWorkspaceRoot(), absPath).replace(/\\/g, "/");
+
+          if (!existsSync(absPath)) {
+            errors.push({ ref, error: `File not found: ${relFile}` });
+            continue;
+          }
+
+          try {
+            const { content, lines, truncated } = readRef(absPath, fromLine, maxLines, maxBytes);
+            docs.push({ file: relFile, docid, content, lines, truncated });
+          } catch (fileErr) {
+            errors.push({ ref, error: String(fileErr) });
+          }
+        }
+
+        return {
+          content: [{ type: "text", text: JSON.stringify({ docs, errors }) }],
         };
       } catch (err) {
         return {
