@@ -70,6 +70,14 @@ export class LocalEmbedder implements EmbedProvider {
     }
     return results;
   }
+
+  /**
+   * Release the cached pipeline so the next embed() call will reload it.
+   * Useful in long-lived HTTP daemon mode to free memory during idle periods.
+   */
+  dispose(): void {
+    this.pipeline = null;
+  }
 }
 
 /**

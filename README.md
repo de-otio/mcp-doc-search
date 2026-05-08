@@ -120,6 +120,66 @@ mcp-doc-search context remove doc/api.md
 
 **Exit codes:** 0 = success, 1 = user error (bad args / missing file), 2 = engine error.
 
+## HTTP daemon mode
+
+By default, each MCP client spawns the server as a short-lived stdio subprocess. The embed model takes ~1–2 s to load on cold start. Running a long-lived HTTP daemon amortises that cost across all clients.
+
+### Start the daemon
+
+```bash
+# One-shot foreground (useful for smoke-testing)
+node dist/mcp-server.js --http --port 8181
+
+# Detached daemon (parent exits, child runs in background)
+node dist/mcp-server.js --http --port 8181 --daemon
+# → MCP daemon started (PID: 12345, port: 8181)
+
+# Verify it's up
+curl http://localhost:8181/health
+# → {"status":"ok","uptime":3.1}
+```
+
+### Stop the daemon
+
+```bash
+node dist/mcp-server.js --stop
+# → stopped (PID: 12345)
+```
+
+### Point Claude Code at the HTTP endpoint
+
+Edit your `.mcp.json` (or `~/.claude.json`) to use the `http` transport:
+
+```json
+{
+  "mcpServers": {
+    "doc-search": {
+      "type": "http",
+      "url": "http://localhost:8181/mcp"
+    }
+  }
+}
+```
+
+**vs stdio transport** (the default, spawns a new process per client):
+
+```json
+{
+  "mcpServers": {
+    "doc-search": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/path/to/dist/mcp-server.js"],
+      "env": { "DOC_SEARCH_WORKSPACE": "/path/to/your/repo" }
+    }
+  }
+}
+```
+
+### Idle model disposal
+
+After 5 minutes of inactivity, the daemon automatically releases the embed pipeline from memory. The next request transparently reloads it (~1 s penalty), then stays fast again.
+
 ## Development
 
 ```bash

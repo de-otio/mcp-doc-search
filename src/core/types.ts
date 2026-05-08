@@ -127,6 +127,13 @@ export interface EmbedProvider {
    * @param prefix - Optional prefix for task-specific embedding (e.g. "search_document: ")
    */
   embed(texts: string[], prefix?: string): Promise<number[][]>;
+
+  /**
+   * Optional: dispose of any cached model/pipeline resources.
+   * After calling dispose(), the next embed() call will re-initialize.
+   * Primarily used for idle-timeout cleanup in HTTP daemon mode.
+   */
+  dispose?(): void;
 }
 
 export interface IndexerConfig {
