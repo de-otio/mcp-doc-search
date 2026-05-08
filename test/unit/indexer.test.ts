@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { Indexer } from "../../src/core/indexer.js";
 import type { LanceVectorStore } from "../../src/core/vectorstore.js";
 import type { EmbedProvider, IndexerConfig } from "../../src/core/types.js";
@@ -6,6 +7,32 @@ import type { EmbedProvider, IndexerConfig } from "../../src/core/types.js";
 vi.mock("glob");
 vi.mock("node:fs");
 vi.mock("../../src/core/chunker.js");
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function makeIndexer(config?: Partial<IndexerConfig>): Indexer {
+  const mockStore = {
+    deleteByFile: vi.fn(),
+    ensureTable: vi.fn(),
+    upsert: vi.fn(),
+    count: vi.fn().mockResolvedValue(0),
+    listFiles: vi.fn(),
+  } as unknown as LanceVectorStore;
+
+  const defaultConfig: IndexerConfig = {
+    workspaceRoot: "/workspace",
+    docGlob: "doc/**/*.md",
+    indexDir: "/workspace/.doc-search-index",
+    maxChunkChars: 4000,
+    headingDepth: 2,
+    embedProvider: { embed: vi.fn() } as unknown as EmbedProvider,
+    ...config,
+  };
+
+  return new Indexer(defaultConfig, mockStore);
+}
 
 describe("Indexer", () => {
   let mockStore: any;
@@ -289,6 +316,175 @@ describe("Indexer", () => {
 
       expect(status.deletedFiles).toBe(1);
       expect(status.needsReindex).toBe(true);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Path-context API
+// ---------------------------------------------------------------------------
+
+describe("Indexer context API", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(existsSync).mockReturnValue(false);
+    vi.mocked(readFileSync).mockReturnValue("{}");
+    vi.mocked(writeFileSync).mockReturnValue(undefined);
+    vi.mocked(mkdirSync).mockReturnValue(undefined);
+  });
+
+  describe("getContextFor", () => {
+    it("returns empty string when context.json does not exist", () => {
+      vi.mocked(existsSync).mockReturnValue(false);
+      const indexer = makeIndexer();
+      expect(indexer.getContextFor("doc/01-business/compliance/foo.md")).toBe("");
+    });
+
+    it("returns the exact-path match when present", () => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      vi.mocked(readFileSync).mockReturnValue(
+        JSON.stringify({ "doc/01-business/compliance/foo.md": "Exact file context" }),
+      );
+      const indexer = makeIndexer();
+      expect(indexer.getContextFor("doc/01-business/compliance/foo.md")).toBe("Exact file context");
+    });
+
+    it("walks up to find the most-specific ancestor", () => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      vi.mocked(readFileSync).mockReturnValue(
+        JSON.stringify({
+          "doc/01-business": "Business docs",
+          doc: "All docs",
+        }),
+      );
+      const indexer = makeIndexer();
+      // "doc/01-business/compliance" is more specific than "doc"
+      expect(indexer.getContextFor("doc/01-business/compliance/foo.md")).toBe("Business docs");
+    });
+
+    it("falls back to parent prefix when direct match is missing", () => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      vi.mocked(readFileSync).mockReturnValue(JSON.stringify({ doc: "Top-level docs" }));
+      const indexer = makeIndexer();
+      expect(indexer.getContextFor("doc/02-technical/runbooks/oncall.md")).toBe("Top-level docs");
+    });
+
+    it("falls back to empty-string root key when present", () => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      vi.mocked(readFileSync).mockReturnValue(JSON.stringify({ "": "Root context" }));
+      const indexer = makeIndexer();
+      expect(indexer.getContextFor("anything/at/all.md")).toBe("Root context");
+    });
+
+    it("returns empty string when no ancestor matches", () => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      vi.mocked(readFileSync).mockReturnValue(
+        JSON.stringify({ "other/path": "Some other context" }),
+      );
+      const indexer = makeIndexer();
+      expect(indexer.getContextFor("doc/01-business/foo.md")).toBe("");
+    });
+  });
+
+  describe("setContext", () => {
+    it("persists a new entry to context.json", () => {
+      vi.mocked(existsSync).mockReturnValue(false);
+      const indexer = makeIndexer();
+      indexer.setContext("doc/01-business", "Product roadmap");
+      expect(vi.mocked(writeFileSync)).toHaveBeenCalledOnce();
+      const written = vi.mocked(writeFileSync).mock.calls[0]?.[1] as string;
+      const parsed = JSON.parse(written);
+      expect(parsed["doc/01-business"]).toBe("Product roadmap");
+    });
+
+    it("strips leading/trailing whitespace from text", () => {
+      vi.mocked(existsSync).mockReturnValue(false);
+      const indexer = makeIndexer();
+      indexer.setContext("doc/01", "  trimmed  ");
+      const written = vi.mocked(writeFileSync).mock.calls[0]?.[1] as string;
+      expect(JSON.parse(written)["doc/01"]).toBe("trimmed");
+    });
+
+    it("rejects absolute paths", () => {
+      const indexer = makeIndexer();
+      expect(() => indexer.setContext("/absolute/path", "text")).toThrow(/absolute/);
+    });
+
+    it("rejects paths containing ..", () => {
+      const indexer = makeIndexer();
+      expect(() => indexer.setContext("doc/../evil", "text")).toThrow(/\.\./);
+    });
+
+    it("removes the entry when text is empty after stripping", () => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      vi.mocked(readFileSync).mockReturnValue(
+        JSON.stringify({ "doc/01-business": "Existing entry" }),
+      );
+      const indexer = makeIndexer();
+      // Prime the cache
+      indexer.listContexts();
+      indexer.setContext("doc/01-business", "   ");
+      const written = vi.mocked(writeFileSync).mock.calls[0]?.[1] as string;
+      expect(JSON.parse(written)).not.toHaveProperty("doc/01-business");
+    });
+
+    it("normalizes Windows backslashes in prefix to POSIX forward slashes", () => {
+      vi.mocked(existsSync).mockReturnValue(false);
+      const indexer = makeIndexer();
+      indexer.setContext("doc\\01-business", "Business docs");
+      const written = vi.mocked(writeFileSync).mock.calls[0]?.[1] as string;
+      const parsed = JSON.parse(written);
+      expect(parsed["doc/01-business"]).toBe("Business docs");
+    });
+  });
+
+  describe("removeContext", () => {
+    it("returns true when an entry is removed", () => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      vi.mocked(readFileSync).mockReturnValue(
+        JSON.stringify({ "doc/01-business": "Some context" }),
+      );
+      const indexer = makeIndexer();
+      expect(indexer.removeContext("doc/01-business")).toBe(true);
+    });
+
+    it("returns false when the entry does not exist", () => {
+      vi.mocked(existsSync).mockReturnValue(false);
+      const indexer = makeIndexer();
+      expect(indexer.removeContext("doc/non-existent")).toBe(false);
+    });
+
+    it("removes the entry from the persisted file", () => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      vi.mocked(readFileSync).mockReturnValue(
+        JSON.stringify({ "doc/01-business": "Context A", "doc/02-technical": "Context B" }),
+      );
+      const indexer = makeIndexer();
+      indexer.removeContext("doc/01-business");
+      const written = vi.mocked(writeFileSync).mock.calls[0]?.[1] as string;
+      const parsed = JSON.parse(written);
+      expect(parsed).not.toHaveProperty("doc/01-business");
+      expect(parsed["doc/02-technical"]).toBe("Context B");
+    });
+  });
+
+  describe("listContexts", () => {
+    it("returns empty object when no context.json exists", () => {
+      vi.mocked(existsSync).mockReturnValue(false);
+      const indexer = makeIndexer();
+      expect(indexer.listContexts()).toEqual({});
+    });
+
+    it("returns a copy of all entries", () => {
+      const data = { "doc/01-business": "Roadmap", "doc/02-technical": "Tech docs" };
+      vi.mocked(existsSync).mockReturnValue(true);
+      vi.mocked(readFileSync).mockReturnValue(JSON.stringify(data));
+      const indexer = makeIndexer();
+      const result = indexer.listContexts();
+      expect(result).toEqual(data);
+      // Verify it's a copy, not the same reference
+      result["new-key"] = "mutated";
+      expect(indexer.listContexts()).not.toHaveProperty("new-key");
     });
   });
 });

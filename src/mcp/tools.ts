@@ -96,6 +96,7 @@ export function registerTools(server: Server, deps: EngineDeps): void {
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     const status = await getCachedStatus(indexer);
+    const contextCount = Object.keys(indexer.listContexts()).length;
     return {
       tools: [
         {
@@ -131,6 +132,53 @@ export function registerTools(server: Server, deps: EngineDeps): void {
             required: [],
           },
         },
+        {
+          name: "set_context",
+          description: [
+            "Add a one-line description of what kind of docs live under a path prefix.",
+            "Subsequent search results from that subtree will include the context as",
+            "[Context: ...] at the start of each excerpt.",
+            "",
+            "Args:",
+            "  path: relative POSIX path prefix (e.g. 'doc/01-business'). Must not be",
+            "        absolute or contain '..'.",
+            "  text: short description (e.g. 'Product roadmap and feature specs').",
+            "        Passing empty text removes the entry.",
+            "",
+            "Returns { status: 'ok' } on success.",
+          ].join("\n"),
+          inputSchema: {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+              text: { type: "string" },
+            },
+            required: ["path", "text"],
+          },
+        },
+        {
+          name: "list_contexts",
+          description: `List all ${contextCount} path-context mapping${contextCount === 1 ? "" : "s"} currently defined.\nEach entry is a path prefix mapped to a short description used to annotate search results.`,
+          inputSchema: {
+            type: "object",
+            properties: {},
+            required: [],
+          },
+        },
+        {
+          name: "remove_context",
+          description: [
+            "Remove the path-context entry for the given prefix.",
+            "Returns { removed: true } if the entry existed, { removed: false } if not.",
+          ].join("\n"),
+          inputSchema: {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+            },
+            required: ["path"],
+          },
+        },
       ],
     };
   });
@@ -149,7 +197,7 @@ export function registerTools(server: Server, deps: EngineDeps): void {
         }
         const n = Math.max(1, Math.min(100, Math.floor(Number(input.n) || 5)));
         const explain = input.explain === true;
-        const results = await search(query, n, store, embedProvider, { explain });
+        const results = await search(query, n, store, embedProvider, { explain }, indexer);
         return {
           content: [{ type: "text", text: JSON.stringify(results) }],
         };
@@ -184,6 +232,58 @@ export function registerTools(server: Server, deps: EngineDeps): void {
               text: JSON.stringify({ status: "ok", ...stats }),
             },
           ],
+        };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ error: String(err) }) }],
+        };
+      }
+    }
+
+    if (name === "set_context") {
+      try {
+        const prefix = String(input.path ?? "").trim();
+        const text = String(input.text ?? "");
+        if (!prefix) {
+          return {
+            content: [{ type: "text", text: JSON.stringify({ error: "path is required." }) }],
+          };
+        }
+        indexer.setContext(prefix, text);
+        return {
+          content: [{ type: "text", text: JSON.stringify({ status: "ok" }) }],
+        };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ error: String(err) }) }],
+        };
+      }
+    }
+
+    if (name === "list_contexts") {
+      try {
+        const contexts = indexer.listContexts();
+        return {
+          content: [{ type: "text", text: JSON.stringify(contexts) }],
+        };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ error: String(err) }) }],
+        };
+      }
+    }
+
+    if (name === "remove_context") {
+      try {
+        const prefix = String(input.path ?? "").trim();
+        if (!prefix) {
+          return {
+            content: [{ type: "text", text: JSON.stringify({ error: "path is required." }) }],
+          };
+        }
+        const removed = indexer.removeContext(prefix);
+        return {
+          content: [{ type: "text", text: JSON.stringify({ removed }) }],
         };
       } catch (err) {
         return {

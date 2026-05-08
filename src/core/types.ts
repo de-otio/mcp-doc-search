@@ -73,6 +73,12 @@ export interface IndexStatus {
 }
 
 /**
+ * Path-context map: keys are relative POSIX-style path prefixes,
+ * values are short prose descriptions attached to that subtree.
+ */
+export type PathContext = Record<string, string>;
+
+/**
  * LanceDB table interface (minimal shape for type safety)
  */
 export interface LanceTable {

@@ -8,7 +8,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { glob } from "glob";
 import { chunkMarkdown } from "./chunker.js";
-import type { IndexerConfig, IndexStats, IndexStatus } from "./types.js";
+import type { IndexerConfig, IndexStats, IndexStatus, PathContext } from "./types.js";
 import type { LanceVectorStore, VectorRecord } from "./vectorstore.js";
 
 interface MtimeCache {
@@ -18,6 +18,7 @@ interface MtimeCache {
 export class Indexer {
   private config: IndexerConfig;
   private store: LanceVectorStore;
+  private _contextCache: PathContext | null = null;
 
   constructor(config: IndexerConfig, store: LanceVectorStore) {
     this.config = config;
@@ -219,6 +220,127 @@ export class Indexer {
       docGlob: this.config.docGlob,
     };
   }
+
+  // ---------------------------------------------------------------------------
+  // Path-context API
+  // ---------------------------------------------------------------------------
+
+  private contextPath(): string {
+    return path.join(this.config.indexDir, "context.json");
+  }
+
+  private loadContextCache(): PathContext {
+    if (this._contextCache !== null) {
+      return this._contextCache;
+    }
+    const p = this.contextPath();
+    if (existsSync(p)) {
+      try {
+        this._contextCache = JSON.parse(readFileSync(p, "utf8")) as PathContext;
+      } catch {
+        this._contextCache = {};
+      }
+    } else {
+      this._contextCache = {};
+    }
+    return this._contextCache;
+  }
+
+  private saveContextCache(ctx: PathContext): void {
+    mkdirSync(this.config.indexDir, { recursive: true });
+    writeFileSync(this.contextPath(), JSON.stringify(ctx, null, 2));
+    this._contextCache = ctx;
+  }
+
+  /**
+   * Walk parent prefixes of relPath and return the most-specific context match.
+   * Returns "" when no context entry exists for any ancestor.
+   */
+  getContextFor(relPath: string): string {
+    const ctx = this.loadContextCache();
+    // Normalize to POSIX forward slashes
+    const normalized = relPath.replace(/\\/g, "/");
+
+    // Build candidate prefixes from most-specific to least-specific
+    const candidates: string[] = [];
+    candidates.push(normalized); // exact file path
+    let cur = normalized;
+    for (;;) {
+      const slash = cur.lastIndexOf("/");
+      if (slash < 0) {
+        // No more slashes: check the bare segment, then "" (root)
+        candidates.push(cur.slice(0, slash < 0 ? cur.length : slash));
+        break;
+      }
+      cur = cur.slice(0, slash);
+      candidates.push(cur);
+    }
+    candidates.push(""); // root context
+
+    for (const candidate of candidates) {
+      if (Object.prototype.hasOwnProperty.call(ctx, candidate)) {
+        return ctx[candidate];
+      }
+    }
+    return "";
+  }
+
+  /**
+   * Set a context description for a path prefix.
+   * - Normalizes prefix to POSIX slashes.
+   * - Throws if prefix contains ".." or is an absolute path.
+   * - If text is empty after stripping whitespace, removes the entry instead.
+   */
+  setContext(prefix: string, text: string): void {
+    const normalized = prefix.replace(/\\/g, "/");
+
+    if (path.isAbsolute(normalized) || path.isAbsolute(prefix)) {
+      throw new Error(`Context prefix must not be absolute: "${prefix}"`);
+    }
+    if (normalized.split("/").some((seg) => seg === "..")) {
+      throw new Error(`Context prefix must not contain "..": "${prefix}"`);
+    }
+
+    const trimmed = text.trim();
+    if (!trimmed) {
+      this.removeContext(normalized);
+      return;
+    }
+
+    // Reload from disk to avoid clobbering external edits
+    this._contextCache = null;
+    const ctx = { ...this.loadContextCache() };
+    ctx[normalized] = trimmed;
+    this.saveContextCache(ctx);
+  }
+
+  /**
+   * Remove the context entry for a prefix.
+   * Returns true if the entry existed, false otherwise.
+   */
+  removeContext(prefix: string): boolean {
+    const normalized = prefix.replace(/\\/g, "/");
+    // Reload from disk to pick up external edits
+    this._contextCache = null;
+    const ctx = { ...this.loadContextCache() };
+    if (!Object.prototype.hasOwnProperty.call(ctx, normalized)) {
+      return false;
+    }
+    delete ctx[normalized];
+    this.saveContextCache(ctx);
+    return true;
+  }
+
+  /**
+   * Return a copy of the entire context map.
+   */
+  listContexts(): PathContext {
+    return { ...this.loadContextCache() };
+  }
+
+  // ---------------------------------------------------------------------------
+  // mtime-cache helpers
+  // ---------------------------------------------------------------------------
 
   private mtimeCachePath(): string {
     return path.join(this.config.indexDir, "mtime_cache.json");

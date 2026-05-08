@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { tokenizeQuery, keywordBoost, search } from "../../src/core/searcher.js";
 import type { EmbedProvider } from "../../src/core/types.js";
 import type { LanceVectorStore, VectorQueryResult } from "../../src/core/vectorstore.js";
+import type { Indexer } from "../../src/core/indexer.js";
 
 // ---------------------------------------------------------------------------
 // tokenizeQuery
@@ -61,8 +62,6 @@ describe("tokenizeQuery", () => {
 
 describe("keywordBoost", () => {
   it("returns 0.06 when all query terms are present in the document", () => {
-    // "map view" → tokenized terms: "map", "view"
-    // Both present in doc → 2 hits × 0.03 = 0.06
     const doc = "The map view renders the post geo index on screen.";
     const boost = keywordBoost("map view", doc);
 
@@ -70,15 +69,9 @@ describe("keywordBoost", () => {
   });
 
   it("returns 0.03 when only one of three query terms is present", () => {
-    // "map view feed" → terms: "map", "view", "feed", "mapview" (full token is short pair)
-    // Doc contains only "map" → 1 hit × 0.03 = 0.03
-    // Note: "map" will also satisfy "mapview"? No — "mapview" is not in the doc.
-    // Let's use a doc that contains "map" but not "view" or "feed".
     const doc = "The map renders everything on a canvas.";
     const boost = keywordBoost("map view feed", doc);
 
-    // "map" hits → 0.03; "view" misses; "feed" misses; "mapview" misses; "map" already counted
-    // Result: 1 distinct term hit = 0.03
     expect(boost).toBe(0.03);
   });
 
@@ -138,7 +131,7 @@ describe("search", () => {
         heading: "Map View",
         lineStart: 10,
         text: "The map view component renders feeds on a map.",
-        _distance: 0.2, // vectorScore = 1 - 0.2 = 0.8
+        _distance: 0.2,
       },
     ];
     const store = mockStore(1, candidates);
@@ -147,8 +140,6 @@ describe("search", () => {
     const results = await search("map view", 5, store, embedder);
 
     expect(results).toHaveLength(1);
-    // "map" and "view" both appear in text → boost = 0.06
-    // score = 0.8 + 0.06 = 0.86
     expect(results[0].score).toBe(0.86);
     expect(results[0].file).toBe("doc/guide.md");
     expect(results[0].heading).toBe("Map View");
@@ -162,14 +153,14 @@ describe("search", () => {
         heading: "Introduction",
         lineStart: 0,
         text: "A general introduction to the system architecture and design.",
-        _distance: 0.15, // vectorScore = 0.85
+        _distance: 0.15,
       },
       {
         file: "doc/mapview.md",
         heading: "MapView Component",
         lineStart: 5,
         text: "The MapView component shows feed items on a map view.",
-        _distance: 0.2, // vectorScore = 0.80
+        _distance: 0.2,
       },
     ];
     const store = mockStore(2, candidates);
@@ -177,11 +168,6 @@ describe("search", () => {
 
     const results = await search("map view", 2, store, embedder);
 
-    // general.md: "map" not in text, "view" not in text → boost = 0.0
-    //   score = 0.85 + 0.0 = 0.85
-    // mapview.md: "map" in text: yes, "view" in text: yes → 2 hits × 0.03 = 0.06
-    //   score = 0.80 + 0.06 = 0.86
-    // mapview.md should rank first after re-ranking
     expect(results[0].file).toBe("doc/mapview.md");
     expect(results[1].file).toBe("doc/general.md");
   });
@@ -237,7 +223,7 @@ describe("search", () => {
   });
 
   // ---------------------------------------------------------------------------
-  // search with explain option
+  // search with explain option (Phase 8)
   // ---------------------------------------------------------------------------
 
   it("does not include explanation when explain: false (default)", async () => {
@@ -312,21 +298,21 @@ describe("search", () => {
         heading: "First",
         lineStart: 0,
         text: "general intro architecture design",
-        _distance: 0.15, // vectorScore = 0.85, no keyword match → 0.85
+        _distance: 0.15,
       },
       {
         file: "doc/b.md",
         heading: "Second",
         lineStart: 5,
         text: "map view component renders map view",
-        _distance: 0.2, // vectorScore = 0.80, both map and view match → 0.80 + 0.06 = 0.86
+        _distance: 0.2,
       },
       {
         file: "doc/c.md",
         heading: "Third",
         lineStart: 15,
         text: "feed display list items",
-        _distance: 0.25, // vectorScore = 0.75, feed matches → 0.75 + 0.03 = 0.78
+        _distance: 0.25,
       },
     ];
     const store = mockStore(3, candidates);
@@ -334,7 +320,6 @@ describe("search", () => {
 
     const results = await search("map view feed", 3, store, embedder, { explain: true });
 
-    // After sorting: b (0.86), a (0.85), c (0.78)
     expect(results[0].file).toBe("doc/b.md");
     expect(results[0].explanation!.rank).toBe(1);
 
@@ -352,7 +337,7 @@ describe("search", () => {
         heading: "Test",
         lineStart: 0,
         text: "map view component map view rendering",
-        _distance: 0.123, // vectorScore = 0.877
+        _distance: 0.123,
       },
     ];
     const store = mockStore(1, candidates);
@@ -363,5 +348,71 @@ describe("search", () => {
     const exp = results[0].explanation!;
     const computed = Math.round((exp.vectorScore + exp.keywordBonus) * 1000) / 1000;
     expect(computed).toBe(exp.finalScore);
+  });
+
+  // ---------------------------------------------------------------------------
+  // search with path-context indexer (Phase 4)
+  // ---------------------------------------------------------------------------
+
+  it("prepends [Context: ...] to excerpt when indexer has a matching context", async () => {
+    const candidates: VectorQueryResult[] = [
+      {
+        file: "doc/01-business/spec.md",
+        heading: "Overview",
+        lineStart: 0,
+        text: "Product specification content.",
+        _distance: 0.1,
+      },
+    ];
+    const store = mockStore(1, candidates);
+    const embedder = mockEmbedder([0.1]);
+    const mockIndexer = {
+      getContextFor: vi.fn().mockReturnValue("Product roadmap and feature specs"),
+    } as unknown as Indexer;
+
+    const results = await search("product specs", 5, store, embedder, undefined, mockIndexer);
+
+    expect(results[0].excerpt).toMatch(/^\[Context: Product roadmap and feature specs\] /);
+    expect(mockIndexer.getContextFor).toHaveBeenCalledWith("doc/01-business/spec.md");
+  });
+
+  it("does not prepend context prefix when indexer returns empty string", async () => {
+    const candidates: VectorQueryResult[] = [
+      {
+        file: "doc/no-context/page.md",
+        heading: "Section",
+        lineStart: 0,
+        text: "Some content here.",
+        _distance: 0.1,
+      },
+    ];
+    const store = mockStore(1, candidates);
+    const embedder = mockEmbedder([0.1]);
+    const mockIndexer = {
+      getContextFor: vi.fn().mockReturnValue(""),
+    } as unknown as Indexer;
+
+    const results = await search("some content", 5, store, embedder, undefined, mockIndexer);
+
+    expect(results[0].excerpt).not.toMatch(/^\[Context:/);
+    expect(results[0].excerpt).toBe("Some content here.");
+  });
+
+  it("does not modify excerpt format when no indexer is provided", async () => {
+    const candidates: VectorQueryResult[] = [
+      {
+        file: "doc/plain.md",
+        heading: "Plain",
+        lineStart: 0,
+        text: "Plain content.",
+        _distance: 0.1,
+      },
+    ];
+    const store = mockStore(1, candidates);
+    const embedder = mockEmbedder([0.1]);
+
+    const results = await search("plain", 5, store, embedder);
+
+    expect(results[0].excerpt).toBe("Plain content.");
   });
 });

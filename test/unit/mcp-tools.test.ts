@@ -36,6 +36,10 @@ describe("MCP Tools", () => {
     mockIndexer = {
       reindex: vi.fn(),
       getStatus: vi.fn().mockResolvedValue(baseStatus),
+      listContexts: vi.fn().mockReturnValue({}),
+      setContext: vi.fn(),
+      removeContext: vi.fn(),
+      getContextFor: vi.fn().mockReturnValue(""),
     };
 
     mockEmbedProvider = {
@@ -112,9 +116,14 @@ describe("MCP Tools", () => {
 
         // Verify that search was called with clamped n value (100, not 500)
         const searchMock = vi.mocked(search);
-        expect(searchMock).toHaveBeenCalledWith("test", 100, mockStore, mockEmbedProvider, {
-          explain: false,
-        });
+        expect(searchMock).toHaveBeenCalledWith(
+          "test",
+          100,
+          mockStore,
+          mockEmbedProvider,
+          { explain: false },
+          mockIndexer,
+        );
       }
     });
 
@@ -166,6 +175,138 @@ describe("MCP Tools", () => {
 
         expect(result.content[0].text).toContain("Unknown tool");
       }
+    });
+
+    it("tool list includes set_context, list_contexts, and remove_context", async () => {
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+
+      const listToolsHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[0]?.[1];
+      const response = await listToolsHandler({});
+      const toolNames = response.tools.map((t: any) => t.name);
+
+      expect(toolNames).toContain("set_context");
+      expect(toolNames).toContain("list_contexts");
+      expect(toolNames).toContain("remove_context");
+    });
+
+    it("set_context calls indexer.setContext and returns status ok", async () => {
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
+
+      const result = await callToolHandler({
+        params: {
+          name: "set_context",
+          arguments: { path: "doc/01-business", text: "Product roadmap" },
+        },
+      });
+
+      expect(mockIndexer.setContext).toHaveBeenCalledWith("doc/01-business", "Product roadmap");
+      expect(JSON.parse(result.content[0].text)).toEqual({ status: "ok" });
+    });
+
+    it("set_context returns error when path is empty", async () => {
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
+
+      const result = await callToolHandler({
+        params: {
+          name: "set_context",
+          arguments: { path: "", text: "Some description" },
+        },
+      });
+
+      expect(JSON.parse(result.content[0].text)).toHaveProperty("error");
+      expect(mockIndexer.setContext).not.toHaveBeenCalled();
+    });
+
+    it("list_contexts returns current context map", async () => {
+      const contexts = { "doc/01-business": "Roadmap", "doc/02-technical": "Tech docs" };
+      mockIndexer.listContexts.mockReturnValue(contexts);
+
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
+
+      const result = await callToolHandler({
+        params: { name: "list_contexts", arguments: {} },
+      });
+
+      expect(JSON.parse(result.content[0].text)).toEqual(contexts);
+    });
+
+    it("remove_context returns { removed: true } when entry exists", async () => {
+      mockIndexer.removeContext.mockReturnValue(true);
+
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
+
+      const result = await callToolHandler({
+        params: { name: "remove_context", arguments: { path: "doc/01-business" } },
+      });
+
+      expect(mockIndexer.removeContext).toHaveBeenCalledWith("doc/01-business");
+      expect(JSON.parse(result.content[0].text)).toEqual({ removed: true });
+    });
+
+    it("remove_context returns { removed: false } when entry does not exist", async () => {
+      mockIndexer.removeContext.mockReturnValue(false);
+
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
+
+      const result = await callToolHandler({
+        params: { name: "remove_context", arguments: { path: "doc/non-existent" } },
+      });
+
+      expect(JSON.parse(result.content[0].text)).toEqual({ removed: false });
+    });
+
+    it("list_contexts description shows current count", async () => {
+      mockIndexer.listContexts.mockReturnValue({
+        "doc/01": "A",
+        "doc/02": "B",
+        "doc/03": "C",
+      });
+
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+
+      const listToolsHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[0]?.[1];
+      const response = await listToolsHandler({});
+      const listContextsTool = response.tools.find((t: any) => t.name === "list_contexts");
+
+      expect(listContextsTool.description).toContain("3");
     });
   });
 

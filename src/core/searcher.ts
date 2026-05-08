@@ -5,6 +5,7 @@
 
 import type { EmbedProvider, SearchResult } from "./types.js";
 import type { LanceVectorStore } from "./vectorstore.js";
+import type { Indexer } from "./indexer.js";
 
 /**
  * Extract search terms from a query, splitting on word boundaries and
@@ -64,6 +65,9 @@ export interface SearchOptions {
 /**
  * Hybrid search: embed query, over-fetch 3x from vector store,
  * apply keyword boost, re-sort, return top n.
+ *
+ * @param indexer - Optional Indexer instance; when provided, prepends
+ *   `[Context: <text>] ` to excerpts when a path-context entry matches.
  */
 export async function search(
   query: string,
@@ -71,6 +75,7 @@ export async function search(
   store: LanceVectorStore,
   embedder: EmbedProvider,
   options?: SearchOptions,
+  indexer?: Indexer,
 ): Promise<SearchResult[]> {
   if (n <= 0) return [];
 
@@ -95,10 +100,14 @@ export async function search(
     const boost = keywordBoost(query, c.text);
     const finalScore = Math.round((vectorScore + boost) * 1000) / 1000;
 
+    const rawExcerpt = c.text.slice(0, 600);
+    const contextText = indexer ? indexer.getContextFor(c.file) : "";
+    const excerpt = contextText ? `[Context: ${contextText}] ${rawExcerpt}` : rawExcerpt;
+
     const result: SearchResult = {
       file: c.file,
       heading: c.heading,
-      excerpt: c.text.slice(0, 600),
+      excerpt,
       score: finalScore,
       lineStart: c.lineStart,
     };
