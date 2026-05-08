@@ -1,0 +1,237 @@
+{
+  "name": "mcp-doc-search",
+  "displayName": "MCP Doc Search",
+  "description": "Semantic documentation search for any monorepo. VS Code extension + MCP server. Local embeddings, no API key required.",
+  "version": "0.1.0",
+  "publisher": "de-otio",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/de-otio/mcp-doc-search"
+  },
+  "homepage": "https://github.com/de-otio/mcp-doc-search#readme",
+  "bugs": {
+    "url": "https://github.com/de-otio/mcp-doc-search/issues"
+  },
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "documentation",
+    "search",
+    "embeddings",
+    "vector-search",
+    "rag",
+    "claude",
+    "copilot",
+    "lancedb",
+    "transformers.js"
+  ],
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#1f2937",
+    "theme": "dark"
+  },
+  "engines": {
+    "vscode": "^1.85.0",
+    "node": ">=18.0.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "workspaceContains:**/*.md"
+  ],
+  "main": "./dist/extension.js",
+  "bin": {
+    "mcp-doc-search": "./dist/mcp-doc-search.js"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "docSearch.search",
+        "title": "Doc Search: Search Documentation"
+      },
+      {
+        "command": "docSearch.reindex",
+        "title": "Doc Search: Reindex Documentation"
+      },
+      {
+        "command": "docSearch.openSettings",
+        "title": "Doc Search: Open Settings"
+      },
+      {
+        "command": "docSearch.generateMcpJson",
+        "title": "Doc Search: Generate .mcp.json"
+      },
+      {
+        "command": "docSearch.openWalkthrough",
+        "title": "Doc Search: Getting Started"
+      },
+      {
+        "command": "docSearch.openIndexStatus",
+        "title": "Doc Search: Index Status"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "docSearch",
+          "title": "Doc Search",
+          "icon": "media/icon-activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "docSearch": [
+        {
+          "id": "docSearch.mainView",
+          "name": "Doc Search",
+          "contextualTitle": "Doc Search"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "docSearch.mainView",
+        "contents": "Semantic documentation search powered by local AI embeddings. No API key required.\n\n[$(book) Getting Started](command:docSearch.openWalkthrough)\n[$(gear) Open Settings](command:docSearch.openSettings)\n[$(database) Index Status](command:docSearch.openIndexStatus)\n[$(search) Search Docs](command:docSearch.search)\n[$(json) Generate .mcp.json](command:docSearch.generateMcpJson)"
+      }
+    ],
+    "walkthroughs": [
+      {
+        "id": "docSearch.getStarted",
+        "title": "Get Started with Doc Search",
+        "description": "Set up semantic documentation search in your workspace.",
+        "steps": [
+          {
+            "id": "configureSettings",
+            "title": "Configure Settings",
+            "description": "Choose your AI model and set which files to index.\n\n[Open Settings](command:docSearch.openSettings)",
+            "media": {
+              "markdown": "media/walkthrough-settings.md"
+            }
+          },
+          {
+            "id": "buildIndex",
+            "title": "Build Search Index",
+            "description": "Index your documentation so it becomes searchable by meaning.\n\n[Build Index](command:docSearch.openIndexStatus)",
+            "media": {
+              "markdown": "media/walkthrough-index.md"
+            }
+          },
+          {
+            "id": "searchDocs",
+            "title": "Search Your Docs",
+            "description": "Find relevant documentation using natural language queries.\n\n[Search Docs](command:docSearch.search)",
+            "media": {
+              "markdown": "media/walkthrough-search.md"
+            }
+          },
+          {
+            "id": "mcpIntegration",
+            "title": "Use with an AI Assistant",
+            "description": "Generate an MCP config so any MCP-compatible AI assistant can search your docs.\n\n[Generate .mcp.json](command:docSearch.generateMcpJson)",
+            "media": {
+              "markdown": "media/walkthrough-claude.md"
+            }
+          }
+        ]
+      }
+    ],
+    "configuration": {
+      "title": "Doc Search",
+      "properties": {
+        "docSearch.docGlob": {
+          "type": "string",
+          "default": "doc/**/*.md",
+          "description": "Glob pattern for documentation files to index"
+        },
+        "docSearch.indexDir": {
+          "type": "string",
+          "default": ".doc-search-index",
+          "description": "Directory to store the vector index (relative to workspace root)"
+        },
+        "docSearch.headingDepth": {
+          "type": "number",
+          "default": 2,
+          "enum": [
+            1,
+            2
+          ],
+          "description": "Split chunks on # only (1) or both # and ## (2)"
+        },
+        "docSearch.maxChunkChars": {
+          "type": "number",
+          "default": 4000,
+          "description": "Maximum characters per chunk"
+        },
+        "docSearch.embedProvider": {
+          "type": "string",
+          "default": "local",
+          "enum": [
+            "local",
+            "ollama",
+            "openai"
+          ],
+          "description": "Embedding provider: local (bundled ONNX model), ollama, or openai"
+        },
+        "docSearch.ollamaUrl": {
+          "type": "string",
+          "default": "http://localhost:11434",
+          "description": "Ollama server URL (used when embedProvider is 'ollama')"
+        },
+        "docSearch.ollamaModel": {
+          "type": "string",
+          "default": "nomic-embed-text",
+          "description": "Ollama model name (used when embedProvider is 'ollama')"
+        },
+        "docSearch.openaiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "OpenAI API key (used when embedProvider is 'openai')"
+        },
+        "docSearch.autoReindex": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically reindex changed markdown files on save"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.extension.mjs && node esbuild.mcp.mjs && node esbuild.cli.mjs",
+    "build:extension": "node esbuild.extension.mjs",
+    "build:mcp": "node esbuild.mcp.mjs",
+    "build:cli": "node esbuild.cli.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "prettier --check . && eslint src/",
+    "lint:eslint": "eslint src/",
+    "format": "prettier -w .",
+    "package": "npm prune --omit=dev && vsce package; npm install",
+    "package:darwin-arm": "npm prune --omit=dev && node scripts/prune-platform-deps.mjs darwin-arm64 && vsce package --target darwin-arm64; npm install",
+    "package:darwin-x64": "npm prune --omit=dev && node scripts/prune-platform-deps.mjs darwin-x64 && vsce package --target darwin-x64; npm install",
+    "package:linux-x64": "npm prune --omit=dev && node scripts/prune-platform-deps.mjs linux-x64 && vsce package --target linux-x64; npm install",
+    "package:win-x64": "npm prune --omit=dev && node scripts/prune-platform-deps.mjs win32-x64 && vsce package --target win32-x64; npm install"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.4.0",
+    "@lancedb/lancedb": "^0.13.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "glob": "^11.0.0",
+    "jsonc-parser": "^3.3.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^20.17.10",
+    "@types/vscode": "^1.85.0",
+    "@vitest/coverage-v8": "^4.0.8",
+    "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.24.0",
+    "eslint-plugin-security": "^4.0.0",
+    "prettier": "^3.6.2",
+    "typescript": "^5.6.3",
+    "typescript-eslint": "^8.56.0",
+    "vitest": "^4.0.8"
+  }
+}

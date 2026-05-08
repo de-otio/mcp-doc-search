@@ -1,0 +1,85 @@
+import path from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { parse } from "jsonc-parser";
+import { LanceVectorStore } from "../core/vectorstore.js";
+import { Indexer } from "../core/indexer.js";
+import { LocalEmbedder, OllamaEmbedder, OpenAIEmbedder } from "../core/embedder.js";
+import type { EmbedProvider } from "../core/types.js";
+import { validateConfig } from "../core/types.js";
+import { ensureGitignored } from "../core/gitignore.js";
+
+export interface EngineDeps {
+  store: LanceVectorStore;
+  indexer: Indexer;
+  embedProvider: EmbedProvider;
+}
+
+/**
+ * Read VS Code workspace settings from .vscode/settings.json.
+ * Properly parses JSONC (JSON with comments) format.
+ * Returns the parsed object, or {} if the file doesn't exist or can't be parsed.
+ */
+function readWorkspaceSettings(workspaceRoot: string): Record<string, any> {
+  const settingsPath = path.join(workspaceRoot, ".vscode", "settings.json");
+  if (!existsSync(settingsPath)) return {};
+  try {
+    const raw = readFileSync(settingsPath, "utf8");
+    return parse(raw) as Record<string, any>;
+  } catch {
+    return {};
+  }
+}
+
+export async function createEngineFromEnv(): Promise<EngineDeps> {
+  const workspaceRoot = process.env.DOC_SEARCH_WORKSPACE ?? process.cwd();
+  const settings = readWorkspaceSettings(workspaceRoot);
+
+  // Settings cascade: env vars → .vscode/settings.json → defaults
+  // Env vars take priority since they represent explicit MCP server configuration.
+  const docGlob = process.env.DOC_SEARCH_GLOB ?? settings["docSearch.docGlob"] ?? "doc/**/*.md";
+  const indexDirRelative =
+    process.env.DOC_SEARCH_INDEX_DIR ?? settings["docSearch.indexDir"] ?? ".doc-search-index";
+  const indexDir = path.join(workspaceRoot, indexDirRelative);
+  ensureGitignored(workspaceRoot, indexDirRelative);
+  const maxChunkChars = settings["docSearch.maxChunkChars"] ?? 4000;
+  const headingDepth = settings["docSearch.headingDepth"] ?? 2;
+
+  // Embedding provider: env vars → settings.json → local
+  const providerName =
+    (process.env.USE_OPENAI === "1" ? "openai" : undefined) ??
+    (process.env.OLLAMA_URL ? "ollama" : undefined) ??
+    settings["docSearch.embedProvider"] ??
+    "local";
+
+  let embedProvider: EmbedProvider;
+  if (providerName === "openai") {
+    const apiKey = settings["docSearch.openaiApiKey"] ?? process.env.OPENAI_API_KEY ?? "";
+    embedProvider = new OpenAIEmbedder(apiKey);
+  } else if (providerName === "ollama") {
+    const ollamaModel =
+      settings["docSearch.ollamaModel"] ?? process.env.OLLAMA_MODEL ?? "nomic-embed-text";
+    const ollamaUrl =
+      settings["docSearch.ollamaUrl"] ?? process.env.OLLAMA_URL ?? "http://localhost:11434";
+    embedProvider = new OllamaEmbedder(ollamaModel, ollamaUrl);
+  } else {
+    embedProvider = new LocalEmbedder();
+  }
+
+  const store = new LanceVectorStore(indexDir);
+  await store.open();
+
+  const config = validateConfig(
+    {
+      workspaceRoot,
+      docGlob,
+      indexDir,
+      maxChunkChars,
+      headingDepth: headingDepth as 1 | 2,
+    },
+    embedProvider,
+  );
+
+  const indexer = new Indexer(config, store);
+
+  return { store, indexer, embedProvider };
+}

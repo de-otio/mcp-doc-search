@@ -1,0 +1,12 @@
+node_modules/
+dist/
+out/
+coverage/
+*.vsix
+.claude/
+.mcp.json
+# doc-search index
+.doc-search-index
+analysis/
+tmp/
+plans/
