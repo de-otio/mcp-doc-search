@@ -215,10 +215,10 @@
     "package:win-x64": "npm prune --omit=dev && node scripts/prune-platform-deps.mjs win32-x64 && vsce package --target win32-x64; npm install"
   },
   "dependencies": {
-    "@huggingface/transformers": "^3.4.0",
-    "@lancedb/lancedb": "^0.13.0",
-    "@modelcontextprotocol/sdk": "^1.0.0",
-    "glob": "^11.0.0",
+    "@huggingface/transformers": "^4.2.0",
+    "@lancedb/lancedb": "^0.27.2",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "glob": "^13.0.6",
     "jsonc-parser": "^3.3.1"
   },
   "devDependencies": {
