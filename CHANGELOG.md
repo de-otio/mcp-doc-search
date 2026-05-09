@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-05-09
+
+### Changed
+
+- **VSIX install footprint cut roughly in half.** `glob`,
+  `jsonc-parser`, and `@modelcontextprotocol/sdk` are inlined into
+  `dist/` by esbuild at build time, so they no longer need to ship
+  as separate `node_modules` trees. Total VSIX file count went from
+  5378 → 2257 (-58%); JS files from 1947 → 701 (-64%); per-target
+  VSIX sizes are now 34–45 MB across the four targets.
+
+### Security
+
+- Dependency bumps for moderate/high advisories surfaced by
+  Dependabot: `ip-address` 10.1.0 → 10.2.0 and `express-rate-limit`
+  8.3.0 → 8.5.1 (both transitive via `@modelcontextprotocol/sdk`'s
+  HTTP transport stack); `@modelcontextprotocol/sdk` 1.27.1 →
+  1.29.0; `glob` 11 → 13 (advisory on old 11.x versions).
+
+### Documentation
+
+- README refreshed to reflect the public marketplace listing,
+  the full set of MCP tools (`get`, `multi_get`, `set_context` /
+  `list_contexts` / `remove_context`), and the three build outputs
+  (extension, MCP server, standalone CLI).
+
 ## [0.1.1]
 
 ### Fixed
@@ -41,6 +67,7 @@ Initial public release.
 - On-activation catch-up reindex when the workspace has changed since the
   last index run.
 
-[Unreleased]: https://github.com/de-otio/mcp-doc-search/compare/v0.1.1...HEAD
-[0.1.1]: https://github.com/de-otio/mcp-doc-search/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/de-otio/mcp-doc-search/releases/tag/v0.1.0
+[Unreleased]: https://github.com/de-otio/mcp-doc-search/compare/ext-v0.1.2...HEAD
+[0.1.2]: https://github.com/de-otio/mcp-doc-search/compare/ext-v0.1.1...ext-v0.1.2
+[0.1.1]: https://github.com/de-otio/mcp-doc-search/compare/ext-v0.1.0...ext-v0.1.1
+[0.1.0]: https://github.com/de-otio/mcp-doc-search/releases/tag/ext-v0.1.0

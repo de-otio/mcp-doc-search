@@ -2,7 +2,7 @@
 
 [![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/de-otio.mcp-doc-search?label=marketplace)](https://marketplace.visualstudio.com/items?itemName=de-otio.mcp-doc-search)
 [![Installs](https://img.shields.io/visual-studio-marketplace/i/de-otio.mcp-doc-search)](https://marketplace.visualstudio.com/items?itemName=de-otio.mcp-doc-search)
-[![Build](https://github.com/de-otio/mcp-doc-search/actions/workflows/build.yml/badge.svg)](https://github.com/de-otio/mcp-doc-search/actions/workflows/build.yml)
+[![CI](https://github.com/de-otio/mcp-doc-search/actions/workflows/ci.yml/badge.svg)](https://github.com/de-otio/mcp-doc-search/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Semantic documentation search for any monorepo.
@@ -10,7 +10,7 @@ Semantic documentation search for any monorepo.
 Large repos can have hundreds or thousands of markdown files of documentation. This extension helps developers manage them by enabling precise document retrieval—find and include only the relevant sections you need, dramatically reducing context bloat and token usage in AI assistant conversations.
 
 - **VS Code extension**: type-ahead search in the command palette, auto-reindex on save, status bar indicator
-- **MCP server**: `search_docs`, `list_docs`, `reindex_docs` tools so any MCP-compatible AI assistant can find the right document in a single call
+- **MCP server**: `search_docs`, `list_docs`, `reindex_docs`, `get`, `multi_get`, plus per-file `set_context` / `list_contexts` / `remove_context` tools so any MCP-compatible AI assistant can find and read the right document in a single call
 - **Local embeddings**: auto-downloads `all-MiniLM-L6-v2` (ONNX, 22MB) on first use, then works fully offline — no API key required
 - **Heading-aware chunking**: splits markdown on `#`/`##` boundaries, skips code fences, prepends document title as breadcrumb context
 - **Hybrid search**: vector similarity + keyword re-ranking (+0.03 per matching term, camelCase-aware)
@@ -19,13 +19,17 @@ Large repos can have hundreds or thousands of markdown files of documentation. T
 
 ### Install the VS Code extension
 
-Download the extension from the latest pipeline run.
+Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=de-otio.mcp-doc-search):
 
 ```bash
-code --install-extension mcp-doc-search-0.1.0.vsix
+code --install-extension de-otio.mcp-doc-search
 ```
 
-Or install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=de-otio.mcp-doc-search) _(coming soon)_.
+Or grab a per-platform VSIX from the [latest GitHub Release](https://github.com/de-otio/mcp-doc-search/releases/latest):
+
+```bash
+code --install-extension mcp-doc-search-<target>-<version>.vsix
+```
 
 ### Configure for your repo
 
@@ -69,10 +73,17 @@ Pass `explain: true` to `search_docs` to get a detailed breakdown:
 After running "Generate .mcp.json", connect any MCP-compatible client (Claude Code, Cursor, etc.). The MCP tools appear automatically:
 
 ```
-search_docs("map view feed design")     → finds relevant docs semantically
-search_docs("map view feed", explain=true) → same, but with score breakdown
-list_docs()                             → lists all indexed files
-reindex_docs(force=true)               → full rebuild
+search_docs("authentication flow")               → semantic search
+search_docs("authentication", explain=true)      → same, with per-result score breakdown
+list_docs()                                       → list every indexed file
+get("doc/api.md")                                → read one file (full text)
+multi_get("doc/**/auth*.md")                     → read many files in one call
+reindex_docs(force=true)                         → full rebuild
+
+# Per-file context notes the indexer carries alongside chunks
+set_context("doc/api.md", "primary API reference")
+list_contexts()
+remove_context("doc/api.md")
 ```
 
 ## Embedding providers
@@ -113,7 +124,7 @@ mcp-doc-search multi-get "doc/a.md,doc/b.md" --json
 mcp-doc-search status
 mcp-doc-search status --json
 
-# Per-file context notes (if supported by your indexer version)
+# Per-file context notes carried alongside the index
 mcp-doc-search context add doc/api.md "primary API reference"
 mcp-doc-search context list
 mcp-doc-search context remove doc/api.md
@@ -218,13 +229,15 @@ src/
     searcher.ts  # Hybrid search: vector + keyword re-ranking
     indexer.ts   # Crawl, chunk, embed, upsert with mtime cache
   extension/     # VS Code extension shell
-  mcp/           # Standalone MCP server (spawned by any MCP client)
+  mcp/           # MCP server: stdio + HTTP daemon transports
+bin/             # Standalone CLI entry point
 ```
 
-Two build outputs:
+Three build outputs:
 
 - `dist/extension.js` — VS Code extension host
-- `dist/mcp-server.js` — standalone Node.js MCP server
+- `dist/mcp-server.js` — standalone Node.js MCP server (stdio / HTTP daemon)
+- `dist/mcp-doc-search.js` — standalone CLI binary
 
 ## Contributing
 
