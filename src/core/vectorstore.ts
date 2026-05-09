@@ -76,7 +76,7 @@ export class LanceVectorStore {
     // If table exists, verify the vector dimension matches
     if (this.table) {
       const schema = await this.table.schema();
-      const vectorField = schema.fields.find((f: any) => f.name === "vector");
+      const vectorField = schema.fields.find((f) => f.name === "vector");
       const existingDim = vectorField?.type?.listSize;
       if (existingDim && existingDim !== vectorDim) {
         // Dimension mismatch — drop and recreate the table
@@ -126,14 +126,24 @@ export class LanceVectorStore {
 
     const results = await this.table.search(queryVector).distanceType("cosine").limit(n).toArray();
 
-    return results.map((r: any) => ({
-      file: r.file,
-      heading: r.heading,
-      lineStart: r.lineStart,
-      text: r.text,
-      _distance: r._distance ?? 0,
-      docid: r.docid ?? "",
-    }));
+    return results.map((row) => {
+      const r = row as {
+        file: string;
+        heading: string;
+        lineStart: number;
+        text: string;
+        _distance?: number;
+        docid?: string;
+      };
+      return {
+        file: r.file,
+        heading: r.heading,
+        lineStart: r.lineStart,
+        text: r.text,
+        _distance: r._distance ?? 0,
+        docid: r.docid ?? "",
+      };
+    });
   }
 
   async listFiles(): Promise<Array<{ file: string; title: string }>> {
@@ -141,7 +151,8 @@ export class LanceVectorStore {
 
     const results = await this.table.query().toArray();
     const seen = new Map<string, string>();
-    for (const r of results) {
+    for (const row of results) {
+      const r = row as { file: string; heading: string };
       if (!seen.has(r.file)) {
         seen.set(r.file, r.heading);
       }

@@ -38,8 +38,14 @@ jobs:
         run: npm run test:coverage
 
       - name: Audit dependencies
-        run: npm audit --audit-level=high
-        continue-on-error: true
+        # On a high-severity finding, surface as a yellow ::warning rather
+        # than a red ##[error] annotation. Dependabot security updates are
+        # the actual remediation channel; CI here is informational.
+        shell: bash
+        run: |
+          if ! npm audit --audit-level=high; then
+            echo "::warning::npm audit reported high-severity vulnerabilities — review Dependabot alerts"
+          fi
 
       - name: Upload coverage report
         if: always()
