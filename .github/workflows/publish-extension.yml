@@ -13,11 +13,63 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
+  # Block the publish until ci.yml has succeeded on the same commit.
+  # Tag pushes do not trigger ci.yml (it only listens to main pushes and
+  # PRs), so we wait for the ci.yml run that fired on the merge commit
+  # this tag points at. workflow_dispatch (manual smoke tests) skips
+  # the gate so dry-runs don't depend on a fresh CI run.
+  wait-for-ci:
+    name: Wait for ci.yml on this commit
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for ci.yml to succeed
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const head_sha = context.sha;
+            const TIMEOUT_MS = 30 * 60 * 1000;
+            const POLL_MS = 15 * 1000;
+            const start = Date.now();
+            core.info(`Waiting for ci.yml to complete successfully on ${head_sha}`);
+            while (Date.now() - start < TIMEOUT_MS) {
+              const { data } = await github.rest.actions.listWorkflowRuns({
+                owner,
+                repo,
+                workflow_id: 'ci.yml',
+                head_sha,
+                per_page: 5,
+              });
+              const run = data.workflow_runs[0];
+              if (!run) {
+                core.info(`No ci.yml run for ${head_sha} yet; polling`);
+              } else if (run.status === 'completed') {
+                if (run.conclusion === 'success') {
+                  core.info(`ci.yml passed (run ${run.id})`);
+                  return;
+                }
+                core.setFailed(
+                  `ci.yml for ${head_sha} concluded ${run.conclusion} (run ${run.id}); ` +
+                  `refusing to publish`,
+                );
+                return;
+              } else {
+                core.info(`ci.yml run ${run.id} status: ${run.status}; polling`);
+              }
+              await new Promise(r => setTimeout(r, POLL_MS));
+            }
+            core.setFailed(
+              `Timed out after ${TIMEOUT_MS / 1000}s waiting for ci.yml on ${head_sha}`,
+            );
+
   package:
     name: Package VSIX (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
+    needs: wait-for-ci
 
     strategy:
       fail-fast: false
