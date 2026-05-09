@@ -89,12 +89,12 @@ export interface LanceTable {
   schema(): Promise<{ fields: Array<{ name: string; type?: { listSize?: number } }> }>;
   search(vector: number[]): {
     distanceType(type: string): {
-      limit(n: number): { toArray(): Promise<any[]> };
+      limit(n: number): { toArray(): Promise<unknown[]> };
     };
   };
   delete(filter: string): Promise<void>;
-  add(records: any[]): Promise<void>;
-  query(): { toArray(): Promise<any[]> };
+  add(records: unknown[]): Promise<void>;
+  query(): { toArray(): Promise<unknown[]> };
   countRows(): Promise<number>;
 }
 
@@ -103,7 +103,7 @@ export interface LanceTable {
  */
 export interface LanceConnection {
   openTable(name: string): Promise<LanceTable>;
-  createTable(name: string, records: any[], options?: any): Promise<LanceTable>;
+  createTable(name: string, records: unknown[], options?: { mode?: string }): Promise<LanceTable>;
   dropTable(name: string): Promise<void>;
 }
 

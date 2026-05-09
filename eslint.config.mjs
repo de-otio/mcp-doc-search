@@ -21,4 +21,20 @@ export default [
       "security/detect-object-injection": "off",
     },
   },
+  {
+    // JSON / webview-message boundary code: the input shape is genuinely
+    // untyped at the wire, and per-property narrowing in every handler
+    // adds noise without value. Each handler's switch already validates
+    // msg.type before any field access.
+    files: [
+      "src/extension/searchPanel.ts",
+      "src/extension/mcpSetupPanel.ts",
+      "src/extension/indexStatusPanel.ts",
+      "src/extension/settingsPanel.ts",
+      "src/mcp/config.ts",
+    ],
+    rules: {
+      "@typescript-eslint/no-explicit-any": "off",
+    },
+  },
 ];

@@ -16,9 +16,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: npm
@@ -38,12 +38,18 @@ jobs:
         run: npm run test:coverage
 
       - name: Audit dependencies
-        run: npm audit --audit-level=high
-        continue-on-error: true
+        # On a high-severity finding, surface as a yellow ::warning rather
+        # than a red ##[error] annotation. Dependabot security updates are
+        # the actual remediation channel; CI here is informational.
+        shell: bash
+        run: |
+          if ! npm audit --audit-level=high; then
+            echo "::warning::npm audit reported high-severity vulnerabilities — review Dependabot alerts"
+          fi
 
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: coverage/
@@ -55,9 +61,9 @@ jobs:
     needs: test
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: npm
@@ -70,7 +76,7 @@ jobs:
       - run: npm run build
 
       - name: Upload dist artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
@@ -86,18 +92,18 @@ jobs:
       matrix:
         include:
           - target: darwin-arm64
-            runner: macos-14
+            runner: macos-latest
           - target: darwin-x64
-            runner: macos-13
+            runner: macos-15-intel
           - target: linux-x64
             runner: ubuntu-latest
           - target: win32-x64
             runner: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: npm
@@ -123,7 +129,7 @@ jobs:
         run: node scripts/verify-vsix.mjs --target=${{ matrix.target }}
 
       - name: Upload VSIX artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vsix-${{ matrix.target }}
           path: "*.vsix"
@@ -138,7 +144,7 @@ jobs:
       actions: write
 
     steps:
-      - uses: actions/github-script@v7
+      - uses: actions/github-script@v8
         with:
           script: |
             const { owner, repo } = context.repo;

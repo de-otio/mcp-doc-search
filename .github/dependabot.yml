@@ -10,6 +10,23 @@ updates:
         dependency-type: production
       development-dependencies:
         dependency-type: development
+    ignore:
+      # @types/vscode must not exceed engines.vscode (vsce package fails).
+      # Bump @types/vscode together with engines.vscode in a manual PR.
+      - dependency-name: "@types/vscode"
+      # transformers.js major bumps reshuffle the dist layout and blow the
+      # VSIX size cap until .vscodeignore + prune-platform-deps are
+      # updated. Re-evaluate manually for each major.
+      - dependency-name: "@huggingface/transformers"
+        update-types: ["version-update:semver-major"]
+      # lancedb pre-1.0 minor bumps regularly carry breaking native-binary
+      # layout changes; pin via manual review.
+      - dependency-name: "@lancedb/lancedb"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      # TypeScript major bumps need typecheck audit (tsc errors above are
+      # version-sensitive); review by hand.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: "/"
