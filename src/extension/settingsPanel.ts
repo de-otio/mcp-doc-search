@@ -549,6 +549,11 @@ export class SettingsPanel {
       status.className = ok ? "success" : "error";
     }
 
+    function clearStatus() {
+      status.textContent = "";
+      status.className = "";
+    }
+
     function collectConfig() {
       return {
         docGlob: $("docGlob").value,
@@ -577,6 +582,7 @@ export class SettingsPanel {
     }
 
     $("saveBtn").addEventListener("click", () => {
+      clearStatus();
       $("saveBtn").disabled = true;
       $("saveBtn").textContent = "Saving…";
       vscode.postMessage({ type: "saveConfig", config: collectConfig() });
@@ -619,6 +625,7 @@ export class SettingsPanel {
       if (msg.type === "ollamaStatus") updateOllamaStatus(msg.running, msg.installed);
       if (msg.type === "saveResult") {
         if (msg.ok) {
+          clearStatus();
           if (!msg.providerChanged) {
             $("savedBanner").classList.add("visible");
           }

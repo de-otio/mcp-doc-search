@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1]
+
+### Fixed
+
+- Settings panel: a "Save failed" banner now clears when the user retries
+  the save (and on success), instead of lingering after the underlying
+  problem has been corrected.
+
 ## [0.1.0]
 
 Initial public release.
@@ -33,5 +41,6 @@ Initial public release.
 - On-activation catch-up reindex when the workspace has changed since the
   last index run.
 
-[Unreleased]: https://github.com/de-otio/mcp-doc-search/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/de-otio/mcp-doc-search/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/de-otio/mcp-doc-search/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/de-otio/mcp-doc-search/releases/tag/v0.1.0
