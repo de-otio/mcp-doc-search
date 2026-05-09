@@ -98,7 +98,7 @@ jobs:
           ONNXRUNTIME_NODE_INSTALL_CUDA: skip
 
       - name: Download all per-target VSIXes
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           pattern: vsix-*
@@ -129,7 +129,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Download all per-target VSIXes
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           pattern: vsix-*
