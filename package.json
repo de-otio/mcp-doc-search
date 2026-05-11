@@ -187,7 +187,8 @@
         "docSearch.openaiApiKey": {
           "type": "string",
           "default": "",
-          "description": "OpenAI API key (used when embedProvider is 'openai')"
+          "description": "OpenAI API key (used when embedProvider is 'openai')",
+          "deprecationMessage": "The OpenAI API key is stored in VS Code's SecretStorage. Set it via the Doc Search Settings panel. This setting is ignored and a value here will be migrated to SecretStorage on next activation."
         },
         "docSearch.autoReindex": {
           "type": "boolean",

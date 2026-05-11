@@ -168,6 +168,22 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         DOC_SEARCH_WORKSPACE: workspaceRoot,
       };
 
+      // M1: the MCP server reads OPENAI_API_KEY only from env. If the user
+      // has the key in SecretStorage and is on the OpenAI provider, copy it
+      // into the .mcp.json env block so the standalone MCP server works
+      // out of the box. .mcp.json is gitignored by ensureGitignored() below,
+      // so the key stays local to the workspace.
+      const currentProvider = vscode.workspace
+        .getConfiguration("docSearch")
+        .get<string>("embedProvider", "local");
+      if (currentProvider === "openai") {
+        const apiKey = await context.secrets.get("docSearch.openaiApiKey");
+        if (apiKey) {
+          env.OPENAI_API_KEY = apiKey;
+          env.USE_OPENAI = "1";
+        }
+      }
+
       let mcpConfig: Record<string, unknown> = {};
       if (fs.existsSync(mcpJsonPath)) {
         try {

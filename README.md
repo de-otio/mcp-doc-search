@@ -92,7 +92,9 @@ remove_context("doc/api.md")
 | ----------------- | ---------------- | ----------------------------------------------------- | --------------- |
 | `local` (default) | Good (384-dim)   | None — ships with extension                           | Free            |
 | `ollama`          | Better (768-dim) | `brew install ollama && ollama pull nomic-embed-text` | Free            |
-| `openai`          | Best (1536-dim)  | Set `docSearch.openaiApiKey`                          | ~$0.02/M tokens |
+| `openai`          | Best (1536-dim)  | Enter the key in the Doc Search Settings panel        | ~$0.02/M tokens |
+
+The OpenAI API key is stored in VS Code's SecretStorage (the OS keychain) — never in `settings.json`. For the standalone MCP server and CLI, set the `OPENAI_API_KEY` environment variable in your `.mcp.json` `env` block or shell; the generated `.mcp.json` (via **Doc Search: Generate .mcp.json**) copies the key from SecretStorage into that block for you.
 
 ## CLI
 

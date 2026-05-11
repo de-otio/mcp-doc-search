@@ -88,7 +88,13 @@ export async function createEngineFromEnv(): Promise<EngineDeps> {
 
   let embedProvider: EmbedProvider;
   if (providerName === "openai") {
-    const apiKey = settings["docSearch.openaiApiKey"] ?? process.env.OPENAI_API_KEY ?? "";
+    // M1: never read the OpenAI key from settings.json. The extension stores
+    // it in VS Code's SecretStorage (per-machine, encrypted). For the MCP
+    // server and CLI the only supported source is the OPENAI_API_KEY env var,
+    // set by the user in .mcp.json or their shell. Reading settings.json
+    // here exposed the key in plaintext via JSONC parsing of a file that
+    // is commonly committed to repos.
+    const apiKey = process.env.OPENAI_API_KEY ?? "";
     embedProvider = new OpenAIEmbedder(apiKey);
   } else if (providerName === "ollama") {
     const ollamaModel =

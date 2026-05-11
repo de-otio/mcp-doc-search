@@ -94,6 +94,13 @@ describe("Commands", () => {
     vi.mocked(vscode.window.withProgress).mockImplementation(async (_opts, cb) =>
       cb({ report: vi.fn() } as any),
     );
+
+    // Default config mock used by docSearch.generateMcpJson and others that
+    // peek at the current embed provider.
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+      get: vi.fn((_key: string, defaultValue: any) => defaultValue),
+      update: vi.fn(),
+    } as any);
   });
 
   function findHandler(name: string): any {
