@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-11
+
+Security release. Addresses findings from the 2026-05-09 internal
+security review (three HIGH, four MEDIUM, three LOW); no externally-
+reported CVEs. Minor-version bump because the API-key handling and
+path-validation changes affect user-visible behavior (and one
+deprecated `settings.json` field).
+
+### Security
+
+- **Path traversal in `get` / `multi_get` / `resolveRef` (H1, H2,
+  M4, L2).** The legacy `rel.startsWith("..")` checks missed
+  mid-path escapes like `doc/../../etc/passwd`, and the CLI's
+  `get` / `multi-get` accepted absolute paths outright. A shared
+  `resolveSafePath` helper now backs every site that maps a
+  user-supplied ref to a filesystem path; absolute refs, leading
+  `..`, mid-path `..` that escapes the root, and Windows-style
+  separators are all rejected. The configured `indexDir` and
+  `docGlob` are likewise validated — escape attempts fall back to
+  the defaults with a stderr warning.
+- **OpenAI API key was written to `.vscode/settings.json` (H3,
+  M1).** The Settings panel previously persisted the key via
+  `cfg.update("openaiApiKey", ...)`, which lands in plaintext in a
+  file commonly committed to repos. The panel now reads and writes
+  the key exclusively from VS Code's SecretStorage. The MCP server
+  and CLI read the key only from `OPENAI_API_KEY` env — never from
+  `settings.json`. The `docSearch.openaiApiKey` setting is marked
+  deprecated; the generated `.mcp.json` copies the key from
+  SecretStorage into the env block (the file is gitignored by the
+  same command).
+- **Absolute filesystem paths leaked in MCP error responses (M3).**
+  Caught exceptions previously surfaced raw `String(err)` to JSON-RPC
+  clients, often embedding the user's home directory, repo path,
+  and sometimes customer / project names. A new
+  `sanitizeForClient` helper routes every catch-handler in the MCP
+  transport and tool surface through a regex that strips POSIX,
+  Windows-drive, and UNC absolute paths. The full error still goes
+  to stderr for the operator.
+- **HTTP daemon could buffer unbounded request bodies (M2).** The
+  Streamable HTTP transport's `readBody` now caps the request at
+  10 MB; overflow returns 413 and closes the socket. Real MCP
+  requests are JSON-RPC envelopes of a few KB, so the cap is
+  generous but bounds worst-case memory.
+- **PID file race on daemon start (L3).** `writePidFile` now uses
+  `O_EXCL` to refuse clobbering a live daemon's pidfile, with stale
+  detection for the case where the previous daemon crashed. Every
+  `process.kill()` in `stopDaemon` treats `ESRCH` (process already
+  gone) as success rather than fatal, so a race between liveness
+  check and signal delivery never leaves a stranded pidfile.
+- **Webview message handlers (L1).** `openUrl` in the Settings
+  panel now allows only `http(s)`; other schemes (`file:`,
+  `vscode:`, `javascript:`, `data:`, …) are dropped silently.
+  `openResult` in the Search panel validates the relative file ref
+  before joining onto the workspace root.
+
+### Changed
+
+- **Settings: `docSearch.openaiApiKey` is deprecated.** Existing
+  values are migrated to SecretStorage on activation; the setting
+  is no longer read at runtime by either the extension or the MCP
+  server. Set the key in the Doc Search Settings panel instead.
+
 ## [0.1.3] - 2026-05-11
 
 ### Fixed
@@ -111,7 +173,8 @@ Initial public release.
 - On-activation catch-up reindex when the workspace has changed since the
   last index run.
 
-[Unreleased]: https://github.com/de-otio/mcp-doc-search/compare/ext-v0.1.3...HEAD
+[Unreleased]: https://github.com/de-otio/mcp-doc-search/compare/ext-v0.2.0...HEAD
+[0.2.0]: https://github.com/de-otio/mcp-doc-search/compare/ext-v0.1.3...ext-v0.2.0
 [0.1.3]: https://github.com/de-otio/mcp-doc-search/compare/ext-v0.1.2...ext-v0.1.3
 [0.1.2]: https://github.com/de-otio/mcp-doc-search/compare/ext-v0.1.1...ext-v0.1.2
 [0.1.1]: https://github.com/de-otio/mcp-doc-search/compare/ext-v0.1.0...ext-v0.1.1
