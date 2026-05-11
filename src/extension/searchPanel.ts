@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { search } from "../core/searcher.js";
+import { isSafeRelativeRef } from "../core/safePath.js";
 import type { EmbedProvider } from "../core/types.js";
 import type { LanceVectorStore } from "../core/vectorstore.js";
 import { getNonce } from "./utils.js";
@@ -87,6 +88,11 @@ export class SearchPanel {
       }
 
       case "openResult": {
+        // L1: validate msg.file before joining onto workspaceRoot. The
+        // webview is trusted today, but a future render bug could turn a
+        // search result path into ../../etc/passwd. isSafeRelativeRef
+        // rejects absolute paths and any `..` segment.
+        if (typeof msg.file !== "string" || !isSafeRelativeRef(msg.file)) break;
         const absPath = vscode.Uri.joinPath(vscode.Uri.file(this.deps.workspaceRoot), msg.file);
         await vscode.commands.executeCommand("markdown.showPreviewToSide", absPath);
         break;
