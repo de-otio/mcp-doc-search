@@ -23,6 +23,12 @@ describe("SettingsPanel", () => {
 
     mockContext = {
       subscriptions: [],
+      secrets: {
+        get: vi.fn().mockResolvedValue(""),
+        store: vi.fn().mockResolvedValue(undefined),
+        delete: vi.fn().mockResolvedValue(undefined),
+        onDidChange: vi.fn(),
+      },
     };
 
     SettingsPanel.reset();
@@ -261,6 +267,117 @@ describe("SettingsPanel", () => {
 
       expect(fetchSpy).toHaveBeenCalledWith("http://localhost:11434");
       fetchSpy.mockRestore();
+    });
+
+    // -----------------------------------------------------------------------
+    // H3: OpenAI API key lives in SecretStorage, never in settings.json
+    // -----------------------------------------------------------------------
+
+    it("on ready, reads openaiApiKey from SecretStorage and not from settings.json", async () => {
+      mockContext.secrets.get.mockResolvedValue("sk-from-secrets");
+
+      SettingsPanel.createOrShow(mockContext);
+      const handler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
+      await handler({ type: "ready" });
+
+      expect(mockContext.secrets.get).toHaveBeenCalledWith("docSearch.openaiApiKey");
+
+      const configMessage = mockPanel.webview.postMessage.mock.calls.find(
+        (c: any) => c[0].type === "config",
+      );
+      expect(configMessage?.[0].config.openaiApiKey).toBe("sk-from-secrets");
+
+      // Verify the panel never asked workspace settings for the key.
+      const cfgGetCalls = vi
+        .mocked(vscode.workspace.getConfiguration)
+        .mock.results[0]?.value.get.mock.calls.map((c: any) => c[0]);
+      expect(cfgGetCalls).not.toContain("openaiApiKey");
+    });
+
+    it("on saveConfig with a key, writes to SecretStorage and not to cfg.update", async () => {
+      SettingsPanel.createOrShow(mockContext);
+      const handler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
+
+      await handler({
+        type: "saveConfig",
+        config: {
+          docGlob: "doc/**/*.md",
+          indexDir: ".doc-search-index",
+          headingDepth: 2,
+          maxChunkChars: 4000,
+          embedProvider: "openai",
+          ollamaUrl: "http://localhost:11434",
+          ollamaModel: "nomic-embed-text",
+          openaiApiKey: "sk-newkey",
+          autoReindex: true,
+        },
+      });
+
+      expect(mockContext.secrets.store).toHaveBeenCalledWith("docSearch.openaiApiKey", "sk-newkey");
+
+      // Verify cfg.update was never called with openaiApiKey as the key,
+      // even when the panel saves a value. This is the core invariant.
+      const cfg = vi.mocked(vscode.workspace.getConfiguration).mock.results[0]?.value;
+      const updateKeys = cfg.update.mock.calls.map((c: any) => c[0]);
+      expect(updateKeys).not.toContain("openaiApiKey");
+    });
+
+    it("on saveConfig with an empty key, deletes the secret", async () => {
+      SettingsPanel.createOrShow(mockContext);
+      const handler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
+
+      await handler({
+        type: "saveConfig",
+        config: {
+          docGlob: "doc/**/*.md",
+          indexDir: ".doc-search-index",
+          headingDepth: 2,
+          maxChunkChars: 4000,
+          embedProvider: "openai",
+          ollamaUrl: "http://localhost:11434",
+          ollamaModel: "nomic-embed-text",
+          openaiApiKey: "",
+          autoReindex: true,
+        },
+      });
+
+      expect(mockContext.secrets.delete).toHaveBeenCalledWith("docSearch.openaiApiKey");
+      expect(mockContext.secrets.store).not.toHaveBeenCalled();
+    });
+
+    it("clears a legacy settings.json key on save", async () => {
+      // Simulate a pre-migration install: openaiApiKey lingering in workspace settings.
+      const cfg = vi.mocked(vscode.workspace.getConfiguration).mock.results;
+      // Reconfigure the default mock to return a stale value for openaiApiKey.
+      vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+        get: vi.fn((key: string, def: any) =>
+          key === "openaiApiKey" ? "sk-legacy" : key === "embedProvider" ? "local" : def,
+        ),
+        update: vi.fn(),
+      } as any);
+
+      SettingsPanel.createOrShow(mockContext);
+      const handler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
+
+      await handler({
+        type: "saveConfig",
+        config: {
+          docGlob: "doc/**/*.md",
+          indexDir: ".doc-search-index",
+          headingDepth: 2,
+          maxChunkChars: 4000,
+          embedProvider: "openai",
+          ollamaUrl: "http://localhost:11434",
+          ollamaModel: "nomic-embed-text",
+          openaiApiKey: "sk-new",
+          autoReindex: true,
+        },
+      });
+
+      // The latest getConfiguration mock should have been asked to clear the legacy key.
+      const latestCfg = vi.mocked(vscode.workspace.getConfiguration).mock.results.at(-1)?.value;
+      expect(latestCfg.update).toHaveBeenCalledWith("openaiApiKey", undefined, expect.anything());
+      void cfg;
     });
 
     it("saveConfig with providerChanged kicks docSearch.reindex", async () => {

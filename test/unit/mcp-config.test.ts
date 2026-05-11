@@ -177,6 +177,48 @@ describe("MCP Config", () => {
       }
     });
 
+    // ---------------------------------------------------------------------
+    // M1: OpenAI key is read only from OPENAI_API_KEY env var
+    // ---------------------------------------------------------------------
+
+    it("ignores settings.json's openaiApiKey for the OpenAI provider (M1)", async () => {
+      const { readFileSync } = await import("node:fs");
+      const { connect } = await import("@lancedb/lancedb");
+
+      vi.mocked(readFileSync).mockReturnValue(
+        JSON.stringify({
+          "docSearch.embedProvider": "openai",
+          "docSearch.openaiApiKey": "sk-from-settings",
+        }),
+      );
+      vi.mocked(connect).mockResolvedValue({
+        openTable: vi.fn().mockRejectedValue(new Error("Not found")),
+      });
+
+      delete process.env.OPENAI_API_KEY;
+
+      // OpenAIEmbedder rejects an empty key — proves we didn't pick up
+      // sk-from-settings from the JSONC file.
+      await expect(createEngineFromEnv()).rejects.toThrow("OpenAI API key is required");
+    });
+
+    it("uses OPENAI_API_KEY env var when set (M1)", async () => {
+      const { readFileSync } = await import("node:fs");
+      const { connect } = await import("@lancedb/lancedb");
+
+      vi.mocked(readFileSync).mockReturnValue(
+        JSON.stringify({ "docSearch.embedProvider": "openai" }),
+      );
+      vi.mocked(connect).mockResolvedValue({
+        openTable: vi.fn().mockRejectedValue(new Error("Not found")),
+      });
+
+      process.env.OPENAI_API_KEY = "sk-from-env";
+      const engine = await createEngineFromEnv();
+      expect(engine.embedProvider).toBeDefined();
+      delete process.env.OPENAI_API_KEY;
+    });
+
     it("falls back to default docGlob when configured value is absolute (L2)", async () => {
       const { readFileSync } = await import("node:fs");
       const { connect } = await import("@lancedb/lancedb");

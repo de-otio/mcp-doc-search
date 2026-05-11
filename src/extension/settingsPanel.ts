@@ -3,9 +3,13 @@ import { execFile } from "node:child_process";
 import { OllamaEmbedder, OpenAIEmbedder } from "../core/embedder.js";
 import { getNonce } from "./utils.js";
 
+/** SecretStorage key for the OpenAI API key. Single source of truth. */
+const OPENAI_SECRET_KEY = "docSearch.openaiApiKey";
+
 export class SettingsPanel {
   private static instance: SettingsPanel | undefined;
   private readonly panel: vscode.WebviewPanel;
+  private readonly secrets: vscode.SecretStorage;
   private disposed = false;
 
   static reset(): void {
@@ -28,6 +32,7 @@ export class SettingsPanel {
 
   private constructor(panel: vscode.WebviewPanel, context: vscode.ExtensionContext) {
     this.panel = panel;
+    this.secrets = context.secrets;
     this.panel.webview.html = this.getHtml();
 
     this.panel.onDidDispose(() => {
@@ -46,6 +51,10 @@ export class SettingsPanel {
     switch (msg.type) {
       case "ready": {
         const cfg = vscode.workspace.getConfiguration("docSearch");
+        // H3: read the OpenAI key from SecretStorage, not from settings.json.
+        // The cfg.get("openaiApiKey", "") path is intentionally absent here so
+        // a stale settings.json value can't leak into the panel.
+        const openaiApiKey = (await this.secrets.get(OPENAI_SECRET_KEY)) ?? "";
         this.panel.webview.postMessage({
           type: "config",
           config: {
@@ -56,7 +65,7 @@ export class SettingsPanel {
             embedProvider: cfg.get("embedProvider", "local"),
             ollamaUrl: cfg.get("ollamaUrl", "http://localhost:11434"),
             ollamaModel: cfg.get("ollamaModel", "nomic-embed-text"),
-            openaiApiKey: cfg.get("openaiApiKey", ""),
+            openaiApiKey,
             autoReindex: cfg.get("autoReindex", true),
           },
         });
@@ -77,8 +86,23 @@ export class SettingsPanel {
           await cfg.update("embedProvider", msg.config.embedProvider, target);
           await cfg.update("ollamaUrl", msg.config.ollamaUrl, target);
           await cfg.update("ollamaModel", msg.config.ollamaModel, target);
-          await cfg.update("openaiApiKey", msg.config.openaiApiKey, target);
           await cfg.update("autoReindex", msg.config.autoReindex, target);
+
+          // H3: persist the OpenAI key to SecretStorage only. Empty string
+          // deletes the secret so the user can clear it from the UI.
+          const newKey = typeof msg.config.openaiApiKey === "string" ? msg.config.openaiApiKey : "";
+          if (newKey) {
+            await this.secrets.store(OPENAI_SECRET_KEY, newKey);
+          } else {
+            await this.secrets.delete(OPENAI_SECRET_KEY);
+          }
+          // Belt-and-braces: if a value still lingers in settings.json from a
+          // pre-migration install, clear it. Older versions wrote here and
+          // the migration in extension/config.ts also clears it, but a panel
+          // save is the user's clear intent — re-assert the invariant.
+          if (cfg.get("openaiApiKey", "")) {
+            await cfg.update("openaiApiKey", undefined, target);
+          }
 
           const providerChanged =
             oldProvider !== msg.config.embedProvider ||
@@ -402,7 +426,7 @@ export class SettingsPanel {
       <label for="openaiApiKey">OpenAI API key</label>
       <div class="hint">Found at platform.openai.com → API keys.</div>
       <input type="password" id="openaiApiKey" placeholder="sk-...">
-      <div class="warning">This key is saved to .vscode/settings.json. Add that file to .gitignore to avoid accidentally sharing it.</div>
+      <div class="hint">Stored in VS Code's SecretStorage (the OS keychain), never in settings.json. For the MCP server and CLI, set the <code>OPENAI_API_KEY</code> environment variable in your <code>.mcp.json</code>.</div>
     </div>
     <button class="btn-secondary" id="testOpenai">Test Connection</button>
   </div>
