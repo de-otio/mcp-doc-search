@@ -107,5 +107,95 @@ describe("MCP Config", () => {
       expect(engine).toHaveProperty("indexer");
       expect(engine).toHaveProperty("embedProvider");
     });
+
+    // ---------------------------------------------------------------------
+    // M4 + L2: unsafe configuration is rejected with a stderr warning
+    // ---------------------------------------------------------------------
+
+    it("falls back to default indexDir when configured value escapes the workspace (M4)", async () => {
+      const { readFileSync } = await import("node:fs");
+      const { connect } = await import("@lancedb/lancedb");
+
+      vi.mocked(readFileSync).mockReturnValue(
+        JSON.stringify({ "docSearch.indexDir": "../../../etc/evil" }),
+      );
+      vi.mocked(connect).mockResolvedValue({
+        openTable: vi.fn().mockRejectedValue(new Error("Not found")),
+      });
+      const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+      try {
+        await createEngineFromEnv();
+        const warning = stderrSpy.mock.calls.map((c) => String(c[0])).join("");
+        expect(warning).toMatch(/rejecting unsafe indexDir/);
+        expect(warning).toContain(".doc-search-index");
+      } finally {
+        stderrSpy.mockRestore();
+      }
+    });
+
+    it("falls back to default indexDir when configured value is absolute (M4)", async () => {
+      const { readFileSync } = await import("node:fs");
+      const { connect } = await import("@lancedb/lancedb");
+
+      vi.mocked(readFileSync).mockReturnValue(
+        JSON.stringify({ "docSearch.indexDir": "/tmp/evil-index" }),
+      );
+      vi.mocked(connect).mockResolvedValue({
+        openTable: vi.fn().mockRejectedValue(new Error("Not found")),
+      });
+      const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+      try {
+        await createEngineFromEnv();
+        const warning = stderrSpy.mock.calls.map((c) => String(c[0])).join("");
+        expect(warning).toMatch(/rejecting unsafe indexDir/);
+      } finally {
+        stderrSpy.mockRestore();
+      }
+    });
+
+    it("falls back to default docGlob when configured value contains .. (L2)", async () => {
+      const { readFileSync } = await import("node:fs");
+      const { connect } = await import("@lancedb/lancedb");
+
+      vi.mocked(readFileSync).mockReturnValue(
+        JSON.stringify({ "docSearch.docGlob": "../../**/*.md" }),
+      );
+      vi.mocked(connect).mockResolvedValue({
+        openTable: vi.fn().mockRejectedValue(new Error("Not found")),
+      });
+      const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+      try {
+        await createEngineFromEnv();
+        const warning = stderrSpy.mock.calls.map((c) => String(c[0])).join("");
+        expect(warning).toMatch(/rejecting unsafe docGlob/);
+        expect(warning).toContain("doc/**/*.md");
+      } finally {
+        stderrSpy.mockRestore();
+      }
+    });
+
+    it("falls back to default docGlob when configured value is absolute (L2)", async () => {
+      const { readFileSync } = await import("node:fs");
+      const { connect } = await import("@lancedb/lancedb");
+
+      vi.mocked(readFileSync).mockReturnValue(
+        JSON.stringify({ "docSearch.docGlob": "/etc/**/*.conf" }),
+      );
+      vi.mocked(connect).mockResolvedValue({
+        openTable: vi.fn().mockRejectedValue(new Error("Not found")),
+      });
+      const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+      try {
+        await createEngineFromEnv();
+        const warning = stderrSpy.mock.calls.map((c) => String(c[0])).join("");
+        expect(warning).toMatch(/rejecting unsafe docGlob/);
+      } finally {
+        stderrSpy.mockRestore();
+      }
+    });
   });
 });

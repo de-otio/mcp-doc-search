@@ -19,6 +19,7 @@ import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { createEngineFromEnv } from "../src/mcp/config.js";
 import { search } from "../src/core/searcher.js";
+import { PathTraversalError, resolveSafePath } from "../src/core/safePath.js";
 
 // ---------------------------------------------------------------------------
 // Minimal hand-rolled arg parser
@@ -262,7 +263,7 @@ async function cmdReindex(flags: Record<string, string | boolean>): Promise<void
   );
 }
 
-async function cmdGet(
+export async function cmdGet(
   positionals: string[],
   flags: Record<string, string | boolean>,
 ): Promise<void> {
@@ -278,7 +279,16 @@ async function cmdGet(
   const asJson = getFlag(flags, "json", false);
 
   const workspaceRoot = process.env.DOC_SEARCH_WORKSPACE ?? process.cwd();
-  const absPath = path.isAbsolute(ref) ? ref : path.join(workspaceRoot, ref);
+  let absPath: string;
+  try {
+    absPath = resolveSafePath(workspaceRoot, ref);
+  } catch (err) {
+    if (err instanceof PathTraversalError) {
+      printError(`${err.message}. Refs must be relative paths inside the workspace.`);
+      process.exit(1);
+    }
+    throw err;
+  }
 
   if (!existsSync(absPath)) {
     printError(`File not found: ${ref}`);
@@ -295,7 +305,7 @@ async function cmdGet(
   process.stdout.write(text + "\n");
 }
 
-async function cmdMultiGet(
+export async function cmdMultiGet(
   positionals: string[],
   flags: Record<string, string | boolean>,
 ): Promise<void> {
@@ -333,7 +343,16 @@ async function cmdMultiGet(
 
   const results: Array<{ file: string; text: string; error?: string }> = [];
   for (const rel of matchedFiles) {
-    const absPath = path.isAbsolute(rel) ? rel : path.join(workspaceRoot, rel);
+    let absPath: string;
+    try {
+      absPath = resolveSafePath(workspaceRoot, rel);
+    } catch (err) {
+      if (err instanceof PathTraversalError) {
+        results.push({ file: rel, text: "", error: err.message });
+        continue;
+      }
+      throw err;
+    }
     if (!existsSync(absPath)) {
       results.push({ file: rel, text: "", error: "not found" });
       continue;
