@@ -142,12 +142,14 @@ describe("OpenAIEmbedder", () => {
 // LocalEmbedder (mocked — avoids downloading the real ONNX model)
 // ---------------------------------------------------------------------------
 
-// We use vi.doMock (not hoisted) so we can reference local variables in the factory.
+// We inject a fake `loader` so tests never actually require the real
+// @huggingface/transformers package (which would download a model).
 
 describe("LocalEmbedder", () => {
   let fakePipelineFn: ReturnType<typeof vi.fn>;
   let fakePipelineFactory: ReturnType<typeof vi.fn>;
   let fakeEnv: { localModelPath: string };
+  let fakeLoader: () => typeof import("@huggingface/transformers");
 
   beforeEach(() => {
     fakeEnv = { localModelPath: "" };
@@ -155,22 +157,19 @@ describe("LocalEmbedder", () => {
       data: new Float32Array([0.1, 0.2, 0.3]),
     }));
     fakePipelineFactory = vi.fn(async () => fakePipelineFn);
-
-    vi.doMock("@huggingface/transformers", () => ({
-      pipeline: fakePipelineFactory,
-      env: fakeEnv,
-    }));
+    fakeLoader = () =>
+      ({
+        pipeline: fakePipelineFactory,
+        env: fakeEnv,
+      }) as unknown as typeof import("@huggingface/transformers");
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.doUnmock("@huggingface/transformers");
   });
 
   it("calls the transformers pipeline and returns float arrays", async () => {
-    // Re-import after doMock to pick up the mock
-    const { LocalEmbedder: MockedLocalEmbedder } = await import("../../src/core/embedder.js");
-    const embedder = new MockedLocalEmbedder();
+    const embedder = new LocalEmbedder({ loader: fakeLoader });
     const result = await embedder.embed(["hello world"]);
 
     expect(result).toHaveLength(1);
@@ -182,8 +181,7 @@ describe("LocalEmbedder", () => {
   });
 
   it("ignores the prefix parameter", async () => {
-    const { LocalEmbedder: MockedLocalEmbedder } = await import("../../src/core/embedder.js");
-    const embedder = new MockedLocalEmbedder();
+    const embedder = new LocalEmbedder({ loader: fakeLoader });
     await embedder.embed(["test"], "search_document: ");
 
     // The pipeline is called with the raw text, NOT with the prefix
@@ -194,16 +192,14 @@ describe("LocalEmbedder", () => {
   });
 
   it("sets localModelPath on env when modelPath is provided", async () => {
-    const { LocalEmbedder: MockedLocalEmbedder } = await import("../../src/core/embedder.js");
-    const embedder = new MockedLocalEmbedder({ modelPath: "/tmp/models" });
+    const embedder = new LocalEmbedder({ modelPath: "/tmp/models", loader: fakeLoader });
     await embedder.embed(["test"]);
 
     expect(fakeEnv.localModelPath).toBe("/tmp/models");
   });
 
   it("reuses the pipeline across multiple embed calls", async () => {
-    const { LocalEmbedder: MockedLocalEmbedder } = await import("../../src/core/embedder.js");
-    const embedder = new MockedLocalEmbedder();
+    const embedder = new LocalEmbedder({ loader: fakeLoader });
     await embedder.embed(["first"]);
     await embedder.embed(["second"]);
 

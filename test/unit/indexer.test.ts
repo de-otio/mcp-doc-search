@@ -104,6 +104,7 @@ describe("Indexer", () => {
 
       expect(stats.indexed).toBe(1);
       expect(stats.failedFiles).toBe(1);
+      expect(stats.firstError).toBe("Embedding failed");
     });
 
     it("should skip unchanged files when force=false", async () => {

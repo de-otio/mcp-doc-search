@@ -53,6 +53,8 @@ export interface IndexStats {
   durationMs: number;
   /** Files removed from vector store (deleted/renamed/glob-excluded) */
   pruned: number;
+  /** First error encountered (embedding/upsert) — surfaced so the UI can show why files failed. */
+  firstError?: string;
 }
 
 export interface IndexStatus {

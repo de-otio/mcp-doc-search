@@ -3,7 +3,20 @@
  * All implement the EmbedProvider interface.
  */
 
+import { createRequire } from "node:module";
 import type { EmbedProvider, EmbedderPipeline } from "./types.js";
+
+// WHY require() (not dynamic import()):
+//   The published VSIX ships only @huggingface/transformers/dist/transformers.node.cjs;
+//   the .mjs is stripped in .vscodeignore to keep the bundle small. The package's
+//   exports map routes `import()` to .mjs and `require()` to .cjs, so using
+//   `await import(...)` resolves to the missing .mjs and crashes at runtime.
+//   Wrapped in an indirection so tests can swap it out without fighting
+//   vitest's module resolver.
+const requireCjs = createRequire(__filename);
+export function loadTransformers(): typeof import("@huggingface/transformers") {
+  return requireCjs("@huggingface/transformers");
+}
 
 /**
  * Fetch with timeout and single retry on network errors.
@@ -46,14 +59,16 @@ async function fetchWithTimeout(
 export class LocalEmbedder implements EmbedProvider {
   private pipeline: EmbedderPipeline | null = null;
   private modelPath: string | undefined;
+  private loader: typeof loadTransformers;
 
-  constructor(options?: { modelPath?: string }) {
+  constructor(options?: { modelPath?: string; loader?: typeof loadTransformers }) {
     this.modelPath = options?.modelPath;
+    this.loader = options?.loader ?? loadTransformers;
   }
 
   async embed(texts: string[]): Promise<number[][]> {
     if (!this.pipeline) {
-      const { pipeline, env } = await import("@huggingface/transformers");
+      const { pipeline, env } = this.loader();
       if (this.modelPath) {
         env.localModelPath = this.modelPath;
       }
