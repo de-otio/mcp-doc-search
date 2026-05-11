@@ -340,4 +340,62 @@ describe("CLI subcommands", () => {
       expect(parsed[0]).toHaveProperty("text");
     });
   });
+
+  // -------------------------------------------------------------------------
+  // get / multi-get — path traversal (H2)
+  // -------------------------------------------------------------------------
+
+  describe("get path traversal", () => {
+    it("rejects ../etc/passwd with exit(1) and a 'Path traversal blocked' error", async () => {
+      const { cmdGet } = await import("../../bin/mcp-doc-search.js");
+      process.env.DOC_SEARCH_WORKSPACE = "/tmp/test-workspace";
+
+      await expect(cmdGet(["../etc/passwd"], {})).rejects.toThrow("process.exit(1)");
+
+      const stderrCalls = stderrSpy.mock.calls.map((c) => String(c[0])).join("");
+      expect(stderrCalls).toMatch(/Path traversal blocked/);
+    });
+
+    it("rejects /etc/passwd (absolute) with exit(1)", async () => {
+      const { cmdGet } = await import("../../bin/mcp-doc-search.js");
+      process.env.DOC_SEARCH_WORKSPACE = "/tmp/test-workspace";
+
+      await expect(cmdGet(["/etc/passwd"], {})).rejects.toThrow("process.exit(1)");
+
+      const stderrCalls = stderrSpy.mock.calls.map((c) => String(c[0])).join("");
+      expect(stderrCalls).toMatch(/Path traversal blocked/);
+    });
+
+    it("rejects mid-path .. escape with exit(1)", async () => {
+      const { cmdGet } = await import("../../bin/mcp-doc-search.js");
+      process.env.DOC_SEARCH_WORKSPACE = "/tmp/test-workspace";
+
+      await expect(cmdGet(["doc/../../etc/passwd"], {})).rejects.toThrow("process.exit(1)");
+    });
+
+    it("error message does not include the workspace absolute path", async () => {
+      const { cmdGet } = await import("../../bin/mcp-doc-search.js");
+      process.env.DOC_SEARCH_WORKSPACE = "/secret/customer/workspace";
+
+      await expect(cmdGet(["../etc/passwd"], {})).rejects.toThrow();
+
+      const stderrCalls = stderrSpy.mock.calls.map((c) => String(c[0])).join("");
+      expect(stderrCalls).not.toContain("/secret/customer");
+    });
+  });
+
+  describe("multi-get path traversal", () => {
+    it("reports a per-file traversal error in results for ../etc/passwd", async () => {
+      const { cmdMultiGet } = await import("../../bin/mcp-doc-search.js");
+      process.env.DOC_SEARCH_WORKSPACE = "/tmp/test-workspace";
+
+      // Comma-separated list bypasses the glob branch and goes straight to per-rel
+      // resolution. Include a real-looking ref alongside the traversal attempt so the
+      // results array isn't empty.
+      await cmdMultiGet(["doc/legit.md,../../etc/passwd"], { json: true });
+
+      const stdoutCalls = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+      expect(stdoutCalls).toMatch(/Path traversal blocked/);
+    });
+  });
 });

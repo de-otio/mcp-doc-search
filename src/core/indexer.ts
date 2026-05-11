@@ -8,6 +8,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { glob } from "glob";
 import { chunkMarkdown, computeDocid } from "./chunker.js";
+import { PathTraversalError, resolveSafePath } from "./safePath.js";
 import type { IndexerConfig, IndexStats, IndexStatus, PathContext } from "./types.js";
 import type { LanceVectorStore, VectorRecord } from "./vectorstore.js";
 
@@ -434,24 +435,32 @@ export class Indexer {
       if (!rel) {
         return { error: `No file found for docid: ${docid}` };
       }
-      const absPath = path.join(this.config.workspaceRoot, rel);
+      let absPath: string;
+      try {
+        absPath = resolveSafePath(this.config.workspaceRoot, rel);
+      } catch (err) {
+        if (err instanceof PathTraversalError) return { error: err.message };
+        throw err;
+      }
       if (!existsSync(absPath)) {
-        return { error: `File not found: ${absPath}` };
+        return { error: `File not found for docid: ${docid}` };
       }
       return { file: absPath, docid };
     }
 
-    // Treat as a relative path
-    const rel = trimmed.replace(/\\/g, "/");
-    // Prevent path traversal
-    if (rel.startsWith("..") || path.isAbsolute(rel)) {
-      return { error: `Path traversal blocked: ${trimmed}` };
+    // Treat as a relative path.
+    let absPath: string;
+    try {
+      absPath = resolveSafePath(this.config.workspaceRoot, trimmed);
+    } catch (err) {
+      if (err instanceof PathTraversalError) return { error: err.message };
+      throw err;
     }
-    const absPath = path.join(this.config.workspaceRoot, rel);
+    const rel = path.relative(this.config.workspaceRoot, absPath).replace(/\\/g, "/");
     if (!existsSync(absPath)) {
-      return { error: `File not found: ${absPath}` };
+      return { error: `File not found: ${rel}` };
     }
-    // Look up docid from cache, or compute on the fly
+    // Look up docid from cache, or compute on the fly.
     const cache = this.loadMtimeCache();
     const entry = cache[rel] ? normalizeCacheEntry(cache[rel]) : undefined;
     let docid = entry?.docid ?? "";

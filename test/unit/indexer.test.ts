@@ -598,6 +598,62 @@ describe("Indexer context API", () => {
       expect("error" in result).toBe(true);
     });
 
+    it("rejects an absolute path with a path-traversal error", async () => {
+      const { existsSync, readFileSync } = await import("node:fs");
+      vi.mocked(existsSync).mockReturnValue(false);
+      vi.mocked(readFileSync).mockReturnValue("");
+
+      const indexer = makeIndexer();
+      const result = indexer.resolveRef("/etc/passwd");
+
+      expect("error" in result).toBe(true);
+      if ("error" in result) {
+        expect(result.error).toMatch(/Path traversal blocked/);
+      }
+    });
+
+    it("rejects a leading `..` ref with a path-traversal error", async () => {
+      const { existsSync, readFileSync } = await import("node:fs");
+      vi.mocked(existsSync).mockReturnValue(false);
+      vi.mocked(readFileSync).mockReturnValue("");
+
+      const indexer = makeIndexer();
+      const result = indexer.resolveRef("../etc/passwd");
+
+      expect("error" in result).toBe(true);
+      if ("error" in result) {
+        expect(result.error).toMatch(/Path traversal blocked/);
+      }
+    });
+
+    it("rejects mid-path `..` that escapes the workspace", async () => {
+      const { existsSync, readFileSync } = await import("node:fs");
+      vi.mocked(existsSync).mockReturnValue(false);
+      vi.mocked(readFileSync).mockReturnValue("");
+
+      const indexer = makeIndexer();
+      const result = indexer.resolveRef("doc/../../etc/passwd");
+
+      expect("error" in result).toBe(true);
+      if ("error" in result) {
+        expect(result.error).toMatch(/Path traversal blocked/);
+      }
+    });
+
+    it("error messages do not leak the workspace absolute path", async () => {
+      const { existsSync, readFileSync } = await import("node:fs");
+      vi.mocked(existsSync).mockReturnValue(false);
+      vi.mocked(readFileSync).mockReturnValue("");
+
+      const indexer = makeIndexer();
+      for (const ref of ["../etc/passwd", "/etc/passwd", "doc/missing.md", "#zzz999"]) {
+        const result = indexer.resolveRef(ref);
+        if ("error" in result) {
+          expect(result.error).not.toContain("/workspace");
+        }
+      }
+    });
+
     it("handles old-format cache (mtime string only) gracefully", async () => {
       const { existsSync, readFileSync } = await import("node:fs");
 
