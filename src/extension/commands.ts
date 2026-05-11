@@ -28,6 +28,28 @@ interface CommandDeps {
 export function registerCommands(context: vscode.ExtensionContext, deps: CommandDeps): void {
   const { store, statusBar, workspaceRoot } = deps;
 
+  /**
+   * Build an Indexer using whatever config is current right now. Used by both
+   * the reindex command and the Index Status panel so config changes (embed
+   * provider, glob, etc.) take effect without reloading the window.
+   */
+  const buildFreshIndexer = async (): Promise<Indexer> => {
+    const apiKey = await readOpenAIApiKey(deps.context.secrets);
+    const freshConfig = readConfig(apiKey);
+    const freshEmbedProvider = createEmbedProvider(freshConfig);
+    const freshIndexerConfig = validateConfig(
+      {
+        workspaceRoot,
+        docGlob: freshConfig.docGlob,
+        indexDir: path.join(workspaceRoot, freshConfig.indexDir),
+        maxChunkChars: freshConfig.maxChunkChars,
+        headingDepth: freshConfig.headingDepth,
+      },
+      freshEmbedProvider,
+    );
+    return new Indexer(freshIndexerConfig, store);
+  };
+
   context.subscriptions.push(
     vscode.commands.registerCommand("docSearch.search", async () => {
       // Re-read config so the search uses whichever provider is currently configured
@@ -65,21 +87,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         force = choice.force;
       }
 
-      // Re-read config so provider changes take effect without a window reload
-      const apiKey = await readOpenAIApiKey(deps.context.secrets);
-      const freshConfig = readConfig(apiKey);
-      const freshEmbedProvider = createEmbedProvider(freshConfig);
-      const freshIndexerConfig = validateConfig(
-        {
-          workspaceRoot,
-          docGlob: freshConfig.docGlob,
-          indexDir: path.join(workspaceRoot, freshConfig.indexDir),
-          maxChunkChars: freshConfig.maxChunkChars,
-          headingDepth: freshConfig.headingDepth,
-        },
-        freshEmbedProvider,
-      );
-      const freshIndexer = new Indexer(freshIndexerConfig, store);
+      const freshIndexer = await buildFreshIndexer();
 
       statusBar.setIndexing();
       IndexStatusPanel.notifyProgress("scanning");
@@ -117,9 +125,16 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
 
         statusBar.setReady();
         await IndexStatusPanel.notifyDone(stats);
-        vscode.window.showInformationMessage(
-          `Doc Search: Indexed ${stats.indexed} file(s), ${stats.totalChunks} chunk(s) in ${stats.durationMs}ms (${stats.skipped} skipped).`,
-        );
+        if (stats.failedFiles > 0) {
+          const reason = stats.firstError ? ` — ${stats.firstError}` : "";
+          vscode.window.showWarningMessage(
+            `Doc Search: ${stats.indexed} indexed, ${stats.failedFiles} failed, ${stats.skipped} skipped${reason}`,
+          );
+        } else {
+          vscode.window.showInformationMessage(
+            `Doc Search: Indexed ${stats.indexed} file(s), ${stats.totalChunks} chunk(s) in ${stats.durationMs}ms (${stats.skipped} skipped).`,
+          );
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         statusBar.setError(`Reindex failed: ${msg}`);
@@ -129,7 +144,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
     }),
 
     vscode.commands.registerCommand("docSearch.openIndexStatus", () => {
-      IndexStatusPanel.createOrShow(context, deps.indexer);
+      IndexStatusPanel.createOrShow(context, buildFreshIndexer);
     }),
 
     vscode.commands.registerCommand("docSearch.openSettings", () => {

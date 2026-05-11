@@ -108,6 +108,7 @@ export class Indexer {
     let failedFiles = 0;
     let totalChunks = 0;
     let firstEmbed = true;
+    let firstError: string | undefined;
 
     for (const filePath of mdFiles) {
       const rel = path.relative(this.config.workspaceRoot, filePath).replace(/\\/g, "/");
@@ -156,9 +157,9 @@ export class Indexer {
         }
         embeddings = await this.config.embedProvider.embed(texts, "search_document: ");
       } catch (err) {
-        console.error(
-          `Warning: embedding failed for ${rel}: ${err instanceof Error ? err.message : err}`,
-        );
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`Warning: embedding failed for ${rel}: ${msg}`);
+        if (firstError === undefined) firstError = msg;
         failedFiles++;
         continue;
       }
@@ -201,6 +202,7 @@ export class Indexer {
       totalChunks,
       durationMs: Date.now() - t0,
       pruned,
+      firstError,
     };
   }
 

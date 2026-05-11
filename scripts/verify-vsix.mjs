@@ -55,6 +55,20 @@ const forbidden = [
   "extension/test/",
   "extension/coverage/",
   "extension/plans/",
+  // Internal/dev files that must never ship.
+  "extension/CLAUDE.md",
+  "extension/CONTRIBUTING.md",
+  "extension/CODE_OF_CONDUCT.md",
+  "extension/SECURITY.md",
+  "extension/vitest.config.ts",
+  "extension/eslint.config.mjs",
+  "extension/analysis/",
+  "extension/bin/",
+  "extension/.doc-search-index/",
+  "extension/.mcp.json",
+  "extension/.vscode/",
+  "extension/.claude/",
+  "extension/package-lock.json",
 ];
 
 const failures = [];

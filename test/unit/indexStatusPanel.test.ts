@@ -56,20 +56,20 @@ describe("IndexStatusPanel", () => {
 
   describe("IndexStatusPanel", () => {
     it("should create panel on first call", () => {
-      IndexStatusPanel.createOrShow(mockContext, mockIndexer);
+      IndexStatusPanel.createOrShow(mockContext, () => mockIndexer);
 
       expect(vscode.window.createWebviewPanel).toHaveBeenCalled();
     });
 
     it("should reveal existing panel on second call", () => {
-      IndexStatusPanel.createOrShow(mockContext, mockIndexer);
-      IndexStatusPanel.createOrShow(mockContext, mockIndexer);
+      IndexStatusPanel.createOrShow(mockContext, () => mockIndexer);
+      IndexStatusPanel.createOrShow(mockContext, () => mockIndexer);
 
       expect(mockPanel.reveal).toHaveBeenCalled();
     });
 
     it("should send index status on ready", async () => {
-      IndexStatusPanel.createOrShow(mockContext, mockIndexer);
+      IndexStatusPanel.createOrShow(mockContext, () => mockIndexer);
 
       const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
 
@@ -84,7 +84,7 @@ describe("IndexStatusPanel", () => {
     });
 
     it("should handle reindex message", async () => {
-      IndexStatusPanel.createOrShow(mockContext, mockIndexer);
+      IndexStatusPanel.createOrShow(mockContext, () => mockIndexer);
 
       const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
 
@@ -118,7 +118,7 @@ describe("IndexStatusPanel", () => {
         };
       });
 
-      IndexStatusPanel.createOrShow(mockContext, mockIndexer);
+      IndexStatusPanel.createOrShow(mockContext, () => mockIndexer);
 
       const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
 
@@ -132,7 +132,7 @@ describe("IndexStatusPanel", () => {
     it("should handle errors during reindex", async () => {
       mockIndexer.reindex.mockRejectedValue(new Error("Reindex failed"));
 
-      IndexStatusPanel.createOrShow(mockContext, mockIndexer);
+      IndexStatusPanel.createOrShow(mockContext, () => mockIndexer);
 
       const messageHandler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
 
@@ -146,7 +146,7 @@ describe("IndexStatusPanel", () => {
     });
 
     it("should set disposed flag on dispose", () => {
-      IndexStatusPanel.createOrShow(mockContext, mockIndexer);
+      IndexStatusPanel.createOrShow(mockContext, () => mockIndexer);
 
       const disposeHandler = vi.mocked(mockPanel.onDidDispose).mock.calls[0]?.[0];
       if (disposeHandler) {
@@ -161,7 +161,7 @@ describe("IndexStatusPanel", () => {
     // -----------------------------------------------------------------------
 
     it("notifyProgress posts an indexing message when an instance exists", () => {
-      IndexStatusPanel.createOrShow(mockContext, mockIndexer);
+      IndexStatusPanel.createOrShow(mockContext, () => mockIndexer);
       mockPanel.webview.postMessage.mockClear();
 
       IndexStatusPanel.notifyProgress("scanning", 5, 10);
@@ -183,7 +183,7 @@ describe("IndexStatusPanel", () => {
     });
 
     it("notifyDone clears busy and posts reindexDone with stats", async () => {
-      IndexStatusPanel.createOrShow(mockContext, mockIndexer);
+      IndexStatusPanel.createOrShow(mockContext, () => mockIndexer);
       IndexStatusPanel.busy = true;
       mockPanel.webview.postMessage.mockClear();
 
@@ -205,7 +205,7 @@ describe("IndexStatusPanel", () => {
     });
 
     it("notifyError clears busy and posts reindexError", () => {
-      IndexStatusPanel.createOrShow(mockContext, mockIndexer);
+      IndexStatusPanel.createOrShow(mockContext, () => mockIndexer);
       IndexStatusPanel.busy = true;
       mockPanel.webview.postMessage.mockClear();
 
@@ -223,7 +223,7 @@ describe("IndexStatusPanel", () => {
     // -----------------------------------------------------------------------
 
     it("on ready, restores indexing state if a reindex is running", async () => {
-      IndexStatusPanel.createOrShow(mockContext, mockIndexer);
+      IndexStatusPanel.createOrShow(mockContext, () => mockIndexer);
       IndexStatusPanel.busy = true;
       mockPanel.webview.postMessage.mockClear();
 
@@ -238,7 +238,7 @@ describe("IndexStatusPanel", () => {
 
     it("posts an error message when getStatus throws", async () => {
       mockIndexer.getStatus.mockRejectedValue(new Error("status oops"));
-      IndexStatusPanel.createOrShow(mockContext, mockIndexer);
+      IndexStatusPanel.createOrShow(mockContext, () => mockIndexer);
       mockPanel.webview.postMessage.mockClear();
 
       const handler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
@@ -251,7 +251,7 @@ describe("IndexStatusPanel", () => {
     });
 
     it("runReindex returns immediately when already busy", async () => {
-      IndexStatusPanel.createOrShow(mockContext, mockIndexer);
+      IndexStatusPanel.createOrShow(mockContext, () => mockIndexer);
       IndexStatusPanel.busy = true;
       mockIndexer.reindex.mockClear();
 

@@ -2,12 +2,19 @@ import * as vscode from "vscode";
 import type { Indexer } from "../core/indexer.js";
 import { getNonce } from "./utils.js";
 
+/**
+ * Returns an Indexer wired up with the current config (embed provider, glob,
+ * etc). Panel actions invoke this each time so config changes made after the
+ * panel opens (e.g. switching embed provider) take effect without reloading.
+ */
+export type IndexerFactory = () => Promise<Indexer> | Indexer;
+
 export class IndexStatusPanel {
   private static instance: IndexStatusPanel | undefined;
   /** True while any reindex (from command or panel) is running. */
   static busy = false;
   private readonly panel: vscode.WebviewPanel;
-  private readonly indexer: Indexer;
+  private readonly indexerFactory: IndexerFactory;
 
   static reset(): void {
     this.instance = undefined;
@@ -29,6 +36,8 @@ export class IndexStatusPanel {
     totalChunks: number;
     skipped: number;
     durationMs: number;
+    failedFiles?: number;
+    firstError?: string;
   }): Promise<void> {
     IndexStatusPanel.busy = false;
     const inst = IndexStatusPanel.instance;
@@ -42,7 +51,7 @@ export class IndexStatusPanel {
     IndexStatusPanel.instance?.panel.webview.postMessage({ type: "reindexError", message });
   }
 
-  static createOrShow(context: vscode.ExtensionContext, indexer: Indexer): void {
+  static createOrShow(context: vscode.ExtensionContext, indexerFactory: IndexerFactory): void {
     if (IndexStatusPanel.instance) {
       IndexStatusPanel.instance.panel.reveal();
       return;
@@ -53,16 +62,16 @@ export class IndexStatusPanel {
       vscode.ViewColumn.One,
       { enableScripts: true },
     );
-    IndexStatusPanel.instance = new IndexStatusPanel(panel, context, indexer);
+    IndexStatusPanel.instance = new IndexStatusPanel(panel, context, indexerFactory);
   }
 
   private constructor(
     panel: vscode.WebviewPanel,
     context: vscode.ExtensionContext,
-    indexer: Indexer,
+    indexerFactory: IndexerFactory,
   ) {
     this.panel = panel;
-    this.indexer = indexer;
+    this.indexerFactory = indexerFactory;
     this.panel.webview.html = this.getHtml();
 
     this.panel.onDidDispose(() => {
@@ -98,7 +107,8 @@ export class IndexStatusPanel {
     IndexStatusPanel.busy = true;
     this.panel.webview.postMessage({ type: "indexing", phase: "scanning" });
     try {
-      const stats = await this.indexer.reindex(force, (processed, total, _file, phase) => {
+      const indexer = await this.indexerFactory();
+      const stats = await indexer.reindex(force, (processed, total, _file, phase) => {
         try {
           this.panel.webview.postMessage({ type: "indexing", phase, processed, total });
         } catch {
@@ -122,7 +132,8 @@ export class IndexStatusPanel {
 
   private async sendStatus(): Promise<void> {
     try {
-      const status = await this.indexer.getStatus();
+      const indexer = await this.indexerFactory();
+      const status = await indexer.getStatus();
       const provider = vscode.workspace
         .getConfiguration("docSearch")
         .get<string>("embedProvider", "local");
@@ -478,10 +489,22 @@ export class IndexStatusPanel {
 
       if (msg.type === "reindexDone") {
         $("indexingMsg").style.display = "none";
-        const { indexed, totalChunks, skipped } = msg.stats;
+        const { indexed, totalChunks, skipped, failedFiles = 0, firstError } = msg.stats;
         const el = $("resultMsg");
         el.style.display = "block";
-        if (indexed === 0 && skipped === 0) {
+        if (failedFiles > 0 && indexed === 0) {
+          el.className = "result-err";
+          const reason = firstError ? " — " + firstError : "";
+          el.textContent =
+            "Reindex failed: 0 of " + (failedFiles + skipped) +
+            " file(s) indexed (" + failedFiles + " failed)" + reason;
+        } else if (failedFiles > 0) {
+          el.className = "result-warn";
+          const reason = firstError ? " — first error: " + firstError : "";
+          el.textContent =
+            "Partial: " + indexed + " indexed, " + failedFiles + " failed, " +
+            skipped + " skipped" + reason;
+        } else if (indexed === 0 && skipped === 0) {
           el.className = "result-warn";
           el.textContent = "No documents found matching the file pattern.";
         } else if (indexed === 0) {
