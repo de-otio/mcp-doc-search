@@ -6,6 +6,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import { search } from "../core/searcher.js";
 import type { EngineDeps } from "./config.js";
 import type { IndexStatus } from "../core/types.js";
+import { sanitizeForClient } from "./errors.js";
 
 // Cache for getStatus() results — refreshed at most every 30 seconds.
 interface StatusCache {
@@ -312,7 +313,12 @@ export function registerTools(server: Server, deps: EngineDeps): void {
         };
       } catch (err) {
         return {
-          content: [{ type: "text", text: JSON.stringify({ error: String(err) }) }],
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ error: sanitizeForClient(err, "search_docs") }),
+            },
+          ],
         };
       }
     }
@@ -325,7 +331,9 @@ export function registerTools(server: Server, deps: EngineDeps): void {
         };
       } catch (err) {
         return {
-          content: [{ type: "text", text: JSON.stringify({ error: String(err) }) }],
+          content: [
+            { type: "text", text: JSON.stringify({ error: sanitizeForClient(err, "list_docs") }) },
+          ],
         };
       }
     }
@@ -344,7 +352,12 @@ export function registerTools(server: Server, deps: EngineDeps): void {
         };
       } catch (err) {
         return {
-          content: [{ type: "text", text: JSON.stringify({ error: String(err) }) }],
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ error: sanitizeForClient(err, "reindex_docs") }),
+            },
+          ],
         };
       }
     }
@@ -393,7 +406,9 @@ export function registerTools(server: Server, deps: EngineDeps): void {
         };
       } catch (err) {
         return {
-          content: [{ type: "text", text: JSON.stringify({ error: String(err) }) }],
+          content: [
+            { type: "text", text: JSON.stringify({ error: sanitizeForClient(err, "get") }) },
+          ],
         };
       }
     }
@@ -457,7 +472,7 @@ export function registerTools(server: Server, deps: EngineDeps): void {
             const { content, lines, truncated } = readRef(absPath, fromLine, maxLines, maxBytes);
             docs.push({ file: relFile, docid, content, lines, truncated });
           } catch (fileErr) {
-            errors.push({ ref, error: String(fileErr) });
+            errors.push({ ref, error: sanitizeForClient(fileErr, `multi_get:${ref}`) });
           }
         }
 
@@ -466,7 +481,9 @@ export function registerTools(server: Server, deps: EngineDeps): void {
         };
       } catch (err) {
         return {
-          content: [{ type: "text", text: JSON.stringify({ error: String(err) }) }],
+          content: [
+            { type: "text", text: JSON.stringify({ error: sanitizeForClient(err, "multi_get") }) },
+          ],
         };
       }
     }
@@ -486,7 +503,12 @@ export function registerTools(server: Server, deps: EngineDeps): void {
         };
       } catch (err) {
         return {
-          content: [{ type: "text", text: JSON.stringify({ error: String(err) }) }],
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ error: sanitizeForClient(err, "set_context") }),
+            },
+          ],
         };
       }
     }
@@ -499,7 +521,12 @@ export function registerTools(server: Server, deps: EngineDeps): void {
         };
       } catch (err) {
         return {
-          content: [{ type: "text", text: JSON.stringify({ error: String(err) }) }],
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ error: sanitizeForClient(err, "list_contexts") }),
+            },
+          ],
         };
       }
     }
@@ -518,7 +545,12 @@ export function registerTools(server: Server, deps: EngineDeps): void {
         };
       } catch (err) {
         return {
-          content: [{ type: "text", text: JSON.stringify({ error: String(err) }) }],
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ error: sanitizeForClient(err, "remove_context") }),
+            },
+          ],
         };
       }
     }

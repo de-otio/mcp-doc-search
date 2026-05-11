@@ -795,5 +795,90 @@ describe("MCP Tools", () => {
       // returns a top-level error string.
       expect(parsed.error).toContain("internal");
     });
+
+    // -----------------------------------------------------------------------
+    // M3: error responses must never embed absolute filesystem paths.
+    // -----------------------------------------------------------------------
+
+    it("get: catch-handler strips absolute paths from a thrown Error", async () => {
+      const { existsSync, readFileSync } = await import("node:fs");
+      const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+      // Use a workspace-internal path so we go past the !existsSync branch
+      // and reach the readFileSync that we force to throw.
+      mockIndexer.resolveRef.mockReturnValue({
+        file: "/workspace/doc/x.md",
+        docid: "abc123",
+      });
+      mockIndexer.getWorkspaceRoot.mockReturnValue("/workspace");
+      vi.mocked(existsSync).mockReturnValue(true);
+      vi.mocked(readFileSync).mockImplementation(() => {
+        throw new Error("blew up at /Users/alice/repos/secret-client/doc/x.md");
+      });
+
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
+      const result = await callToolHandler({
+        params: { name: "get", arguments: { ref: "doc/x.md" } },
+      });
+
+      const parsed = JSON.parse(result.content[0].text);
+      const text = JSON.stringify(parsed);
+      expect(text).not.toContain("/Users/alice");
+      expect(text).not.toContain("secret-client");
+      stderrSpy.mockRestore();
+    });
+
+    it("search_docs: catch-handler strips absolute paths", async () => {
+      const { search } = await import("../../src/core/searcher.js");
+      vi.mocked(search).mockRejectedValueOnce(
+        new Error("Embedder failed at /Users/alice/.cache/transformers/foo.onnx"),
+      );
+      const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
+      const result = await callToolHandler({
+        params: { name: "search_docs", arguments: { query: "anything" } },
+      });
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.error).toContain("Embedder failed");
+      expect(parsed.error).not.toContain("/Users/alice");
+      stderrSpy.mockRestore();
+    });
+
+    it("reindex_docs: catch-handler strips absolute paths from passthrough errors", async () => {
+      mockIndexer.reindex.mockRejectedValueOnce(
+        new Error("OpenAI auth failed: see logs in /var/log/openai/audit.json"),
+      );
+      const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
+      const result = await callToolHandler({
+        params: { name: "reindex_docs", arguments: {} },
+      });
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.error).toContain("OpenAI auth failed");
+      expect(parsed.error).not.toContain("/var/log");
+      stderrSpy.mockRestore();
+    });
   });
 });
