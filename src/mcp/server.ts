@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { registerTools } from "./tools.js";
 import { createEngineFromEnv } from "./config.js";
 import { startHttpServer } from "./http.js";
-import { stopDaemon, writePidFile } from "./daemon.js";
+import { DaemonAlreadyRunningError, stopDaemon, writePidFile } from "./daemon.js";
 
 export function parseArgs(argv: string[]): {
   http: boolean;
@@ -49,7 +49,21 @@ async function main() {
     });
     child.unref();
     const pid = child.pid!;
-    writePidFile(pid);
+    try {
+      writePidFile(pid);
+    } catch (err) {
+      if (err instanceof DaemonAlreadyRunningError) {
+        // Don't leave the freshly-spawned child stranded — terminate it.
+        try {
+          process.kill(pid, "SIGTERM");
+        } catch {
+          // best effort
+        }
+        process.stderr.write(`mcp-doc-search: ${err.message}; exiting\n`);
+        process.exit(1);
+      }
+      throw err;
+    }
     process.stdout.write(`MCP daemon started (PID: ${pid}, port: ${port})\n`);
     return;
   }
