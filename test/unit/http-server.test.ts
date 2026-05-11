@@ -121,6 +121,23 @@ describe("POST /mcp", () => {
     const body = (await res.json()) as { error: string };
     expect(body.error).toContain("Method not allowed");
   });
+
+  // -------------------------------------------------------------------------
+  // M2: request body size cap (10 MB)
+  // -------------------------------------------------------------------------
+
+  it("rejects an oversized body with 413 (M2)", async () => {
+    // 11 MB POST — one byte over the cap.
+    const oversize = "x".repeat(11 * 1024 * 1024);
+    const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: oversize,
+    });
+    expect(res.status).toBe(413);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/too large/i);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -362,6 +379,71 @@ describe("Daemon PID file", () => {
     killSpy.mockRestore();
     stdoutSpy.mockRestore();
     expect(sigtermReceived).toBe(true);
+    expect(readPidFile()).toBeNull();
+  });
+
+  // -------------------------------------------------------------------------
+  // L3: O_EXCL pidfile creation + ESRCH-tolerant stop
+  // -------------------------------------------------------------------------
+
+  it("writePidFile refuses to clobber a live daemon's pidfile (L3)", async () => {
+    const { writePidFile, removePidFile, DaemonAlreadyRunningError } =
+      await import("../../src/mcp/daemon.js");
+    removePidFile();
+
+    // Use our own PID — it's definitely live — to simulate "another daemon" holding the file.
+    writePidFile(process.pid);
+
+    // Second writer (different PID) must throw, not overwrite.
+    expect(() => writePidFile(process.pid + 1)).toThrow(DaemonAlreadyRunningError);
+
+    removePidFile();
+  });
+
+  it("writePidFile overwrites a stale pidfile from a dead process (L3)", async () => {
+    const { writePidFile, readPidFile, removePidFile } = await import("../../src/mcp/daemon.js");
+    removePidFile();
+
+    // PID 99999 is almost certainly not running on the test host.
+    writePidFile(99999);
+    expect(readPidFile()).toBe(99999);
+
+    // Writing again should succeed because the recorded PID is dead.
+    writePidFile(88888);
+    expect(readPidFile()).toBe(88888);
+
+    removePidFile();
+  });
+
+  it("stopDaemon survives a race where the process dies between liveness check and kill (L3)", async () => {
+    const { writePidFile, readPidFile, stopDaemon } = await import("../../src/mcp/daemon.js");
+    writePidFile(77777);
+
+    // First kill(pid, 0) reports alive; then kill(pid, SIGTERM) raises ESRCH
+    // (process exited between checks).
+    let probeCount = 0;
+    const killSpy = vi.spyOn(process, "kill").mockImplementation((_pid: number, sig?: any) => {
+      if (sig === 0) {
+        probeCount += 1;
+        if (probeCount === 1) return true as any; // alive on first probe
+        const err = new Error("ESRCH") as NodeJS.ErrnoException;
+        err.code = "ESRCH";
+        throw err;
+      }
+      if (sig === "SIGTERM") {
+        const err = new Error("ESRCH") as NodeJS.ErrnoException;
+        err.code = "ESRCH";
+        throw err;
+      }
+      return true as any;
+    });
+    const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    // Should not throw — ESRCH means the daemon is already gone.
+    await expect(stopDaemon()).resolves.toBeUndefined();
+
+    killSpy.mockRestore();
+    stdoutSpy.mockRestore();
     expect(readPidFile()).toBeNull();
   });
 });

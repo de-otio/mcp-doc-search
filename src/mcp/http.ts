@@ -15,20 +15,59 @@ const startTime = Date.now();
 /** Idle timeout before disposing the embed pipeline (5 minutes). */
 const IDLE_DISPOSE_MS = 5 * 60 * 1000;
 
+/**
+ * Hard cap on a single MCP request body. M2: prevents a misbehaving (or
+ * adversarial) local client from buffering unbounded data into the daemon's
+ * memory. Real MCP requests are JSON-RPC envelopes, typically under a few KB;
+ * 10 MB is a generous ceiling that still bounds worst-case allocation.
+ */
+const MAX_BODY_BYTES = 10 * 1024 * 1024;
+
+/** Sentinel thrown by readBody when the cap is exceeded. */
+class BodyTooLargeError extends Error {
+  constructor() {
+    super("request body exceeds 10 MB limit");
+    this.name = "BodyTooLargeError";
+  }
+}
+
 function handleHealth(res: ServerResponse): void {
   const body = JSON.stringify({ status: "ok", uptime: (Date.now() - startTime) / 1000 });
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(body);
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
+function readBody(req: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    req.on("error", reject);
+    let total = 0;
+    let aborted = false;
+    req.on("data", (chunk: Buffer) => {
+      if (aborted) return;
+      total += chunk.length;
+      if (total > maxBytes) {
+        aborted = true;
+        // Stop reading further data; leave the socket open so the caller can
+        // send a 413 response. The request stream will be destroyed by the
+        // caller once the response is on the wire.
+        req.pause();
+        reject(new BodyTooLargeError());
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      if (aborted) return;
+      resolve(Buffer.concat(chunks).toString("utf8"));
+    });
+    req.on("error", (err) => {
+      if (aborted) return;
+      reject(err);
+    });
   });
 }
+
+export { BodyTooLargeError, MAX_BODY_BYTES };
 
 /**
  * Start an HTTP server that wraps the MCP server with Streamable HTTP transport.
@@ -90,7 +129,23 @@ export async function startHttpServer(
       try {
         let parsedBody: unknown;
         if (method === "POST") {
-          const raw = await readBody(req);
+          let raw: string;
+          try {
+            raw = await readBody(req);
+          } catch (bodyErr) {
+            // M2: 10 MB request body cap. readBody paused the request stream;
+            // send 413, then destroy the socket so the client doesn't keep
+            // pushing bytes we'll never read.
+            if (bodyErr instanceof BodyTooLargeError) {
+              if (!res.headersSent) {
+                res.writeHead(413, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ error: "Request body too large (max 10 MB)" }));
+              }
+              req.destroy();
+              return;
+            }
+            throw bodyErr;
+          }
           try {
             parsedBody = JSON.parse(raw);
           } catch {
