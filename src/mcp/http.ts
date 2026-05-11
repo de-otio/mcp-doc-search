@@ -8,6 +8,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { registerTools } from "./tools.js";
 import type { EngineDeps } from "./config.js";
+import { sanitizeForClient } from "./errors.js";
 
 const startTime = Date.now();
 
@@ -111,12 +112,16 @@ export async function startHttpServer(
           mcpServer.close().catch(() => undefined);
         });
       } catch (err) {
+        // M3: never echo raw caught errors to JSON-RPC clients —
+        // they often embed absolute filesystem paths. Log the full
+        // error to stderr for the operator; return a sanitized message.
+        const safe = sanitizeForClient(err, "/mcp");
         if (!res.headersSent) {
           res.writeHead(500, { "Content-Type": "application/json" });
           res.end(
             JSON.stringify({
               jsonrpc: "2.0",
-              error: { code: -32603, message: String(err) },
+              error: { code: -32603, message: safe },
               id: null,
             }),
           );
