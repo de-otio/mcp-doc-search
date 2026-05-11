@@ -125,5 +125,41 @@ describe("SearchPanel", () => {
         // Should return early, no postMessage
       }
     });
+
+    // -----------------------------------------------------------------------
+    // L1: openResult validates msg.file before joining onto workspaceRoot
+    // -----------------------------------------------------------------------
+
+    it("openResult: opens a safe relative result path", async () => {
+      (vscode.Uri as any).joinPath = vi.fn((root: any, ...segs: string[]) => ({
+        path: segs.join("/"),
+        ...root,
+      }));
+      SearchPanel.createOrShow(mockContext, deps);
+      const handler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
+
+      await handler({ type: "openResult", file: "doc/foo.md" });
+
+      expect(vi.mocked(vscode.commands.executeCommand)).toHaveBeenCalledWith(
+        "markdown.showPreviewToSide",
+        expect.anything(),
+      );
+    });
+
+    it.each([["../etc/passwd"], ["/etc/passwd"], ["doc/../../etc/passwd"], ["doc\\..\\etc"], [""]])(
+      "openResult drops unsafe file refs (%s)",
+      async (badFile) => {
+        (vscode.Uri as any).joinPath = vi.fn();
+        SearchPanel.createOrShow(mockContext, deps);
+        const handler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
+
+        await handler({ type: "openResult", file: badFile });
+
+        expect(vi.mocked(vscode.commands.executeCommand)).not.toHaveBeenCalledWith(
+          "markdown.showPreviewToSide",
+          expect.anything(),
+        );
+      },
+    );
   });
 });

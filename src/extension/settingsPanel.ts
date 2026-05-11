@@ -167,7 +167,22 @@ export class SettingsPanel {
       }
 
       case "openUrl": {
-        vscode.env.openExternal(vscode.Uri.parse(msg.url));
+        // L1: defense-in-depth. The webview is trusted (we own its HTML and
+        // enforce CSP via nonce), but we still validate the scheme so a
+        // future bug or HTML injection in any walkthrough/help content
+        // can't pivot openUrl into file://, vscode://, javascript:, etc.
+        // Only http(s) URLs are passed to openExternal; anything else is
+        // dropped silently.
+        const rawUrl = typeof msg.url === "string" ? msg.url : "";
+        let parsed: URL | null;
+        try {
+          parsed = new URL(rawUrl);
+        } catch {
+          parsed = null;
+        }
+        if (parsed && (parsed.protocol === "http:" || parsed.protocol === "https:")) {
+          vscode.env.openExternal(vscode.Uri.parse(parsed.toString()));
+        }
         break;
       }
 

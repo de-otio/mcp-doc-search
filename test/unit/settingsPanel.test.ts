@@ -218,7 +218,44 @@ describe("SettingsPanel", () => {
 
       await handler({ type: "openUrl", url: "https://example.com" });
 
-      expect(parseSpy).toHaveBeenCalledWith("https://example.com");
+      expect(parseSpy).toHaveBeenCalledWith("https://example.com/");
+      expect(openExternal).toHaveBeenCalled();
+    });
+
+    // -----------------------------------------------------------------------
+    // L1: openUrl scheme allowlist
+    // -----------------------------------------------------------------------
+
+    it.each([
+      ["file:///etc/passwd"],
+      ["vscode://settings"],
+      ["javascript:alert(1)"],
+      ["data:text/html,evil"],
+      ["ftp://example.com"],
+      [""],
+      ["not a url at all"],
+    ])("openUrl drops non-http(s) schemes silently (%s)", async (badUrl) => {
+      const openExternal = vi.fn();
+      (vscode.env as any).openExternal = openExternal;
+      (vscode.Uri as any).parse = vi.fn((u: string) => ({ url: u }));
+
+      SettingsPanel.createOrShow(mockContext);
+      const handler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
+
+      await handler({ type: "openUrl", url: badUrl });
+
+      expect(openExternal).not.toHaveBeenCalled();
+    });
+
+    it("openUrl accepts http URLs", async () => {
+      const openExternal = vi.fn();
+      (vscode.env as any).openExternal = openExternal;
+      (vscode.Uri as any).parse = vi.fn((u: string) => ({ url: u }));
+
+      SettingsPanel.createOrShow(mockContext);
+      const handler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
+
+      await handler({ type: "openUrl", url: "http://example.com/path" });
       expect(openExternal).toHaveBeenCalled();
     });
 

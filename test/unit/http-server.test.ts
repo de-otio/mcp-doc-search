@@ -121,10 +121,24 @@ describe("POST /mcp", () => {
     const body = (await res.json()) as { error: string };
     expect(body.error).toContain("Method not allowed");
   });
+});
 
-  // -------------------------------------------------------------------------
-  // M2: request body size cap (10 MB)
-  // -------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// M2: request body size cap (10 MB). Separate describe so we land on a
+// distinct port range from the other POST /mcp tests, which leave their
+// servers listening for the lifetime of the file.
+// ---------------------------------------------------------------------------
+
+describe("POST /mcp body size cap", () => {
+  let port: number;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    const { startHttpServer } = await import("../../src/mcp/http.js");
+    const deps = makeStubDeps();
+    port = 19500 + Math.floor(Math.random() * 100);
+    await startHttpServer(deps, port, 60_000);
+  });
 
   it("rejects an oversized body with 413 (M2)", async () => {
     // 11 MB POST — one byte over the cap.
