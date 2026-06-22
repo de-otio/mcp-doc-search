@@ -226,7 +226,7 @@
     "@types/vscode": "^1.85.0",
     "@vitest/coverage-v8": "^4.1.9",
     "@vscode/vsce": "^3.0.0",
-    "esbuild": "^0.24.0",
+    "esbuild": "^0.28.1",
     "eslint-plugin-security": "^4.0.0",
     "glob": "^13.0.6",
     "jsonc-parser": "^3.3.1",
