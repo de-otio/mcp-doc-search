@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Wait for ci.yml to succeed
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -85,7 +85,7 @@ jobs:
             runner: windows-latest
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v6
         with:
@@ -137,7 +137,7 @@ jobs:
     if: github.event_name == 'push' || inputs.dry_run != true
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v6
         with:
@@ -178,7 +178,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/ext-v')
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download all per-target VSIXes
         uses: actions/download-artifact@v8
