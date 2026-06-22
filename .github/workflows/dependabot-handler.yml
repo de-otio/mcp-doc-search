@@ -1,8 +1,19 @@
-# Calls the org-shared workflow that runs Claude against each Dependabot PR
-# to check for supply-chain attack signals, then enables auto-merge if
-# approved. See https://github.com/de-otio/.github for implementation.
-
-name: Dependabot review
+# Auto-merge Dependabot PRs once the required CI checks pass.
+#
+# Patch and minor bumps — including grouped updates whose highest change is
+# patch/minor — get auto-merge enabled, and GitHub squash-merges them as soon
+# as the required status checks (test, build) are green. Semver-major bumps
+# are labelled and routed to human review instead.
+#
+# No Claude / Bedrock supply-chain review: the org-shared
+# de-otio/.github dependabot-claude-review.yml is intentionally NOT used here
+# (claude-code-action cost, and its Bedrock OIDC path was failing).
+#
+# pull_request_target is required because Dependabot-triggered `pull_request`
+# runs get a read-only GITHUB_TOKEN. This job never checks out or executes PR
+# code — it only reads PR metadata and calls the GitHub API — so running in
+# the trusted base context is safe.
+name: Dependabot auto-merge
 
 on:
   pull_request_target:
@@ -11,10 +22,40 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  id-token: write
 
 jobs:
-  review:
+  auto-merge:
+    name: Auto-merge non-major Dependabot updates
     if: github.actor == 'dependabot[bot]'
-    uses: de-otio/.github/.github/workflows/dependabot-claude-review.yml@main
-    secrets: inherit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v3
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Enable auto-merge for patch & minor bumps
+        if: >-
+          steps.meta.outputs.update-type == 'version-update:semver-patch' ||
+          steps.meta.outputs.update-type == 'version-update:semver-minor'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          gh pr merge --auto --squash "$PR_URL"
+          echo "Auto-merge enabled; GitHub squash-merges once required checks pass."
+
+      - name: Route major bumps to human review
+        if: steps.meta.outputs.update-type == 'version-update:semver-major'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          DEPS: ${{ steps.meta.outputs.dependency-names }}
+          PREV: ${{ steps.meta.outputs.previous-version }}
+          NEW: ${{ steps.meta.outputs.new-version }}
+        run: |
+          gh pr edit "$PR_URL" --add-label "needs-human-review,major-bump"
+          gh pr comment "$PR_URL" --body "Major version bump (\`$DEPS\` $PREV → $NEW) — auto-merge disabled; needs human review."
