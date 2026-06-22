@@ -7,6 +7,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Cancel superseded runs on the same PR (rapid pushes / Dependabot rebases)
+# so minutes aren't burned on commits that are already obsolete. Pushes to
+# main are never cancelled — every merged commit gets a full CI run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -14,6 +21,7 @@ jobs:
   test:
     name: Lint, typecheck, test
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v7
@@ -59,6 +67,7 @@ jobs:
     name: Build bundles
     runs-on: ubuntu-latest
     needs: test
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v7
@@ -93,6 +102,7 @@ jobs:
     name: Compute package matrix
     runs-on: ubuntu-latest
     needs: test
+    timeout-minutes: 5
     outputs:
       matrix: ${{ steps.set.outputs.matrix }}
 
@@ -110,6 +120,7 @@ jobs:
     name: Package VSIX (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
     needs: package-matrix
+    timeout-minutes: 20
 
     strategy:
       fail-fast: false
@@ -154,6 +165,7 @@ jobs:
     name: Cleanup old artifacts
     runs-on: ubuntu-latest
     needs: package
+    timeout-minutes: 5
     if: github.event_name == 'push'
     permissions:
       actions: write
