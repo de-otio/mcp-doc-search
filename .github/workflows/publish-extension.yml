@@ -149,9 +149,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Publish on tag pushes, and on workflow_dispatch unless dry_run is set.
-    # `gh -f dry_run=false` delivers the input as the STRING "false", so guard
-    # against both the boolean and string forms of a truthy dry_run.
-    if: ${{ github.event_name == 'push' || !(inputs.dry_run == true || inputs.dry_run == 'true') }}
+    # Use github.event.inputs (always a string) rather than the inputs context,
+    # whose boolean default mis-evaluates in a job-level if on dispatch.
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true' }}
 
     steps:
       - uses: actions/checkout@v7
