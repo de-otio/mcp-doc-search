@@ -148,7 +148,20 @@
         "docSearch.indexDir": {
           "type": "string",
           "default": ".doc-search-index",
-          "description": "Directory to store the vector index (relative to workspace root)"
+          "description": "Directory to store the vector index (relative to workspace root). Applies in workspace mode only. Setting this to a non-default value implies workspace mode."
+        },
+        "docSearch.indexLocation": {
+          "type": "string",
+          "enum": [
+            "global",
+            "workspace"
+          ],
+          "default": "global",
+          "enumDescriptions": [
+            "Store the index under ~/.doc-search (no .gitignore changes needed; an existing .doc-search-index is auto-migrated on first use).",
+            "Legacy behaviour: store the index in-tree at the directory specified by indexDir (added to .gitignore automatically)."
+          ],
+          "markdownDescription": "Where to store the vector index.\n\n- **global** — stored under `~/.doc-search` (or `$DOC_SEARCH_HOME`). No `.gitignore` changes are needed, and an existing `.doc-search-index` in the workspace is automatically migrated on first use.\n- **workspace** — legacy in-tree storage at the path set by `#docSearch.indexDir#`. The directory is added to `.gitignore` automatically."
         },
         "docSearch.headingDepth": {
           "type": "number",

@@ -144,11 +144,13 @@ GLOBAL OPTIONS
   --help                 Show this help
 
 ENVIRONMENT
-  DOC_SEARCH_WORKSPACE   Workspace root (default: cwd)
-  DOC_SEARCH_GLOB        Glob pattern (default: doc/**/*.md)
-  DOC_SEARCH_INDEX_DIR   Index directory (default: .doc-search-index)
-  USE_OPENAI=1           Use OpenAI embeddings
-  OLLAMA_URL             Use Ollama embeddings at this URL
+  DOC_SEARCH_WORKSPACE         Workspace root (default: cwd)
+  DOC_SEARCH_GLOB              Glob pattern (default: doc/**/*.md)
+  DOC_SEARCH_HOME              Base directory for global index (default: ~/.doc-search)
+  DOC_SEARCH_INDEX_LOCATION     Index location mode: "global" or "workspace" (default: global)
+  DOC_SEARCH_INDEX_DIR         Workspace-mode index directory (default: .doc-search-index)
+  USE_OPENAI=1                 Use OpenAI embeddings
+  OLLAMA_URL                   Use Ollama embeddings at this URL
 `.trim() + "\n",
   );
 }

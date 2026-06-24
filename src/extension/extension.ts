@@ -1,5 +1,4 @@
 import * as vscode from "vscode";
-import * as path from "node:path";
 import { LanceVectorStore } from "../core/vectorstore.js";
 import { createEmbedProvider } from "../core/embedder.js";
 import { Indexer } from "../core/indexer.js";
@@ -9,6 +8,7 @@ import { StatusBarManager } from "./statusBar.js";
 import { registerCommands } from "./commands.js";
 import { FileWatcher } from "./fileWatcher.js";
 import { ensureGitignored } from "../core/gitignore.js";
+import { resolveIndexLocation, resolveMode } from "../core/indexLocation.js";
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -17,8 +17,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Read API key from secure storage (with migration from settings if needed)
   const apiKey = await readOpenAIApiKey(context.secrets);
   const config = readConfig(apiKey);
-  const indexDir = path.join(workspaceRoot, config.indexDir);
-  ensureGitignored(workspaceRoot, config.indexDir);
+  const resolved = resolveIndexLocation(workspaceRoot, {
+    mode: resolveMode(config.indexLocation, config.indexDir),
+    indexDir: config.indexDir,
+  });
+  const indexDir = resolved.indexDir;
+  if (resolved.shouldGitignore && resolved.gitignoreEntry)
+    ensureGitignored(workspaceRoot, resolved.gitignoreEntry);
   const store = new LanceVectorStore(indexDir);
   const embedProvider = createEmbedProvider(config);
   const indexerConfig = validateConfig(

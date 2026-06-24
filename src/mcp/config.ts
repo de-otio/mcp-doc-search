@@ -7,10 +7,10 @@ import { LocalEmbedder, OllamaEmbedder, OpenAIEmbedder } from "../core/embedder.
 import type { EmbedProvider } from "../core/types.js";
 import { validateConfig } from "../core/types.js";
 import { ensureGitignored } from "../core/gitignore.js";
-import { PathTraversalError, isSafeRelativeRef, resolveSafePath } from "../core/safePath.js";
+import { isSafeRelativeRef } from "../core/safePath.js";
+import { resolveIndexLocation, resolveMode } from "../core/indexLocation.js";
 
 const DEFAULT_DOC_GLOB = "doc/**/*.md";
-const DEFAULT_INDEX_DIR = ".doc-search-index";
 
 export interface EngineDeps {
   store: LanceVectorStore;
@@ -54,28 +54,19 @@ export async function createEngineFromEnv(): Promise<EngineDeps> {
     docGlob = DEFAULT_DOC_GLOB;
   }
 
-  // M4: indexDir must resolve inside the workspace. A configured value that
-  // escapes via absolute path or .. is replaced with the default, with a
-  // warning to stderr (visible to whoever runs the MCP server).
-  const rawIndexDir =
-    process.env.DOC_SEARCH_INDEX_DIR ?? settings["docSearch.indexDir"] ?? DEFAULT_INDEX_DIR;
-  let indexDirRelative = rawIndexDir;
-  let indexDir: string;
-  try {
-    indexDir = resolveSafePath(workspaceRoot, rawIndexDir);
-  } catch (err) {
-    if (err instanceof PathTraversalError) {
-      process.stderr.write(
-        `mcp-doc-search: rejecting unsafe indexDir "${rawIndexDir}" ` +
-          `(${err.message}); falling back to "${DEFAULT_INDEX_DIR}"\n`,
-      );
-      indexDirRelative = DEFAULT_INDEX_DIR;
-      indexDir = path.join(workspaceRoot, DEFAULT_INDEX_DIR);
-    } else {
-      throw err;
-    }
-  }
-  ensureGitignored(workspaceRoot, indexDirRelative);
+  const rawIndexDir = process.env.DOC_SEARCH_INDEX_DIR ?? settings["docSearch.indexDir"];
+  const mode = resolveMode(
+    process.env.DOC_SEARCH_INDEX_LOCATION ?? settings["docSearch.indexLocation"],
+    rawIndexDir,
+  );
+  const resolved = resolveIndexLocation(workspaceRoot, {
+    mode,
+    indexDir: rawIndexDir,
+    env: process.env,
+  });
+  const indexDir = resolved.indexDir;
+  if (resolved.shouldGitignore && resolved.gitignoreEntry)
+    ensureGitignored(workspaceRoot, resolved.gitignoreEntry);
   const maxChunkChars = settings["docSearch.maxChunkChars"] ?? 4000;
   const headingDepth = settings["docSearch.headingDepth"] ?? 2;
 

@@ -14,6 +14,7 @@ describe("Extension Config", () => {
           const defaults: Record<string, any> = {
             docGlob: "doc/**/*.md",
             indexDir: ".doc-search-index",
+            indexLocation: "global",
             headingDepth: 2,
             maxChunkChars: 4000,
             embedProvider: "local",
@@ -31,6 +32,7 @@ describe("Extension Config", () => {
       const config = readConfig();
 
       expect(config.docGlob).toBe("doc/**/*.md");
+      expect(config.indexLocation).toBe("global");
       expect(config.embedProvider).toBe("local");
       expect(config.autoReindex).toBe(true);
     });
@@ -47,7 +49,7 @@ describe("Extension Config", () => {
       expect(config.openaiApiKey).toBe("custom-key");
     });
 
-    it("should read all 8 settings", () => {
+    it("should read all 9 settings", () => {
       const mockCfg = {
         get: vi.fn((key: string, defaultValue: any) => defaultValue),
       };
@@ -58,6 +60,7 @@ describe("Extension Config", () => {
 
       expect(config).toHaveProperty("docGlob");
       expect(config).toHaveProperty("indexDir");
+      expect(config).toHaveProperty("indexLocation");
       expect(config).toHaveProperty("headingDepth");
       expect(config).toHaveProperty("maxChunkChars");
       expect(config).toHaveProperty("embedProvider");

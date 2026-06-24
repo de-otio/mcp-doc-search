@@ -35,13 +35,16 @@ code --install-extension mcp-doc-search-<target>-<version>.vsix
 
 Open VS Code settings and set:
 
-| Setting                   | Default             | Description                                                  |
-| ------------------------- | ------------------- | ------------------------------------------------------------ |
-| `docSearch.docGlob`       | `doc/**/*.md`       | Glob pattern for docs to index                               |
-| `docSearch.indexDir`      | `.doc-search-index` | Where to store the vector index (auto-added to `.gitignore`) |
-| `docSearch.headingDepth`  | `2`                 | Split on `#` only (1) or `#` and `##` (2)                    |
-| `docSearch.embedProvider` | `local`             | `local`, `ollama`, or `openai`                               |
-| `docSearch.autoReindex`   | `true`              | Auto-reindex on file save                                    |
+| Setting                   | Default             | Description                                                                                  |
+| ------------------------- | ------------------- | -------------------------------------------------------------------------------------------- |
+| `docSearch.indexLocation` | `global`            | Where to store the index: `global` (default, under `~/.doc-search`) or `workspace` (in-tree) |
+| `docSearch.docGlob`       | `doc/**/*.md`       | Glob pattern for docs to index                                                               |
+| `docSearch.indexDir`      | `.doc-search-index` | Workspace mode only: where to store the vector index                                         |
+| `docSearch.headingDepth`  | `2`                 | Split on `#` only (1) or `#` and `##` (2)                                                    |
+| `docSearch.embedProvider` | `local`             | `local`, `ollama`, or `openai`                                                               |
+| `docSearch.autoReindex`   | `true`              | Auto-reindex on file save                                                                    |
+
+**Index location:** By default, the search index is stored under `~/.doc-search/indexes/` (outside your project tree) and automatically migrates any existing `.doc-search-index` folder on first run. To use the legacy in-tree location, set `docSearch.indexLocation` to `workspace`.
 
 ### Use it
 

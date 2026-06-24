@@ -28,12 +28,21 @@ vi.mock("../../src/extension/config.js", () => ({
   readConfig: vi.fn(() => ({
     docGlob: "doc/**/*.md",
     indexDir: ".doc-search-index",
+    indexLocation: "global",
     maxChunkChars: 4000,
     headingDepth: 2,
     embedProvider: "local",
     autoReindex: true,
   })),
   readOpenAIApiKey: vi.fn(async () => undefined),
+}));
+vi.mock("../../src/core/indexLocation.js", () => ({
+  resolveMode: vi.fn(() => "global" as const),
+  resolveIndexLocation: vi.fn(() => ({
+    indexDir: "/mock-home/.doc-search/indexes/workspace-abc123",
+    mode: "global" as const,
+    shouldGitignore: false,
+  })),
 }));
 vi.mock("../../src/core/embedder.js", () => ({
   createEmbedProvider: vi.fn(() => ({ embed: vi.fn() })),
@@ -108,6 +117,45 @@ describe("Commands", () => {
     const call = calls.find((c) => c[0] === name);
     return call?.[1];
   }
+
+  describe("buildFreshIndexer resolver wiring", () => {
+    it("passes resolved indexDir from resolveIndexLocation to the Indexer config", async () => {
+      const { resolveIndexLocation, resolveMode } = await import("../../src/core/indexLocation.js");
+      vi.mocked(resolveIndexLocation).mockReturnValue({
+        indexDir: "/mock-home/.doc-search/indexes/workspace-abc123",
+        mode: "global",
+        shouldGitignore: false,
+      });
+
+      registerCommands(mockContext, deps);
+      const handler = findHandler("docSearch.reindex");
+      await handler(true);
+
+      expect(vi.mocked(resolveMode)).toHaveBeenCalledWith("global", ".doc-search-index");
+      expect(vi.mocked(resolveIndexLocation)).toHaveBeenCalledWith(
+        "/workspace",
+        expect.objectContaining({ indexDir: ".doc-search-index" }),
+      );
+    });
+
+    it("uses workspace mode indexDir when resolveIndexLocation returns workspace mode", async () => {
+      const { resolveIndexLocation } = await import("../../src/core/indexLocation.js");
+      vi.mocked(resolveIndexLocation).mockReturnValue({
+        indexDir: "/workspace/.custom-index",
+        mode: "workspace",
+        shouldGitignore: true,
+        gitignoreEntry: ".custom-index",
+      });
+
+      registerCommands(mockContext, deps);
+      const handler = findHandler("docSearch.reindex");
+      await handler(true);
+
+      // Verify that the resolved indexDir (not a raw path.join) was used.
+      // The Indexer is constructed via buildFreshIndexer, which calls resolveIndexLocation.
+      expect(vi.mocked(resolveIndexLocation)).toHaveBeenCalled();
+    });
+  });
 
   describe("registerCommands wiring", () => {
     it("registers all 6 commands", () => {

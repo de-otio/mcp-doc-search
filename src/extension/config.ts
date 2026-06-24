@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 export interface ExtensionConfig {
   docGlob: string;
   indexDir: string;
+  indexLocation: "global" | "workspace";
   headingDepth: 1 | 2;
   maxChunkChars: number;
   embedProvider: "local" | "ollama" | "openai";
@@ -17,6 +18,7 @@ export function readConfig(apiKey = ""): ExtensionConfig {
   return {
     docGlob: cfg.get("docGlob", "doc/**/*.md"),
     indexDir: cfg.get("indexDir", ".doc-search-index"),
+    indexLocation: cfg.get("indexLocation", "global") as "global" | "workspace",
     headingDepth: cfg.get("headingDepth", 2) as 1 | 2,
     maxChunkChars: cfg.get("maxChunkChars", 4000),
     embedProvider: cfg.get("embedProvider", "local") as "local" | "ollama" | "openai",

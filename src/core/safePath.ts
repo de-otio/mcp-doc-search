@@ -66,6 +66,47 @@ export function resolveSafePath(workspaceRoot: string, ref: string): string {
 }
 
 /**
+ * Resolve `ref` against an arbitrary trusted `baseDir` and assert the result
+ * stays inside it. Same containment logic as `resolveSafePath`, but where the
+ * base is a caller-chosen trusted directory rather than the workspace root —
+ * used for the `home/indexes/<key>` re-validation in the index-location
+ * resolver.
+ *
+ * **String-level containment only.** This compares resolved path strings; it
+ * does NOT consult the filesystem. If `baseDir` (or a segment of it) is a
+ * symlink, this check can be satisfied while the real write lands elsewhere.
+ * The caller is therefore responsible for **realpath-canonicalizing `baseDir`
+ * first** so a symlinked base cannot redirect the real write. The
+ * index-location resolver does exactly this before composing `indexes/`.
+ *
+ * Returns the absolute resolved path. Throws `PathTraversalError` on
+ * violation. The error message never includes `baseDir`.
+ */
+export function resolveWithinBase(baseDir: string, ref: string): string {
+  if (typeof ref !== "string") {
+    throw new PathTraversalError(String(ref), "ref must be a string");
+  }
+
+  const normalizedRef = ref.replace(/\\/g, "/");
+
+  if (path.isAbsolute(normalizedRef)) {
+    throw new PathTraversalError(ref, "absolute paths are not allowed");
+  }
+
+  const absBase = path.resolve(baseDir);
+  const resolved = path.resolve(absBase, normalizedRef);
+
+  // Containment check. Append `path.sep` to the base so `/base` is not
+  // accepted as a prefix of `/base-evil`.
+  const baseWithSep = absBase.endsWith(path.sep) ? absBase : absBase + path.sep;
+  if (resolved !== absBase && !resolved.startsWith(baseWithSep)) {
+    throw new PathTraversalError(ref, "path escapes the base directory");
+  }
+
+  return resolved;
+}
+
+/**
  * True when `ref` is a syntactically-safe relative path (no absolute, no
  * traversal segments). Use for early validation of glob patterns where
  * `path.resolve` semantics are not appropriate (globs are not paths).

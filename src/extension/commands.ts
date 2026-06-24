@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import * as path from "node:path";
 import * as fs from "node:fs";
+import { resolveIndexLocation, resolveMode } from "../core/indexLocation.js";
 import { Indexer } from "../core/indexer.js";
 import type { EmbedProvider } from "../core/types.js";
 import { validateConfig } from "../core/types.js";
@@ -37,11 +38,15 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
     const apiKey = await readOpenAIApiKey(deps.context.secrets);
     const freshConfig = readConfig(apiKey);
     const freshEmbedProvider = createEmbedProvider(freshConfig);
+    const freshResolved = resolveIndexLocation(workspaceRoot, {
+      mode: resolveMode(freshConfig.indexLocation, freshConfig.indexDir),
+      indexDir: freshConfig.indexDir,
+    });
     const freshIndexerConfig = validateConfig(
       {
         workspaceRoot,
         docGlob: freshConfig.docGlob,
-        indexDir: path.join(workspaceRoot, freshConfig.indexDir),
+        indexDir: freshResolved.indexDir,
         maxChunkChars: freshConfig.maxChunkChars,
         headingDepth: freshConfig.headingDepth,
       },

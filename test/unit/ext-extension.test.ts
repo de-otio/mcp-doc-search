@@ -10,6 +10,14 @@ vi.mock("../../src/extension/statusBar.js");
 vi.mock("../../src/extension/commands.js");
 vi.mock("../../src/extension/fileWatcher.js");
 vi.mock("../../src/core/gitignore.js");
+vi.mock("../../src/core/indexLocation.js", () => ({
+  resolveMode: vi.fn(() => "global" as const),
+  resolveIndexLocation: vi.fn(() => ({
+    indexDir: "/mock-home/.doc-search/indexes/workspace-abc123",
+    mode: "global" as const,
+    shouldGitignore: false,
+  })),
+}));
 
 describe("Extension", () => {
   let mockContext: any;
@@ -36,6 +44,7 @@ describe("Extension", () => {
     vi.mocked(readConfig).mockReturnValue({
       docGlob: "doc/**/*.md",
       indexDir: ".doc-search-index",
+      indexLocation: "global",
       headingDepth: 2,
       maxChunkChars: 4000,
       embedProvider: "local",
@@ -69,6 +78,7 @@ describe("Extension", () => {
       vi.mocked(readConfig).mockReturnValue({
         docGlob: "doc/**/*.md",
         indexDir: ".doc-search-index",
+        indexLocation: "global",
         headingDepth: 2,
         maxChunkChars: 4000,
         embedProvider: "local",
@@ -88,6 +98,7 @@ describe("Extension", () => {
       vi.mocked(readConfig).mockReturnValue({
         docGlob: "doc/**/*.md",
         indexDir: ".doc-search-index",
+        indexLocation: "global",
         headingDepth: 2,
         maxChunkChars: 4000,
         embedProvider: "local",
@@ -107,6 +118,7 @@ describe("Extension", () => {
       vi.mocked(readConfig).mockReturnValue({
         docGlob: "doc/**/*.md",
         indexDir: ".doc-search-index",
+        indexLocation: "global",
         headingDepth: 2,
         maxChunkChars: 4000,
         embedProvider: "local",
@@ -154,6 +166,44 @@ describe("Extension", () => {
     });
   });
 
+  describe("resolver wiring", () => {
+    it("calls resolveIndexLocation with the resolved mode and indexDir", async () => {
+      const { resolveIndexLocation, resolveMode } = await import("../../src/core/indexLocation.js");
+
+      await activate(mockContext);
+
+      expect(vi.mocked(resolveMode)).toHaveBeenCalledWith("global", ".doc-search-index");
+      expect(vi.mocked(resolveIndexLocation)).toHaveBeenCalledWith(
+        "/workspace",
+        expect.objectContaining({ indexDir: ".doc-search-index" }),
+      );
+    });
+
+    it("does not call ensureGitignored when shouldGitignore is false (global mode)", async () => {
+      const { ensureGitignored } = await import("../../src/core/gitignore.js");
+
+      await activate(mockContext);
+
+      expect(vi.mocked(ensureGitignored)).not.toHaveBeenCalled();
+    });
+
+    it("calls ensureGitignored when shouldGitignore is true (workspace mode)", async () => {
+      const { resolveIndexLocation } = await import("../../src/core/indexLocation.js");
+      vi.mocked(resolveIndexLocation).mockReturnValueOnce({
+        indexDir: "/workspace/.doc-search-index",
+        mode: "workspace",
+        shouldGitignore: true,
+        gitignoreEntry: ".doc-search-index",
+      });
+
+      const { ensureGitignored } = await import("../../src/core/gitignore.js");
+
+      await activate(mockContext);
+
+      expect(vi.mocked(ensureGitignored)).toHaveBeenCalledWith("/workspace", ".doc-search-index");
+    });
+  });
+
   describe("deactivate", () => {
     it("should be callable without errors", () => {
       expect(() => deactivate()).not.toThrow();
@@ -166,6 +216,7 @@ describe("Extension", () => {
       vi.mocked(readConfig).mockReturnValue({
         docGlob: "doc/**/*.md",
         indexDir: ".doc-search-index",
+        indexLocation: "global",
         headingDepth: 2,
         maxChunkChars: 4000,
         embedProvider: "local",

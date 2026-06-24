@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Index location moved to `~/.doc-search` by default.** The search index now lives under `~/.doc-search/indexes/<workspace-key>/` (global location, outside your project tree) instead of in-tree at `.doc-search-index`. This reduces project clutter and keeps the index out of version control without requiring a `.gitignore` edit. The location is derived from the workspace's canonical path, so the VS Code extension, the MCP server, and the CLI all share one index per workspace (clones at different paths keep independent indexes).
+  - **Automatic migration:** any existing `.doc-search-index` folder is migrated to the global location on first use. No manual action required.
+  - **No `.gitignore` modification:** the legacy `.doc-search-index` entry in `.gitignore` (if present) is now harmless and can be removed manually.
+  - **Workspace mode available:** set `docSearch.indexLocation` to `workspace` to use the legacy in-tree location.
+  - **New environment variables:** `DOC_SEARCH_HOME` (base directory override) and `DOC_SEARCH_INDEX_LOCATION` (mode selection) for CLI and MCP server parity with VS Code settings.
+
 ## [0.2.0] - 2026-05-11
 
 Security release. Addresses findings from the 2026-05-09 internal

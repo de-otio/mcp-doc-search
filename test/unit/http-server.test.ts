@@ -208,6 +208,14 @@ describe("Concurrent MCP requests", () => {
 // ---------------------------------------------------------------------------
 
 describe("Idle model disposal", () => {
+  // If startHttpServer rejects (e.g. the host blocks loopback listen), the
+  // `vi.useRealTimers()` at the end of a test never runs and fake timers leak
+  // into later describe blocks, cascading unrelated failures. Always restore.
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
   it("calls dispose() on the embed provider after the idle timeout", async () => {
     vi.resetModules();
     vi.useFakeTimers();
@@ -300,6 +308,14 @@ describe("Idle model disposal", () => {
 describe("Daemon PID file", () => {
   beforeEach(() => {
     vi.resetModules();
+  });
+
+  // Guarantee a clean global state for every daemon test: restore any spy
+  // (e.g. a leaked process.kill mock that would make a dead PID look alive)
+  // and any fake timers a preceding describe block failed to tear down.
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("writePidFile writes PID, readPidFile reads it back, removePidFile cleans up", async () => {
