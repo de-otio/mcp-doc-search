@@ -137,7 +137,7 @@ mcp-doc-search context remove doc/api.md
 
 **Flags:** `--json` (machine-readable output), `--files` (paths only, for `search`/`multi-get`), `--explain` (score breakdown for `search`).
 
-**Environment:** same as the MCP server — `DOC_SEARCH_WORKSPACE`, `DOC_SEARCH_GLOB`, `DOC_SEARCH_INDEX_DIR`, `USE_OPENAI=1`, `OLLAMA_URL`.
+**Environment:** same as the MCP server — `DOC_SEARCH_WORKSPACE`, `DOC_SEARCH_GLOB`, `DOC_SEARCH_HOME`, `DOC_SEARCH_INDEX_LOCATION`, `DOC_SEARCH_INDEX_DIR`, `USE_OPENAI=1`, `OLLAMA_URL`.
 
 **Exit codes:** 0 = success, 1 = user error (bad args / missing file), 2 = engine error.
 

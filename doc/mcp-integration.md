@@ -20,8 +20,7 @@ The generated file includes your current settings and looks like this:
       "args": ["/path/to/extension/dist/mcp-server.js"],
       "env": {
         "DOC_SEARCH_WORKSPACE": "/path/to/your/workspace",
-        "DOC_SEARCH_GLOB": "doc/**/*.md",
-        "DOC_SEARCH_INDEX_DIR": ".doc-search-index"
+        "DOC_SEARCH_GLOB": "doc/**/*.md"
       }
     }
   }
@@ -87,8 +86,7 @@ Create `.mcp.json` in your workspace root:
       "args": ["<path-to-extension>/dist/mcp-server.js"],
       "env": {
         "DOC_SEARCH_WORKSPACE": "<absolute-path-to-workspace>",
-        "DOC_SEARCH_GLOB": "doc/**/*.md",
-        "DOC_SEARCH_INDEX_DIR": ".doc-search-index"
+        "DOC_SEARCH_GLOB": "doc/**/*.md"
       }
     }
   }
@@ -108,7 +106,6 @@ claude mcp add doc-search \
   -s project \
   -e DOC_SEARCH_WORKSPACE=/absolute/path/to/workspace \
   -e DOC_SEARCH_GLOB="doc/**/*.md" \
-  -e DOC_SEARCH_INDEX_DIR=".doc-search-index" \
   -- node ~/.vscode/extensions/de-otio.mcp-doc-search-*/dist/mcp-server.js
 ```
 
@@ -160,17 +157,19 @@ Trigger a documentation reindex.
 
 ## Environment Variables
 
-The MCP server is configured via the `env` block in `.mcp.json`. The **Generate .mcp.json** command fills these in automatically from your extension settings.
+The MCP server is configured via the `env` block in `.mcp.json`. The **Generate .mcp.json** command fills these in automatically from your extension settings. By default the index is stored globally under `~/.doc-search` (see [Configuration](configuration.md)), so no index-location variables are needed; set `DOC_SEARCH_INDEX_LOCATION=workspace` to keep the index in-tree.
 
-| Variable               | Default             | Description                                          |
-| ---------------------- | ------------------- | ---------------------------------------------------- |
-| `DOC_SEARCH_WORKSPACE` | `process.cwd()`     | Absolute path to workspace root                      |
-| `DOC_SEARCH_GLOB`      | `doc/**/*.md`       | File glob pattern                                    |
-| `DOC_SEARCH_INDEX_DIR` | `.doc-search-index` | Index directory (relative to workspace)              |
-| `USE_OPENAI`           | `0`                 | Set to `1` to use OpenAI embeddings                  |
-| `OPENAI_API_KEY`       | —                   | Required if `USE_OPENAI=1`                           |
-| `OLLAMA_URL`           | —                   | Ollama server URL (presence enables Ollama provider) |
-| `OLLAMA_MODEL`         | `nomic-embed-text`  | Ollama model name                                    |
+| Variable                    | Default             | Description                                                                    |
+| --------------------------- | ------------------- | ------------------------------------------------------------------------------ |
+| `DOC_SEARCH_WORKSPACE`      | `process.cwd()`     | Absolute path to workspace root                                                |
+| `DOC_SEARCH_GLOB`           | `doc/**/*.md`       | File glob pattern                                                              |
+| `DOC_SEARCH_HOME`           | `~/.doc-search`     | Base directory for the global index (absolute path)                            |
+| `DOC_SEARCH_INDEX_LOCATION` | `global`            | Index location mode: `global` or `workspace`                                   |
+| `DOC_SEARCH_INDEX_DIR`      | `.doc-search-index` | Workspace-mode index directory (relative to workspace); ignored in global mode |
+| `USE_OPENAI`                | `0`                 | Set to `1` to use OpenAI embeddings                                            |
+| `OPENAI_API_KEY`            | —                   | Required if `USE_OPENAI=1`                                                     |
+| `OLLAMA_URL`                | —                   | Ollama server URL (presence enables Ollama provider)                           |
+| `OLLAMA_MODEL`              | `nomic-embed-text`  | Ollama model name                                                              |
 
 ## Shared Index
 
