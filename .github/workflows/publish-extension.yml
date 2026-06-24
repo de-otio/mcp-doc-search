@@ -173,12 +173,39 @@ jobs:
         env:
           VSCE_PAT: ${{ secrets.VSCODE_MARKETPLACE_PAT }}
         run: |
-          set -euo pipefail
-          for vsix in $(find artifacts -name '*.vsix'); do
+          # Not `set -e`: one platform's transient failure must not abort the
+          # whole loop (that strands a partial, per-target-inconsistent release).
+          # Each VSIX is retried on transient Marketplace errors and treated as
+          # success if its version is already published (idempotent re-runs).
+          set -uo pipefail
+          failures=()
+          for vsix in $(find artifacts -name '*.vsix' | sort); do
             echo "::group::Publishing $vsix"
-            npx @vscode/vsce publish --packagePath "$vsix"
+            done_one=false
+            for attempt in 1 2 3; do
+              out="$(npx @vscode/vsce publish --packagePath "$vsix" 2>&1)" && status=0 || status=$?
+              echo "$out"
+              if [ "$status" -eq 0 ]; then
+                done_one=true; break
+              fi
+              if printf '%s' "$out" | grep -qiE 'already (exists|published)|conflict|\b409\b'; then
+                echo "Already published for this target; skipping."
+                done_one=true; break
+              fi
+              echo "Attempt $attempt failed (likely transient); retrying in $((attempt * 15))s..."
+              sleep $((attempt * 15))
+            done
             echo "::endgroup::"
+            if [ "$done_one" != true ]; then
+              echo "::error::Failed to publish $vsix after 3 attempts"
+              failures+=("$vsix")
+            fi
           done
+          if [ "${#failures[@]}" -gt 0 ]; then
+            echo "::error::Publish failed for: ${failures[*]}"
+            exit 1
+          fi
+          echo "All per-target VSIXes are published (or already present)."
 
   release:
     name: Create GitHub Release
