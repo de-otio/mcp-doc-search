@@ -77,6 +77,11 @@ jobs:
     name: Package VSIX (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
     needs: wait-for-ci
+    # wait-for-ci only runs on tag pushes; on workflow_dispatch (manual
+    # re-publish / partial-publish recovery) it is skipped, which would
+    # otherwise cascade-skip this job. Run when the CI gate passed OR was
+    # skipped, but never when it actually failed.
+    if: ${{ !cancelled() && (needs.wait-for-ci.result == 'success' || needs.wait-for-ci.result == 'skipped') }}
     timeout-minutes: 25
 
     strategy:
