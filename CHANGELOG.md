@@ -5,6 +5,12 @@ All notable changes to **mcp-doc-search** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2026-06-24
+
+### Security
+
+- **Patched the vulnerable transitive dependencies flagged by Dependabot (20 → 0 open alerts).** Patched versions are pinned via npm `overrides`. The shipped runtime now resolves `protobufjs` ≥7.6.3 (was 7.5.4 — clears **1 critical + 5 high + 5 moderate** advisories pulled in through `@huggingface/transformers`) and `@protobufjs/utf8` ≥1.1.1. Build/dev tooling was likewise pinned: `fast-uri` ≥3.1.2, `flatted` ≥3.4.2, `lodash` ≥4.18.0, `@hono/node-server` ≥1.19.13, `postcss` ≥8.5.14, and `picomatch` ≥2.3.2 (scoped under `micromatch` so `vitest`/`vite` keep `picomatch` 4.x); `uuid` / `@azure/identity` (under `@vscode/vsce`) were bumped to their patched releases.
+
 ## [0.3.2] - 2026-06-24
 
 ### Changed
