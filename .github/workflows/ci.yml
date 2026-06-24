@@ -63,6 +63,28 @@ jobs:
           path: coverage/
           retention-days: 7
 
+  dependency-review:
+    name: Dependency review
+    # PR-time supply-chain gate: blocks pull requests that introduce a
+    # dependency with a known high/critical advisory (same severity bar as the
+    # informational `npm audit` step above). Only meaningful on pull requests —
+    # the action diffs the PR base against its head, so it is skipped on push.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@v5
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure
+
   build:
     name: Build bundles
     runs-on: ubuntu-latest

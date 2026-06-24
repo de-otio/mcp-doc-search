@@ -35,6 +35,9 @@ jobs:
         uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
+          # security-extended: the broader security query suite (more
+          # coverage than the default), recommended for public repos.
+          queries: security-extended
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
