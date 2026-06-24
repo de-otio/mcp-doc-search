@@ -336,10 +336,17 @@ function isSafeLegacyIndex(dir: string): boolean {
   }
   if (!st.isDirectory()) return false;
 
-  // Sentinel must be a regular file (never a symlinked / missing sentinel).
+  // Sentinel must be a real (non-symlink) file or directory. A real LanceDB
+  // table is a DIRECTORY (`doc_chunks.lance/` holding `data/`, `_versions/`,
+  // …), so a regular-file-only check rejects every real index and migration
+  // never runs. We only need to exclude a symlinked / missing sentinel here;
+  // the interior-symlink walk below covers the rest of the tree. Mirrors the
+  // file-or-dir acceptance in isPopulated().
   try {
     const sentinel = fs.lstatSync(path.join(dir, SENTINEL));
-    if (!sentinel.isFile()) return false;
+    if (sentinel.isSymbolicLink() || (!sentinel.isFile() && !sentinel.isDirectory())) {
+      return false;
+    }
   } catch {
     return false;
   }

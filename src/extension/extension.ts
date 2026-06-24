@@ -9,6 +9,8 @@ import { registerCommands } from "./commands.js";
 import { FileWatcher } from "./fileWatcher.js";
 import { ensureGitignored } from "../core/gitignore.js";
 import { resolveIndexLocation, resolveMode } from "../core/indexLocation.js";
+import { repairMcpJson } from "./mcpJson.js";
+import * as path from "node:path";
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -24,6 +26,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const indexDir = resolved.indexDir;
   if (resolved.shouldGitignore && resolved.gitignoreEntry)
     ensureGitignored(workspaceRoot, resolved.gitignoreEntry);
+
+  // Keep an existing .mcp.json pointing at THIS extension build. An upgrade
+  // moves the install dir, so a previously generated .mcp.json embeds a now-
+  // defunct absolute path to mcp-server.js; re-point it (no-op if absent/current).
+  const expectedMcpServer = path.join(context.extensionPath, "dist", "mcp-server.js");
+  if (repairMcpJson(workspaceRoot, expectedMcpServer)) {
+    vscode.window.showInformationMessage(
+      "Doc Search: updated .mcp.json to the current extension path. Reload the window for MCP clients to pick it up.",
+    );
+  }
   const store = new LanceVectorStore(indexDir);
   const embedProvider = createEmbedProvider(config);
   const indexerConfig = validateConfig(

@@ -14,6 +14,9 @@ import {
 
 const isPosix = process.platform !== "win32";
 const SENTINEL = "doc_chunks.lance";
+// A regular file inside the LanceDB table dir — real tables are directories, so
+// the sentinel itself is never a regular file.
+const SENTINEL_DATA = "data.lance";
 
 let scratch: string;
 const cleanups: string[] = [];
@@ -24,12 +27,28 @@ function mkScratch(prefix: string): string {
   return dir;
 }
 
-/** Create a populated legacy index dir (sentinel file with content). */
-function makeLegacy(workspace: string, sentinelContent = "lance-data"): string {
+/**
+ * Write a real-LanceDB-shaped index at `dir`: the sentinel `doc_chunks.lance`
+ * is a DIRECTORY (not a regular file) containing a data file. This matches what
+ * LanceDB actually produces on disk — the file-shaped fixture this replaced let
+ * a migration bug ship (isSafeLegacyIndex required a regular-file sentinel).
+ */
+function makeIndexAt(dir: string, content = "lance-data"): void {
+  const table = path.join(dir, SENTINEL);
+  fs.mkdirSync(table, { recursive: true });
+  fs.writeFileSync(path.join(table, SENTINEL_DATA), content);
+}
+
+/** Create a populated legacy index dir (real-LanceDB-shaped). */
+function makeLegacy(workspace: string, content = "lance-data"): string {
   const legacy = path.join(workspace, LEGACY_INDEX_DIRNAME);
-  fs.mkdirSync(legacy, { recursive: true });
-  fs.writeFileSync(path.join(legacy, SENTINEL), sentinelContent);
+  makeIndexAt(legacy, content);
   return legacy;
+}
+
+/** Read the data file inside a migrated/target index's sentinel directory. */
+function readSentinelData(indexDir: string): string {
+  return fs.readFileSync(path.join(indexDir, SENTINEL, SENTINEL_DATA), "utf8");
 }
 
 beforeEach(() => {
@@ -243,7 +262,7 @@ describe("resolveIndexLocation (global mode)", () => {
     const r = resolveIndexLocation(ws, { mode: "global", home });
     expect(r.migratedFrom).toBeDefined();
     expect(fs.existsSync(path.join(r.indexDir, SENTINEL))).toBe(true);
-    expect(fs.readFileSync(path.join(r.indexDir, SENTINEL), "utf8")).toBe("real-lance-data");
+    expect(readSentinelData(r.indexDir)).toBe("real-lance-data");
     // Legacy gone after same-FS rename.
     expect(fs.existsSync(path.join(ws, LEGACY_INDEX_DIRNAME))).toBe(false);
   });
@@ -255,12 +274,11 @@ describe("resolveIndexLocation (global mode)", () => {
     // Pre-populate the target.
     const key = workspaceKey(fs.realpathSync.native(ws));
     const target = path.join(fs.realpathSync.native(home), "indexes", key);
-    fs.mkdirSync(target, { recursive: true });
-    fs.writeFileSync(path.join(target, SENTINEL), "existing-data");
+    makeIndexAt(target, "existing-data");
 
     const r = resolveIndexLocation(ws, { mode: "global", home });
     expect(r.migratedFrom).toBeUndefined();
-    expect(fs.readFileSync(path.join(r.indexDir, SENTINEL), "utf8")).toBe("existing-data");
+    expect(readSentinelData(r.indexDir)).toBe("existing-data");
     // Legacy untouched.
     expect(fs.existsSync(path.join(legacy, SENTINEL))).toBe(true);
   });
@@ -364,7 +382,7 @@ describe("resolveIndexLocation — cross-device migration", () => {
 
     const r = resolveIndexLocation(ws, { mode: "global", home });
     expect(r.migratedFrom).toBeDefined();
-    expect(fs.readFileSync(path.join(r.indexDir, SENTINEL), "utf8")).toBe("xdev-data");
+    expect(readSentinelData(r.indexDir)).toBe("xdev-data");
     // Source deleted only after verified publish.
     expect(fs.existsSync(path.join(ws, LEGACY_INDEX_DIRNAME))).toBe(false);
     // No orphan migrating dir left behind.
@@ -458,7 +476,7 @@ describe("resolveIndexLocation — cross-device migration", () => {
 
     const r = resolveIndexLocation(ws, { mode: "global", home });
     // Published target is populated.
-    expect(fs.readFileSync(path.join(r.indexDir, SENTINEL), "utf8")).toBe("publish-then-rm-fail");
+    expect(readSentinelData(r.indexDir)).toBe("publish-then-rm-fail");
     // Legacy left behind, not lost.
     expect(fs.existsSync(path.join(ws, LEGACY_INDEX_DIRNAME))).toBe(true);
     expect(stderr.mock.calls.map((c) => String(c[0])).join("")).toMatch(/legacy/);

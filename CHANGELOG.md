@@ -5,6 +5,13 @@ All notable changes to **mcp-doc-search** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Legacy `.doc-search-index` migration never ran for real indexes.** The 0.3.0 safety gate required the LanceDB sentinel (`doc_chunks.lance`) to be a regular file, but LanceDB always stores it as a directory, so every real legacy index was rejected as "unsafe." The index was silently re-built in the global location and the in-tree `.doc-search-index` was left behind instead of migrated. The gate now accepts a file-or-directory sentinel (still refusing symlinks), matching the populated-index check.
+- **Stale `.mcp.json` after an extension upgrade.** A generated `.mcp.json` embeds an absolute path to the extension's `dist/mcp-server.js`; upgrading the extension moves the install directory, leaving the configured MCP server pointing at a defunct path. The extension now re-points an existing doc-search server entry to the current build on activation (it never creates the file or touches other servers / the `env` block).
+
 ## [0.3.0] - 2026-06-24
 
 ### Changed
