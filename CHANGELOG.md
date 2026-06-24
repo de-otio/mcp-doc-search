@@ -5,6 +5,13 @@ All notable changes to **mcp-doc-search** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **A superseded in-tree `.doc-search-index` is now removed automatically.** When migration is _skipped_ because a populated global index already exists for the workspace (e.g. the index was rebuilt globally before the legacy one could be migrated), the extension now removes the redundant in-tree `.doc-search-index` on activation and shows a one-time notification — so you no longer end up with both an in-tree and a global copy. Cleanup runs only in the VS Code extension (the trusted writer), never in the MCP server / CLI reader, and reuses the same fail-closed safety gate as migration (real directory, sentinel present, no interior symlinks; the only populated index is never deleted).
+- **Settings UI clarifies the index location.** The settings panel's "Search index location" hint now explains that the index lives globally under `~/.doc-search` by default and that entering a custom folder switches to legacy in-tree storage.
+
 ## [0.3.1] - 2026-06-24
 
 ### Fixed

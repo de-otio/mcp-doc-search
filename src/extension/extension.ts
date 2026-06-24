@@ -8,7 +8,11 @@ import { StatusBarManager } from "./statusBar.js";
 import { registerCommands } from "./commands.js";
 import { FileWatcher } from "./fileWatcher.js";
 import { ensureGitignored } from "../core/gitignore.js";
-import { resolveIndexLocation, resolveMode } from "../core/indexLocation.js";
+import {
+  resolveIndexLocation,
+  resolveMode,
+  removeSupersededLegacyIndex,
+} from "../core/indexLocation.js";
 import { repairMcpJson } from "./mcpJson.js";
 import * as path from "node:path";
 
@@ -26,6 +30,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const indexDir = resolved.indexDir;
   if (resolved.shouldGitignore && resolved.gitignoreEntry)
     ensureGitignored(workspaceRoot, resolved.gitignoreEntry);
+
+  // In global mode the in-tree `.doc-search-index` is redundant: either it was
+  // just migrated (already moved away) or a populated global index supersedes
+  // it. Remove any leftover so the workspace tree isn't littered with a stale
+  // copy. Deletion lives here in the extension (the trusted writer) — never in
+  // the MCP reader. Runs once: after removal the next activation is a no-op.
+  const removedLegacy =
+    resolved.mode === "global"
+      ? (resolved.migratedFrom ?? removeSupersededLegacyIndex(workspaceRoot, indexDir))
+      : undefined;
+  if (removedLegacy) {
+    vscode.window.showInformationMessage(
+      "Doc Search: this workspace now uses the global index (~/.doc-search); " +
+        "removed the redundant in-tree .doc-search-index folder.",
+    );
+  }
 
   // Keep an existing .mcp.json pointing at THIS extension build. An upgrade
   // moves the install dir, so a previously generated .mcp.json embeds a now-

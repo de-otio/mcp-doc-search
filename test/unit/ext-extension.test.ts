@@ -17,6 +17,7 @@ vi.mock("../../src/core/indexLocation.js", () => ({
     mode: "global" as const,
     shouldGitignore: false,
   })),
+  removeSupersededLegacyIndex: vi.fn(() => undefined),
 }));
 
 describe("Extension", () => {
@@ -201,6 +202,54 @@ describe("Extension", () => {
       await activate(mockContext);
 
       expect(vi.mocked(ensureGitignored)).toHaveBeenCalledWith("/workspace", ".doc-search-index");
+    });
+
+    it("removes a superseded in-tree index in global mode and notifies", async () => {
+      const { removeSupersededLegacyIndex } = await import("../../src/core/indexLocation.js");
+      vi.mocked(removeSupersededLegacyIndex).mockReturnValueOnce("/workspace/.doc-search-index");
+
+      await activate(mockContext);
+
+      expect(vi.mocked(removeSupersededLegacyIndex)).toHaveBeenCalledWith(
+        "/workspace",
+        "/mock-home/.doc-search/indexes/workspace-abc123",
+      );
+      expect(vi.mocked(vscode.window.showInformationMessage)).toHaveBeenCalledWith(
+        expect.stringContaining("removed the redundant in-tree"),
+      );
+    });
+
+    it("notifies after a migration without re-running superseded cleanup", async () => {
+      const { resolveIndexLocation, removeSupersededLegacyIndex } =
+        await import("../../src/core/indexLocation.js");
+      vi.mocked(resolveIndexLocation).mockReturnValueOnce({
+        indexDir: "/mock-home/.doc-search/indexes/workspace-abc123",
+        mode: "global",
+        shouldGitignore: false,
+        migratedFrom: "/workspace/.doc-search-index",
+      });
+
+      await activate(mockContext);
+
+      expect(vi.mocked(removeSupersededLegacyIndex)).not.toHaveBeenCalled();
+      expect(vi.mocked(vscode.window.showInformationMessage)).toHaveBeenCalledWith(
+        expect.stringContaining("global index"),
+      );
+    });
+
+    it("does not attempt superseded cleanup in workspace mode", async () => {
+      const { resolveIndexLocation, removeSupersededLegacyIndex } =
+        await import("../../src/core/indexLocation.js");
+      vi.mocked(resolveIndexLocation).mockReturnValueOnce({
+        indexDir: "/workspace/.doc-search-index",
+        mode: "workspace",
+        shouldGitignore: true,
+        gitignoreEntry: ".doc-search-index",
+      });
+
+      await activate(mockContext);
+
+      expect(vi.mocked(removeSupersededLegacyIndex)).not.toHaveBeenCalled();
     });
   });
 

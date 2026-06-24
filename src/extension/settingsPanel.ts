@@ -459,7 +459,13 @@ export class SettingsPanel {
   </div>
   <div class="field">
     <label for="indexDir">Search index location</label>
-    <div class="hint">Folder where the search database is stored (relative to workspace root). You can usually leave this as the default.</div>
+    <div class="hint">
+      By default the index is stored <strong>globally</strong> under <code>~/.doc-search</code> —
+      outside your project, so nothing is committed and no <code>.gitignore</code> change is needed.
+      Leave this at the default to keep that. Entering a custom folder switches to legacy
+      <strong>in-tree</strong> storage at that path inside your workspace (and adds it to
+      <code>.gitignore</code>).
+    </div>
     <input type="text" id="indexDir" placeholder=".doc-search-index">
   </div>
 

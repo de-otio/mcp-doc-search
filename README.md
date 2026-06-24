@@ -44,7 +44,7 @@ Open VS Code settings and set:
 | `docSearch.embedProvider` | `local`             | `local`, `ollama`, or `openai`                                                               |
 | `docSearch.autoReindex`   | `true`              | Auto-reindex on file save                                                                    |
 
-**Index location:** By default, the search index is stored under `~/.doc-search/indexes/` (outside your project tree) and automatically migrates any existing `.doc-search-index` folder on first run. To use the legacy in-tree location, set `docSearch.indexLocation` to `workspace`.
+**Index location:** By default, the search index is stored under `~/.doc-search/indexes/` (outside your project tree) and automatically migrates any existing `.doc-search-index` folder on first run. If a global index already exists for the workspace, the now-redundant in-tree `.doc-search-index` is removed automatically on activation, so you never end up with both. To use the legacy in-tree location, set `docSearch.indexLocation` to `workspace`.
 
 ### Use it
 

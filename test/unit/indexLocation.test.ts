@@ -10,6 +10,7 @@ import {
   workspaceKey,
   resolveMode,
   resolveIndexLocation,
+  removeSupersededLegacyIndex,
 } from "../../src/core/indexLocation.js";
 
 const isPosix = process.platform !== "win32";
@@ -557,5 +558,104 @@ describe("resolveIndexLocation — symlinked base (M5)", () => {
     const r = resolveIndexLocation(ws, { mode: "global", home: link });
     expect(r.indexDir.startsWith(fs.realpathSync.native(realHome))).toBe(true);
     expect(fs.existsSync(r.indexDir)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// removeSupersededLegacyIndex — extension-only cleanup of a redundant in-tree
+// index once a populated global index supersedes it.
+// ---------------------------------------------------------------------------
+
+describe("removeSupersededLegacyIndex", () => {
+  /** Path of the (would-be) populated global target for `ws` under `home`. */
+  function targetFor(ws: string, home: string): string {
+    const key = workspaceKey(fs.realpathSync.native(ws));
+    return path.join(fs.realpathSync.native(home), "indexes", key);
+  }
+
+  it("removes a safe legacy index once the global target is populated", () => {
+    const ws = mkScratch("ws-");
+    const home = mkScratch("home-");
+    const legacy = makeLegacy(ws, "legacy-data");
+    const target = targetFor(ws, home);
+    makeIndexAt(target, "global-data");
+
+    const removed = removeSupersededLegacyIndex(ws, target);
+    expect(removed).toBeDefined();
+    expect(fs.existsSync(legacy)).toBe(false);
+    // The surviving global index is untouched.
+    expect(readSentinelData(target)).toBe("global-data");
+  });
+
+  it("leaves the legacy index when the global target is NOT populated", () => {
+    const ws = mkScratch("ws-");
+    const home = mkScratch("home-");
+    const legacy = makeLegacy(ws, "legacy-data");
+    const target = targetFor(ws, home); // never created/populated
+
+    const removed = removeSupersededLegacyIndex(ws, target);
+    expect(removed).toBeUndefined();
+    expect(fs.existsSync(path.join(legacy, SENTINEL))).toBe(true);
+  });
+
+  it("no-ops when there is no legacy index (e.g. already migrated away)", () => {
+    const ws = mkScratch("ws-");
+    const home = mkScratch("home-");
+    const target = targetFor(ws, home);
+    makeIndexAt(target, "global-data");
+
+    expect(removeSupersededLegacyIndex(ws, target)).toBeUndefined();
+  });
+
+  it("refuses to remove a symlinked legacy dir (fail closed)", () => {
+    if (!isPosix) return;
+    const ws = mkScratch("ws-");
+    const home = mkScratch("home-");
+    const secret = mkScratch("secret-");
+    makeIndexAt(secret, "secret"); // what the symlink points at
+    fs.symlinkSync(secret, path.join(ws, LEGACY_INDEX_DIRNAME));
+    const target = targetFor(ws, home);
+    makeIndexAt(target, "global-data");
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    expect(removeSupersededLegacyIndex(ws, target)).toBeUndefined();
+    // Symlink and its target left intact.
+    expect(fs.existsSync(path.join(secret, SENTINEL))).toBe(true);
+    expect(fs.existsSync(path.join(ws, LEGACY_INDEX_DIRNAME))).toBe(true);
+    expect(stderr.mock.calls.map((c) => String(c[0])).join("")).toMatch(/symlink/);
+  });
+
+  it("refuses when the legacy tree has an interior symlink (fail closed)", () => {
+    if (!isPosix) return;
+    const ws = mkScratch("ws-");
+    const home = mkScratch("home-");
+    const secret = mkScratch("secret-");
+    fs.writeFileSync(path.join(secret, "creds"), "topsecret");
+    const legacy = makeLegacy(ws, "data");
+    fs.symlinkSync(secret, path.join(legacy, "evil"));
+    const target = targetFor(ws, home);
+    makeIndexAt(target, "global-data");
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    expect(removeSupersededLegacyIndex(ws, target)).toBeUndefined();
+    // Link not dereferenced — secret untouched, legacy preserved.
+    expect(fs.existsSync(path.join(secret, "creds"))).toBe(true);
+    expect(fs.existsSync(path.join(legacy, SENTINEL))).toBe(true);
+    expect(stderr.mock.calls.map((c) => String(c[0])).join("")).toMatch(/symlink/);
+  });
+
+  it("never throws and leaves legacy in place when rmSync fails (best-effort)", () => {
+    const ws = mkScratch("ws-");
+    const home = mkScratch("home-");
+    makeLegacy(ws, "data");
+    const target = targetFor(ws, home);
+    makeIndexAt(target, "global-data");
+    vi.spyOn(fs, "rmSync").mockImplementation((p) => {
+      if (String(p).includes(LEGACY_INDEX_DIRNAME)) throw new Error("rm refused");
+    });
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    expect(removeSupersededLegacyIndex(ws, target)).toBeUndefined();
+    expect(stderr.mock.calls.map((c) => String(c[0])).join("")).toMatch(/superseded/);
   });
 });

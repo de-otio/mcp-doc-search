@@ -281,6 +281,66 @@ export function resolveIndexLocation(
   };
 }
 
+/**
+ * Remove a legacy in-tree `.doc-search-index` that the global index has
+ * SUPERSEDED. Returns the removed absolute path, or undefined if nothing was
+ * removed. Best-effort; never throws.
+ *
+ * This is the cleanup counterpart to {@link resolveIndexLocation}'s migration.
+ * A real migration already deletes the source (same-FS rename *moves* it; the
+ * EXDEV path copies then deletes). But when migration is *skipped* because the
+ * global target was already populated — e.g. 0.3.0 rebuilt a fresh global index
+ * before the legacy one could be migrated — the legacy dir is left untouched
+ * and lingers in the workspace. Once the global index is the canonical,
+ * actively-maintained store, that in-tree copy is redundant derived data; this
+ * removes it.
+ *
+ * EXTENSION-ONLY (the trusted writer). The MCP server / CLI reader treats the
+ * workspace as hostile (sec §8 threat model) and must NEVER delete anything
+ * under it — so the reader does not call this. Deletion reuses the SAME
+ * fail-closed gate as migration: we only remove a real directory whose sentinel
+ * is present and whose tree contains no symlinks, and only once the global
+ * target is genuinely populated (so we never delete the only index we have).
+ * Anything ambiguous, hostile, or unreadable is left in place for the user.
+ */
+export function removeSupersededLegacyIndex(
+  workspaceRoot: string,
+  targetIndexDir: string,
+): string | undefined {
+  // Never delete the legacy copy unless the global index can actually serve the
+  // workspace — i.e. the replacement we're keeping is real and populated.
+  if (!isPopulated(targetIndexDir)) return undefined;
+
+  const canonicalWorkspace = canonicalizeWorkspace(workspaceRoot);
+  const legacy = path.join(canonicalWorkspace, LEGACY_INDEX_DIRNAME);
+
+  // Same gate as migration: real dir, real (non-symlink) sentinel, zero
+  // interior symlinks. A symlinked / unreadable / anomalous legacy dir is
+  // refused — we never rm a tree we can't prove is an ordinary index. (If it
+  // was just migrated away, this is false and we no-op silently.)
+  if (!isSafeLegacyIndex(legacy)) return undefined;
+
+  // Tighten the TOCTOU window: re-lstat immediately before removal and bail if
+  // it became a symlink (or vanished) since the safety gate.
+  try {
+    const pre = fs.lstatSync(legacy);
+    if (pre.isSymbolicLink() || !pre.isDirectory()) return undefined;
+  } catch {
+    return undefined; // vanished — nothing to do
+  }
+
+  try {
+    fs.rmSync(legacy, { recursive: true });
+    return legacy;
+  } catch (err) {
+    warn(
+      `could not remove superseded legacy index ${legacy} ` +
+        `(${(err as Error).message}); leaving it in place`,
+    );
+    return undefined;
+  }
+}
+
 /** Canonicalize the workspace root; fall back to a plain resolve if it doesn't exist yet. */
 function canonicalizeWorkspace(workspaceRoot: string): string {
   const abs = path.resolve(workspaceRoot);
