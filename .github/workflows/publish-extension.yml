@@ -148,10 +148,11 @@ jobs:
     needs: package
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Publish on tag pushes, and on workflow_dispatch unless dry_run is set.
-    # Use github.event.inputs (always a string) rather than the inputs context,
-    # whose boolean default mis-evaluates in a job-level if on dispatch.
-    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true' }}
+    # The publish JOB runs whenever packaging succeeded (tag push OR dispatch).
+    # The dry-run gate lives on the publish STEP below — a job-level `if` that
+    # reads the dispatch input proved unreliable in combination with `needs`
+    # (it silently skipped the whole job on workflow_dispatch).
+    if: ${{ !cancelled() && needs.package.result == 'success' }}
 
     steps:
       - uses: actions/checkout@v7
@@ -177,6 +178,8 @@ jobs:
         run: find artifacts -name '*.vsix' -print
 
       - name: Publish each per-target VSIX
+        # Always publish on tag push; on dispatch, publish unless dry_run=true.
+        if: ${{ github.event_name == 'push' || github.event.inputs.dry_run != 'true' }}
         shell: bash
         env:
           VSCE_PAT: ${{ secrets.VSCODE_MARKETPLACE_PAT }}
