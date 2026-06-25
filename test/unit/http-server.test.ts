@@ -21,32 +21,31 @@ function makeStubDeps(disposeImpl?: () => void) {
   };
 }
 
+/** Handle shape returned by startHttpServer (typed loosely for the dynamic import). */
+type ServerHandle = { port: number; close: () => Promise<void> };
+
 // ---------------------------------------------------------------------------
 // GET /health
 // ---------------------------------------------------------------------------
 
 describe("GET /health", () => {
-  let port: number;
-  let server: any;
+  let handle: ServerHandle;
 
   beforeEach(async () => {
+    vi.resetModules(); // fresh module per test (fresh startTime)
     const { startHttpServer } = await import("../../src/mcp/http.js");
     const deps = makeStubDeps();
-    // Use a dynamic port to avoid conflicts
-    port = 18800 + Math.floor(Math.random() * 100);
-    // Start with a very long idle timeout so it doesn't fire during tests
-    await new Promise<void>((resolve) => {
-      startHttpServer(deps, port, 60_000).then(() => resolve());
-    });
+    // Port 0 → OS-assigned ephemeral port: avoids EADDRINUSE collisions when
+    // test files run in parallel. Long idle timeout so dispose never fires.
+    handle = await startHttpServer(deps, 0, 60_000);
   });
 
-  afterEach(() => {
-    // Reset module registry so each test gets a fresh http module (fresh startTime)
-    vi.resetModules();
+  afterEach(async () => {
+    await handle?.close();
   });
 
   it("returns status ok and uptime >= 0", async () => {
-    const res = await fetch(`http://127.0.0.1:${port}/health`);
+    const res = await fetch(`http://127.0.0.1:${handle.port}/health`);
     expect(res.ok).toBe(true);
     const body = (await res.json()) as { status: string; uptime: number };
     expect(body.status).toBe("ok");
@@ -60,14 +59,17 @@ describe("GET /health", () => {
 // ---------------------------------------------------------------------------
 
 describe("POST /mcp", () => {
-  let port: number;
+  let handle: ServerHandle;
 
   beforeEach(async () => {
     vi.resetModules();
     const { startHttpServer } = await import("../../src/mcp/http.js");
     const deps = makeStubDeps();
-    port = 18900 + Math.floor(Math.random() * 100);
-    await startHttpServer(deps, port, 60_000);
+    handle = await startHttpServer(deps, 0, 60_000);
+  });
+
+  afterEach(async () => {
+    await handle?.close();
   });
 
   it("responds to MCP initialize request", async () => {
@@ -82,7 +84,7 @@ describe("POST /mcp", () => {
       },
     };
 
-    const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+    const res = await fetch(`http://127.0.0.1:${handle.port}/mcp`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -99,7 +101,7 @@ describe("POST /mcp", () => {
   });
 
   it("returns 400 for invalid JSON body", async () => {
-    const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+    const res = await fetch(`http://127.0.0.1:${handle.port}/mcp`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -111,12 +113,12 @@ describe("POST /mcp", () => {
   });
 
   it("returns 404 for unknown paths", async () => {
-    const res = await fetch(`http://127.0.0.1:${port}/unknown`);
+    const res = await fetch(`http://127.0.0.1:${handle.port}/unknown`);
     expect(res.status).toBe(404);
   });
 
   it("returns 405 for unsupported methods on /mcp", async () => {
-    const res = await fetch(`http://127.0.0.1:${port}/mcp`, { method: "PUT" });
+    const res = await fetch(`http://127.0.0.1:${handle.port}/mcp`, { method: "PUT" });
     expect(res.status).toBe(405);
     const body = (await res.json()) as { error: string };
     expect(body.error).toContain("Method not allowed");
@@ -130,27 +132,39 @@ describe("POST /mcp", () => {
 // ---------------------------------------------------------------------------
 
 describe("POST /mcp body size cap", () => {
-  let port: number;
+  let handle: ServerHandle;
 
   beforeEach(async () => {
     vi.resetModules();
     const { startHttpServer } = await import("../../src/mcp/http.js");
     const deps = makeStubDeps();
-    port = 19500 + Math.floor(Math.random() * 100);
-    await startHttpServer(deps, port, 60_000);
+    handle = await startHttpServer(deps, 0, 60_000);
+  });
+
+  afterEach(async () => {
+    await handle?.close();
   });
 
   it("rejects an oversized body with 413 (M2)", async () => {
     // 11 MB POST — one byte over the cap.
     const oversize = "x".repeat(11 * 1024 * 1024);
-    const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: oversize,
-    });
-    expect(res.status).toBe(413);
-    const body = (await res.json()) as { error: string };
-    expect(body.error).toMatch(/too large/i);
+    // The server sends 413 then destroys the request stream to stop the upload.
+    // That's an inherent race: the client may read the 413 first, OR its
+    // in-flight write may hit the reset and fetch rejects (EPIPE/ECONNRESET).
+    // Both outcomes prove the cap fired; assert whichever we observe.
+    try {
+      const res = await fetch(`http://127.0.0.1:${handle.port}/mcp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: oversize,
+      });
+      expect(res.status).toBe(413);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toMatch(/too large/i);
+    } catch (err) {
+      // Connection cut mid-upload — the cap was enforced before we finished.
+      expect(String(err)).toMatch(/EPIPE|ECONNRESET|terminated|fetch failed|socket/i);
+    }
   });
 });
 
@@ -159,19 +173,22 @@ describe("POST /mcp body size cap", () => {
 // ---------------------------------------------------------------------------
 
 describe("Concurrent MCP requests", () => {
-  let port: number;
+  let handle: ServerHandle;
 
   beforeEach(async () => {
     vi.resetModules();
     const { startHttpServer } = await import("../../src/mcp/http.js");
     const deps = makeStubDeps();
-    port = 19000 + Math.floor(Math.random() * 100);
-    await startHttpServer(deps, port, 60_000);
+    handle = await startHttpServer(deps, 0, 60_000);
+  });
+
+  afterEach(async () => {
+    await handle?.close();
   });
 
   it("handles multiple concurrent initialize requests without interference", async () => {
     const makeRequest = (id: number) =>
-      fetch(`http://127.0.0.1:${port}/mcp`, {
+      fetch(`http://127.0.0.1:${handle.port}/mcp`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -208,27 +225,27 @@ describe("Concurrent MCP requests", () => {
 // ---------------------------------------------------------------------------
 
 describe("Idle model disposal", () => {
-  // If startHttpServer rejects (e.g. the host blocks loopback listen), the
-  // `vi.useRealTimers()` at the end of a test never runs and fake timers leak
-  // into later describe blocks, cascading unrelated failures. Always restore.
-  afterEach(() => {
+  let handle: ServerHandle;
+
+  // Fake ONLY setTimeout/clearTimeout — the idle-dispose timer uses these,
+  // while leaving setImmediate/queueMicrotask/process.nextTick/Date real so the
+  // real fetch round-trip still completes. Faking *all* timers (the default)
+  // stalls undici's I/O callbacks and hangs the request (the old flake).
+  beforeEach(() => {
+    vi.resetModules();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  });
+
+  // Always restore real timers + close the server, even if a test throws, so
+  // fake timers / a listening socket never leak into later describe blocks.
+  afterEach(async () => {
+    await handle?.close();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
-  it("calls dispose() on the embed provider after the idle timeout", async () => {
-    vi.resetModules();
-    vi.useFakeTimers();
-
-    const { startHttpServer } = await import("../../src/mcp/http.js");
-    const disposeFn = vi.fn();
-    const deps = makeStubDeps(disposeFn);
-    const port = 19100 + Math.floor(Math.random() * 100);
-
-    await startHttpServer(deps, port, 100); // 100 ms idle for test
-
-    // Trigger a request so the idle timer starts
-    await fetch(`http://127.0.0.1:${port}/mcp`, {
+  const makeReq = (port: number, name: string) =>
+    fetch(`http://127.0.0.1:${port}/mcp`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -241,63 +258,42 @@ describe("Idle model disposal", () => {
         params: {
           protocolVersion: "2024-11-05",
           capabilities: {},
-          clientInfo: { name: "idle-test", version: "1.0.0" },
+          clientInfo: { name, version: "1.0.0" },
         },
       }),
     });
 
-    expect(disposeFn).not.toHaveBeenCalled();
-
-    // Advance clock past idle timeout
-    vi.advanceTimersByTime(200);
-    await Promise.resolve(); // flush microtasks
-
-    expect(disposeFn).toHaveBeenCalledTimes(1);
-
-    vi.useRealTimers();
-  });
-
-  it("resets idle timer on each request", async () => {
-    vi.resetModules();
-    vi.useFakeTimers();
-
+  it("calls dispose() on the embed provider after the idle timeout", async () => {
     const { startHttpServer } = await import("../../src/mcp/http.js");
     const disposeFn = vi.fn();
     const deps = makeStubDeps(disposeFn);
-    const port = 19200 + Math.floor(Math.random() * 100);
 
-    await startHttpServer(deps, port, 300); // 300 ms idle
+    handle = await startHttpServer(deps, 0, 100); // 100 ms idle for test
 
-    const makeReq = () =>
-      fetch(`http://127.0.0.1:${port}/mcp`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json, text/event-stream",
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "initialize",
-          params: {
-            protocolVersion: "2024-11-05",
-            capabilities: {},
-            clientInfo: { name: "test", version: "1.0.0" },
-          },
-        }),
-      });
+    await makeReq(handle.port, "idle-test"); // starts the idle timer
+    expect(disposeFn).not.toHaveBeenCalled();
 
-    await makeReq();
+    vi.advanceTimersByTime(200); // past the idle timeout
+    await Promise.resolve(); // flush microtasks
+    expect(disposeFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("resets idle timer on each request", async () => {
+    const { startHttpServer } = await import("../../src/mcp/http.js");
+    const disposeFn = vi.fn();
+    const deps = makeStubDeps(disposeFn);
+
+    handle = await startHttpServer(deps, 0, 300); // 300 ms idle
+
+    await makeReq(handle.port, "test");
     vi.advanceTimersByTime(200); // not yet expired
-    await makeReq(); // reset the timer
+    await makeReq(handle.port, "test"); // resets the timer
     vi.advanceTimersByTime(200); // still not expired (reset from last request)
     expect(disposeFn).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(200); // now expired
     await Promise.resolve();
     expect(disposeFn).toHaveBeenCalledTimes(1);
-
-    vi.useRealTimers();
   });
 });
 

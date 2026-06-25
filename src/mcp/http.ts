@@ -69,6 +69,14 @@ function readBody(req: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<stri
 
 export { BodyTooLargeError, MAX_BODY_BYTES };
 
+/** Handle returned by {@link startHttpServer} for inspection and shutdown. */
+export interface HttpServerHandle {
+  /** The actual bound TCP port (resolves an ephemeral `port: 0` request). */
+  port: number;
+  /** Stop listening, drop live connections, and clear the idle-dispose timer. */
+  close: () => Promise<void>;
+}
+
 /**
  * Start an HTTP server that wraps the MCP server with Streamable HTTP transport.
  *
@@ -76,14 +84,14 @@ export { BodyTooLargeError, MAX_BODY_BYTES };
  * but shares the expensive deps (embedProvider, store, indexer).
  *
  * @param deps - Shared engine dependencies (embed provider, vector store, indexer)
- * @param port - TCP port to listen on (default 8181)
- * @returns Promise that resolves when the server is listening
+ * @param port - TCP port to listen on; pass `0` for an OS-assigned ephemeral port
+ * @returns Promise resolving to a handle with the bound port and a `close()`
  */
 export async function startHttpServer(
   deps: EngineDeps,
   port: number,
   idleDisposalMs = IDLE_DISPOSE_MS,
-): Promise<void> {
+): Promise<HttpServerHandle> {
   // Idle disposal timer: disposes the embed pipeline after N ms with no MCP requests.
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -189,11 +197,26 @@ export async function startHttpServer(
     res.end(JSON.stringify({ error: "Not found" }));
   });
 
-  return new Promise((resolve, reject) => {
+  return new Promise<HttpServerHandle>((resolve, reject) => {
     httpServer.once("error", reject);
     httpServer.listen(port, "127.0.0.1", () => {
-      process.stderr.write(`MCP HTTP server listening on http://127.0.0.1:${port}\n`);
-      resolve();
+      const addr = httpServer.address();
+      const boundPort = typeof addr === "object" && addr !== null ? addr.port : port;
+      process.stderr.write(`MCP HTTP server listening on http://127.0.0.1:${boundPort}\n`);
+      resolve({
+        port: boundPort,
+        close: () =>
+          new Promise<void>((closed) => {
+            if (idleTimer !== null) {
+              clearTimeout(idleTimer);
+              idleTimer = null;
+            }
+            // Drop keep-alive sockets so close() resolves promptly instead of
+            // waiting on idle client connections (undici keeps them open).
+            httpServer.closeAllConnections?.();
+            httpServer.close(() => closed());
+          }),
+      });
     });
   });
 }
