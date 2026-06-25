@@ -1,0 +1,76 @@
+# Backstop for Dependabot auto-merge.
+#
+# The dependabot-handler workflow only fires on pull_request_target events, so
+# PRs opened BEFORE that handler existed (or any that otherwise never had
+# auto-merge enabled) sit open forever. This scheduled sweep enables squash
+# auto-merge on open, non-major Dependabot PRs so they merge once their required
+# checks pass. It is idempotent and conservative: anything it can't prove is a
+# patch/minor bump is left for the handler or a human.
+name: Dependabot auto-merge sweep
+
+on:
+  schedule:
+    - cron: "37 6 * * *" # daily, 06:37 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sweep:
+    name: Enable auto-merge on stranded Dependabot PRs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Enable auto-merge on open non-major Dependabot PRs
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const all = await github.paginate(github.rest.pulls.list, {
+              owner,
+              repo,
+              state: "open",
+              per_page: 100,
+            });
+            const bots = all.filter((p) => p.user && p.user.login === "dependabot[bot]");
+            core.info(`Found ${bots.length} open Dependabot PR(s)`);
+
+            for (const pr of bots) {
+              const labels = pr.labels.map((l) => l.name);
+              if (labels.includes("needs-human-review") || labels.includes("major-bump")) {
+                core.info(`#${pr.number}: labeled for human review; skipping`);
+                continue;
+              }
+
+              // Determine the semver delta from the title for ungrouped bumps:
+              //   "build(deps): Bump <dep> from 1.2.3 to 1.3.0"
+              const m = pr.title.match(/from (\d+)\.\d+\S* to (\d+)\.\d+/i);
+              if (m) {
+                if (m[1] !== m[2]) {
+                  core.info(`#${pr.number}: major bump (${m[1]} -> ${m[2]}); skipping`);
+                  continue;
+                }
+              } else {
+                // Grouped / unparseable title — be conservative, leave it.
+                core.info(`#${pr.number}: cannot determine semver delta ("${pr.title}"); skipping`);
+                continue;
+              }
+
+              try {
+                await github.graphql(
+                  `mutation($id: ID!) {
+                     enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: SQUASH }) {
+                       clientMutationId
+                     }
+                   }`,
+                  { id: pr.node_id },
+                );
+                core.info(`#${pr.number}: auto-merge enabled`);
+              } catch (e) {
+                // Already enabled, or PR is in a clean state with no required
+                // checks to wait on — neither is actionable here.
+                core.info(`#${pr.number}: auto-merge not enabled (${e.message})`);
+              }
+            }
