@@ -7,6 +7,7 @@ import type { EmbedProvider } from "../core/types.js";
 import { validateConfig } from "../core/types.js";
 import { createEmbedProvider } from "../core/embedder.js";
 import type { LanceVectorStore } from "../core/vectorstore.js";
+import { parseExtraRoots } from "../core/extraRoots.js";
 import type { ExtensionConfig } from "./config.js";
 import { readConfig, readOpenAIApiKey } from "./config.js";
 import type { StatusBarManager } from "./statusBar.js";
@@ -49,6 +50,9 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         indexDir: freshResolved.indexDir,
         maxChunkChars: freshConfig.maxChunkChars,
         headingDepth: freshConfig.headingDepth,
+        // Without this, the reindex command / status panel scan the workspace
+        // only — and a reindex would PRUNE every ext:// entry from the index.
+        extraRoots: parseExtraRoots(freshConfig.extraRoots).roots,
       },
       freshEmbedProvider,
     );

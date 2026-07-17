@@ -58,8 +58,11 @@ let _indexerImpl: () => any = () => ({
   }),
 });
 
+let _indexerCtorConfigs: any[] = [];
+
 vi.mock("../../src/core/indexer.js", () => ({
-  Indexer: function (this: any) {
+  Indexer: function (this: any, config: any) {
+    _indexerCtorConfigs.push(config);
     Object.assign(this, _indexerImpl());
   },
 }));
@@ -136,6 +139,30 @@ describe("Commands", () => {
         "/workspace",
         expect.objectContaining({ indexDir: ".doc-search-index" }),
       );
+    });
+
+    it("passes parsed extraRoots to the fresh Indexer (regression: reindex pruned ext:// entries)", async () => {
+      const { readConfig } = await import("../../src/extension/config.js");
+      vi.mocked(readConfig).mockReturnValueOnce({
+        docGlob: "doc/**/*.md",
+        indexDir: ".doc-search-index",
+        indexLocation: "global",
+        maxChunkChars: 4000,
+        headingDepth: 2,
+        embedProvider: "local",
+        autoReindex: true,
+        extraRoots: [{ name: "vendor", path: "/srv/docs" }],
+      } as any);
+      _indexerCtorConfigs = [];
+
+      registerCommands(mockContext, deps);
+      const handler = findHandler("docSearch.reindex");
+      await handler(true);
+
+      const cfg = _indexerCtorConfigs.at(-1);
+      expect(cfg.extraRoots).toEqual([
+        { name: "vendor", path: "/srv/docs", glob: "**/*.{md,mdx}" },
+      ]);
     });
 
     it("uses workspace mode indexDir when resolveIndexLocation returns workspace mode", async () => {
