@@ -61,18 +61,25 @@ export function computeDocid(content: string): string {
  * - Splits sections that exceed maxChars, adding 15% (cap 200 chars) overlap
  *   context between mid-section splits
  * - All chunks share the same docid (SHA-256 of file content, first 6 chars)
+ *
+ * When `fileKey` is provided it is used verbatim as the chunk `file` key
+ * (e.g. an `ext://<root>/<rel>` external-root key); the caller is then
+ * responsible for having validated containment. Without it, the key is the
+ * workspace-relative path and must stay inside the workspace.
  */
 export function chunkMarkdown(
   absolutePath: string,
   workspaceRoot: string,
   maxChars = 4000,
   headingDepth: 1 | 2 = 2,
+  fileKey?: string,
 ): DocChunk[] {
   const content = readFileSync(absolutePath, "utf8");
-  const rel = path.relative(workspaceRoot, absolutePath).replace(/\\/g, "/");
+  const rel = fileKey ?? path.relative(workspaceRoot, absolutePath).replace(/\\/g, "/");
 
-  // Path traversal validation
-  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+  // Path traversal validation (workspace-relative keys only; an explicit
+  // fileKey was containment-checked by the caller against its own root)
+  if (fileKey === undefined && (rel.startsWith("..") || path.isAbsolute(rel))) {
     throw new Error(`Path traversal blocked: ${absolutePath} is outside workspace`);
   }
 

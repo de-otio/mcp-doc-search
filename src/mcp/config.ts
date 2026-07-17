@@ -7,6 +7,7 @@ import { LocalEmbedder, OllamaEmbedder, OpenAIEmbedder } from "../core/embedder.
 import type { EmbedProvider } from "../core/types.js";
 import { validateConfig } from "../core/types.js";
 import { ensureGitignored } from "../core/gitignore.js";
+import { parseExtraRoots } from "../core/extraRoots.js";
 import { isSafeRelativeRef } from "../core/safePath.js";
 import { resolveIndexLocation, resolveMode } from "../core/indexLocation.js";
 
@@ -70,6 +71,26 @@ export async function createEngineFromEnv(): Promise<EngineDeps> {
   const maxChunkChars = settings["docSearch.maxChunkChars"] ?? 4000;
   const headingDepth = settings["docSearch.headingDepth"] ?? 2;
 
+  // External roots: env var (JSON array) → settings.json → none.
+  // NOTE: an external root grants MCP/CLI clients read access to a directory
+  // OUTSIDE the workspace — parseExtraRoots drops anything malformed and the
+  // indexer re-contains every ref against the declared root.
+  let rawExtraRoots: unknown = settings["docSearch.extraRoots"];
+  if (process.env.DOC_SEARCH_EXTRA_ROOTS) {
+    try {
+      rawExtraRoots = JSON.parse(process.env.DOC_SEARCH_EXTRA_ROOTS);
+    } catch {
+      process.stderr.write(
+        `mcp-doc-search: DOC_SEARCH_EXTRA_ROOTS is not valid JSON; ignoring it\n`,
+      );
+      rawExtraRoots = settings["docSearch.extraRoots"];
+    }
+  }
+  const { roots: extraRoots, warnings: extraRootWarnings } = parseExtraRoots(rawExtraRoots);
+  for (const warning of extraRootWarnings) {
+    process.stderr.write(`mcp-doc-search: ${warning}\n`);
+  }
+
   // Embedding provider: env vars → settings.json → local
   const providerName =
     (process.env.USE_OPENAI === "1" ? "openai" : undefined) ??
@@ -107,6 +128,7 @@ export async function createEngineFromEnv(): Promise<EngineDeps> {
       indexDir,
       maxChunkChars,
       headingDepth: headingDepth as 1 | 2,
+      extraRoots,
     },
     embedProvider,
   );

@@ -3,12 +3,13 @@
  * Supports incremental indexing via mtime cache.
  */
 
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { glob } from "glob";
 import { chunkMarkdown, computeDocid } from "./chunker.js";
-import { PathTraversalError, resolveSafePath } from "./safePath.js";
+import { EXT_REF_SCHEME, extKey, parseExtKey } from "./extraRoots.js";
+import { PathTraversalError, resolveSafePath, resolveWithinBase } from "./safePath.js";
 import type { IndexerConfig, IndexStats, IndexStatus, PathContext } from "./types.js";
 import type { LanceVectorStore, VectorRecord } from "./vectorstore.js";
 
@@ -36,13 +37,88 @@ export class Indexer {
   private _contextCache: PathContext | null = null;
 
   constructor(config: IndexerConfig, store: LanceVectorStore) {
-    this.config = config;
+    // Normalize: callers constructing a config by hand may omit extraRoots.
+    this.config = { ...config, extraRoots: config.extraRoots ?? [] };
     this.store = store;
   }
 
   /** Returns the absolute workspace root path. */
   getWorkspaceRoot(): string {
     return this.config.workspaceRoot;
+  }
+
+  /**
+   * Map an absolute file path back to its index key: an `ext://<name>/<rel>`
+   * key when the path lives under a configured external root, otherwise the
+   * workspace-relative path. Used for display in tool responses.
+   */
+  keyForAbsPath(absPath: string): string {
+    const abs = path.resolve(absPath);
+    for (const root of this.config.extraRoots) {
+      const base = path.resolve(root.path);
+      const baseWithSep = base.endsWith(path.sep) ? base : base + path.sep;
+      if (abs.startsWith(baseWithSep)) {
+        return extKey(root.name, path.relative(base, abs));
+      }
+    }
+    return path.relative(this.config.workspaceRoot, abs).replace(/\\/g, "/");
+  }
+
+  /**
+   * Enumerate every file the index should contain, as { absPath, key } pairs:
+   * workspace files keyed by workspace-relative path, external-root files
+   * keyed as `ext://<name>/<rel>`.
+   *
+   * A configured root whose directory is missing (unmounted disk, not yet
+   * cloned) is skipped for scanning AND excluded from pruning — its existing
+   * index entries survive until the root reappears or is unconfigured.
+   */
+  private async scanFiles(): Promise<{
+    entries: Array<{ absPath: string; key: string }>;
+    missingRootPrefixes: string[];
+  }> {
+    const entries: Array<{ absPath: string; key: string }> = [];
+
+    const mdFiles = await glob(this.config.docGlob, {
+      cwd: this.config.workspaceRoot,
+      absolute: true,
+      ignore: ["**/node_modules/**"],
+    });
+    mdFiles.sort();
+    for (const filePath of mdFiles) {
+      const rel = path.relative(this.config.workspaceRoot, filePath).replace(/\\/g, "/");
+      // Path traversal validation
+      if (rel.startsWith("..") || path.isAbsolute(rel)) {
+        console.warn(`Path traversal blocked: ${filePath} is outside workspace`);
+        continue;
+      }
+      entries.push({ absPath: filePath, key: rel });
+    }
+
+    const missingRootPrefixes: string[] = [];
+    for (const root of this.config.extraRoots) {
+      if (!existsSync(root.path)) {
+        missingRootPrefixes.push(`${EXT_REF_SCHEME}${root.name}/`);
+        console.warn(
+          `Extra root "${root.name}" not found on disk; keeping its existing index entries`,
+        );
+        continue;
+      }
+      const rootFiles = await glob(root.glob, {
+        cwd: root.path,
+        absolute: true,
+        ignore: ["**/node_modules/**"],
+        nodir: true,
+      });
+      rootFiles.sort();
+      for (const filePath of rootFiles) {
+        const rel = path.relative(root.path, filePath).replace(/\\/g, "/");
+        if (rel.startsWith("..") || path.isAbsolute(rel)) continue;
+        entries.push({ absPath: filePath, key: extKey(root.name, rel) });
+      }
+    }
+
+    return { entries, missingRootPrefixes };
   }
 
   /**
@@ -71,18 +147,14 @@ export class Indexer {
 
     onProgress?.(0, 0, "", "scanning");
 
-    const mdFiles = await glob(this.config.docGlob, {
-      cwd: this.config.workspaceRoot,
-      absolute: true,
-      ignore: ["**/node_modules/**"],
-    });
-    mdFiles.sort();
+    const { entries, missingRootPrefixes } = await this.scanFiles();
 
-    // Prune: remove vector store entries for files no longer on disk / in glob
-    const currentSet = new Set(
-      mdFiles.map((f) => path.relative(this.config.workspaceRoot, f).replace(/\\/g, "/")),
+    // Prune: remove vector store entries for files no longer on disk / in glob.
+    // Keys under a currently-missing external root are kept, not pruned.
+    const currentSet = new Set(entries.map((e) => e.key));
+    const staleKeys = Object.keys(cache).filter(
+      (rel) => !currentSet.has(rel) && !missingRootPrefixes.some((p) => rel.startsWith(p)),
     );
-    const staleKeys = Object.keys(cache).filter((rel) => !currentSet.has(rel));
     for (const rel of staleKeys) {
       try {
         await this.store.deleteByFile(rel);
@@ -96,12 +168,11 @@ export class Indexer {
 
     // Files that actually need indexing (skipped ones don't count for progress)
     const toIndex = force
-      ? mdFiles
-      : mdFiles.filter((f) => {
-          const rel = path.relative(this.config.workspaceRoot, f).replace(/\\/g, "/");
-          const entry = cache[rel];
+      ? entries
+      : entries.filter(({ absPath, key }) => {
+          const entry = cache[key];
           const mtime = entry ? normalizeCacheEntry(entry).mtime : undefined;
-          return mtime !== String(statSync(f).mtimeMs);
+          return mtime !== String(statSync(absPath).mtimeMs);
         });
 
     let indexed = 0;
@@ -111,15 +182,7 @@ export class Indexer {
     let firstEmbed = true;
     let firstError: string | undefined;
 
-    for (const filePath of mdFiles) {
-      const rel = path.relative(this.config.workspaceRoot, filePath).replace(/\\/g, "/");
-
-      // Path traversal validation
-      if (rel.startsWith("..") || path.isAbsolute(rel)) {
-        console.warn(`Path traversal blocked: ${filePath} is outside workspace`);
-        continue;
-      }
-
+    for (const { absPath: filePath, key: rel } of entries) {
       const mtime = String(statSync(filePath).mtimeMs);
       const existingEntry = cache[rel] ? normalizeCacheEntry(cache[rel]) : undefined;
 
@@ -134,6 +197,7 @@ export class Indexer {
         this.config.workspaceRoot,
         this.config.maxChunkChars,
         this.config.headingDepth,
+        rel,
       );
 
       // Compute docid from file content (or reuse from chunks if available)
@@ -210,31 +274,26 @@ export class Indexer {
   /** Compute the current index health without modifying anything. */
   async getStatus(): Promise<IndexStatus> {
     const cache = this.loadMtimeCache();
-    const mdFiles = await glob(this.config.docGlob, {
-      cwd: this.config.workspaceRoot,
-      absolute: true,
-      ignore: ["**/node_modules/**"],
-    });
+    const { entries, missingRootPrefixes } = await this.scanFiles();
 
-    const fileSet = new Set(
-      mdFiles.map((f) => path.relative(this.config.workspaceRoot, f).replace(/\\/g, "/")),
-    );
+    const fileSet = new Set(entries.map((e) => e.key));
 
     let changedFiles = 0;
     let newFiles = 0;
-    for (const filePath of mdFiles) {
-      const rel = path.relative(this.config.workspaceRoot, filePath).replace(/\\/g, "/");
-      if (!(rel in cache)) {
+    for (const { absPath, key } of entries) {
+      if (!(key in cache)) {
         newFiles++;
       } else {
-        const entry = normalizeCacheEntry(cache[rel]);
-        if (entry.mtime !== String(statSync(filePath).mtimeMs)) {
+        const entry = normalizeCacheEntry(cache[key]);
+        if (entry.mtime !== String(statSync(absPath).mtimeMs)) {
           changedFiles++;
         }
       }
     }
 
-    const deletedFiles = Object.keys(cache).filter((rel) => !fileSet.has(rel)).length;
+    const deletedFiles = Object.keys(cache).filter(
+      (rel) => !fileSet.has(rel) && !missingRootPrefixes.some((p) => rel.startsWith(p)),
+    ).length;
 
     const cachePath = this.mtimeCachePath();
     const lastIndexed = existsSync(cachePath) ? new Date(statSync(cachePath).mtimeMs) : null;
@@ -242,7 +301,7 @@ export class Indexer {
     const chunkCount = await this.store.count();
 
     return {
-      totalFiles: mdFiles.length,
+      totalFiles: entries.length,
       cachedFiles: Object.keys(cache).length,
       changedFiles,
       newFiles,
@@ -251,6 +310,7 @@ export class Indexer {
       lastIndexed,
       needsReindex: changedFiles > 0 || newFiles > 0 || deletedFiles > 0,
       docGlob: this.config.docGlob,
+      extraRootNames: this.config.extraRoots.map((r) => r.name),
     };
   }
 
@@ -413,12 +473,58 @@ export class Indexer {
   }
 
   /**
+   * Resolve an `ext://<name>/<rel>` key to { file, docid } or { error }.
+   * The relative part is re-contained against the realpath of the named
+   * root — a key can never read outside the directory the root declares.
+   */
+  private resolveExtKey(key: string): { file: string; docid: string } | { error: string } {
+    const parsed = parseExtKey(key);
+    if (!parsed) {
+      return { error: `Malformed external ref: ${key}` };
+    }
+    const root = this.config.extraRoots.find((r) => r.name === parsed.name);
+    if (!root) {
+      return { error: `Unknown external root: ${parsed.name}` };
+    }
+    // Canonicalize the root first so a symlinked root cannot redirect the
+    // containment check (see resolveWithinBase docs).
+    let base: string;
+    try {
+      base = realpathSync(root.path);
+    } catch {
+      return { error: `External root "${parsed.name}" is not available` };
+    }
+    let absPath: string;
+    try {
+      absPath = resolveWithinBase(base, parsed.rel);
+    } catch (err) {
+      if (err instanceof PathTraversalError) return { error: err.message };
+      throw err;
+    }
+    if (!existsSync(absPath)) {
+      return { error: `File not found: ${key}` };
+    }
+    const cache = this.loadMtimeCache();
+    const entry = cache[key] ? normalizeCacheEntry(cache[key]) : undefined;
+    let docid = entry?.docid ?? "";
+    if (!docid) {
+      try {
+        docid = computeDocid(readFileSync(absPath, "utf8"));
+      } catch {
+        docid = "";
+      }
+    }
+    return { file: absPath, docid };
+  }
+
+  /**
    * Resolve a ref to { file: absolutePath, docid } or { error }.
    *
    * Accepted ref forms:
    *   - "#abc123" — docid with leading hash
    *   - "abc123"  — bare 6-char hex docid (all hex chars, exactly 6)
    *   - "doc/foo.md" — relative path from workspace root
+   *   - "ext://<root>/<path>" — file under a configured external root
    */
   resolveRef(ref: string): { file: string; docid: string } | { error: string } {
     const trimmed = ref.trim();
@@ -435,6 +541,11 @@ export class Indexer {
       if (!rel) {
         return { error: `No file found for docid: ${docid}` };
       }
+      if (rel.startsWith(EXT_REF_SCHEME)) {
+        const resolved = this.resolveExtKey(rel);
+        if ("error" in resolved) return resolved;
+        return { file: resolved.file, docid };
+      }
       let absPath: string;
       try {
         absPath = resolveSafePath(this.config.workspaceRoot, rel);
@@ -446,6 +557,11 @@ export class Indexer {
         return { error: `File not found for docid: ${docid}` };
       }
       return { file: absPath, docid };
+    }
+
+    // External-root ref
+    if (trimmed.startsWith(EXT_REF_SCHEME)) {
+      return this.resolveExtKey(trimmed);
     }
 
     // Treat as a relative path.

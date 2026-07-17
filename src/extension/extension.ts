@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { LanceVectorStore } from "../core/vectorstore.js";
 import { createEmbedProvider } from "../core/embedder.js";
+import { parseExtraRoots } from "../core/extraRoots.js";
 import { Indexer } from "../core/indexer.js";
 import { validateConfig } from "../core/types.js";
 import { readConfig, readOpenAIApiKey } from "./config.js";
@@ -58,6 +59,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
   const store = new LanceVectorStore(indexDir);
   const embedProvider = createEmbedProvider(config);
+  const { roots: extraRoots, warnings: extraRootWarnings } = parseExtraRoots(config.extraRoots);
+  for (const warning of extraRootWarnings) {
+    vscode.window.showWarningMessage(`Doc Search: ${warning}`);
+  }
   const indexerConfig = validateConfig(
     {
       workspaceRoot,
@@ -65,6 +70,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       indexDir,
       maxChunkChars: config.maxChunkChars,
       headingDepth: config.headingDepth,
+      extraRoots,
     },
     embedProvider,
   );

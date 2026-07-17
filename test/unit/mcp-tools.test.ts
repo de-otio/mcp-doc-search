@@ -51,6 +51,9 @@ describe("MCP Tools", () => {
       getContextFor: vi.fn().mockReturnValue(""),
       resolveRef: vi.fn(),
       getWorkspaceRoot: vi.fn(() => "/workspace"),
+      keyForAbsPath: vi.fn((absPath: string) =>
+        absPath.startsWith("/workspace/") ? absPath.slice("/workspace/".length) : absPath,
+      ),
     };
 
     mockEmbedProvider = {

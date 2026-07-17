@@ -11,6 +11,8 @@ export interface ExtensionConfig {
   ollamaModel: string;
   openaiApiKey: string;
   autoReindex: boolean;
+  /** Raw extraRoots setting; validated via parseExtraRoots at engine setup. */
+  extraRoots: unknown;
 }
 
 export function readConfig(apiKey = ""): ExtensionConfig {
@@ -26,6 +28,7 @@ export function readConfig(apiKey = ""): ExtensionConfig {
     ollamaModel: cfg.get("ollamaModel", "nomic-embed-text"),
     openaiApiKey: apiKey || cfg.get("openaiApiKey", ""),
     autoReindex: cfg.get("autoReindex", true),
+    extraRoots: cfg.get("extraRoots", []),
   };
 }
 

@@ -1,5 +1,4 @@
 import { existsSync, readFileSync } from "node:fs";
-import path from "node:path";
 import { glob } from "glob";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -56,8 +55,11 @@ const FALLBACK_SEARCH_DESC =
 function buildSearchDesc(status: IndexStatus | null): string {
   if (!status || status.totalFiles === 0) return FALLBACK_SEARCH_DESC;
   const when = status.lastIndexed ? relativeTime(status.lastIndexed) : "never";
+  const extra = status.extraRootNames?.length
+    ? ` plus ${status.extraRootNames.length} external root${status.extraRootNames.length === 1 ? "" : "s"} (${status.extraRootNames.join(", ")})`
+    : "";
   return [
-    `Semantic search across ${status.totalFiles} indexed markdown files in \`${status.docGlob}\` (last reindexed ${when}, ${status.chunkCount} chunks).`,
+    `Semantic search across ${status.totalFiles} indexed markdown files in \`${status.docGlob}\`${extra} (last reindexed ${when}, ${status.chunkCount} chunks).`,
     "",
     "**Prefer this over Grep when:** searching docs (not code), the query is conceptual rather than a known symbol, or grep would return >20 hits.",
     "Returns ~600-char chunks with `file:line` and a stable `docid` — pass `#docid` to `get` or `multi_get` to fetch full content without a Read call.",
@@ -191,6 +193,7 @@ export function registerTools(server: Server, deps: EngineDeps): void {
             "  - A relative file path (e.g. 'doc/foo.md')",
             "  - A docid with # prefix (e.g. '#abc123') — from search_docs results",
             "  - A bare 6-char hex docid (e.g. 'abc123')",
+            "  - An external-root ref (e.g. 'ext://<root>/path/to/file.md') — as returned by search_docs/list_docs for files under a configured external root",
             "",
             "Returns { file, docid, content, lines: [from, to], truncated, error? }.",
             "Default max_bytes is 10240 (10 KB). If exceeded, content is truncated and truncated=true.",
@@ -220,7 +223,8 @@ export function registerTools(server: Server, deps: EngineDeps): void {
             "  - A comma-separated string of refs (e.g. 'doc/foo.md, #abc123, doc/bar.md')",
             "  - An array of ref strings",
             "",
-            "Each ref is a path, #docid, or bare 6-char hex docid.",
+            "Each ref is a path, #docid, bare 6-char hex docid, or ext://<root>/... external-root ref.",
+            "Glob patterns match workspace files only; refer to external-root files individually.",
             "Returns { docs: Array<{ file, docid, content, lines, truncated }>, errors: Array<{ ref, error }> }.",
             "max_bytes is enforced per file. Errors are collected; one bad ref doesn't fail the batch.",
           ].join("\n"),
@@ -384,7 +388,7 @@ export function registerTools(server: Server, deps: EngineDeps): void {
         }
 
         const { file: absPath, docid } = resolved;
-        const relFile = path.relative(indexer.getWorkspaceRoot(), absPath).replace(/\\/g, "/");
+        const relFile = indexer.keyForAbsPath(absPath);
 
         if (!existsSync(absPath)) {
           return {
@@ -461,7 +465,7 @@ export function registerTools(server: Server, deps: EngineDeps): void {
           }
 
           const { file: absPath, docid } = resolved;
-          const relFile = path.relative(indexer.getWorkspaceRoot(), absPath).replace(/\\/g, "/");
+          const relFile = indexer.keyForAbsPath(absPath);
 
           if (!existsSync(absPath)) {
             errors.push({ ref, error: `File not found: ${relFile}` });

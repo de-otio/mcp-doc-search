@@ -39,12 +39,23 @@ Open VS Code settings and set:
 | ------------------------- | ------------------- | -------------------------------------------------------------------------------------------- |
 | `docSearch.indexLocation` | `global`            | Where to store the index: `global` (default, under `~/.doc-search`) or `workspace` (in-tree) |
 | `docSearch.docGlob`       | `doc/**/*.md`       | Glob pattern for docs to index                                                               |
+| `docSearch.extraRoots`    | `[]`                | Extra directories outside the workspace to index (e.g. a cloned vendor-docs repo); see below |
 | `docSearch.indexDir`      | `.doc-search-index` | Workspace mode only: where to store the vector index                                         |
 | `docSearch.headingDepth`  | `2`                 | Split on `#` only (1) or `#` and `##` (2)                                                    |
 | `docSearch.embedProvider` | `local`             | `local`, `ollama`, or `openai`                                                               |
 | `docSearch.autoReindex`   | `true`              | Auto-reindex on file save                                                                    |
 
 **Index location:** By default, the search index is stored under `~/.doc-search/indexes/` (outside your project tree) and automatically migrates any existing `.doc-search-index` folder on first run. If a global index already exists for the workspace, the now-redundant in-tree `.doc-search-index` is removed automatically on activation, so you never end up with both. To use the legacy in-tree location, set `docSearch.indexLocation` to `workspace`.
+
+**External roots:** `docSearch.extraRoots` indexes directories _outside_ the workspace alongside your docs — e.g. a locally cloned vendor-documentation repo:
+
+```jsonc
+"docSearch.extraRoots": [
+  { "name": "vendor-docs", "path": "~/repos/vendor/docs" } // glob defaults to **/*.{md,mdx}
+]
+```
+
+Their files appear in results as `ext://vendor-docs/<path>` and are fetchable through `get`/`multi_get` like any other ref. External roots are re-scanned on reindex (the save-time watcher covers only the workspace). Note that a configured root grants doc-search clients read access to that subtree — review the setting in untrusted workspaces. Details in [doc/configuration.md](doc/configuration.md).
 
 ### Use it
 

@@ -20,6 +20,30 @@ docs/**/*.md          # Alternative docs/ folder
 src/**/*.md,wiki/**   # Multiple patterns
 ```
 
+### docSearch.extraRoots
+
+- **Type:** `array` of `{ name, path, glob? }` objects
+- **Default:** `[]`
+
+Additional directories **outside the workspace** to index alongside the workspace docs — for example a locally cloned vendor-documentation repo you want searchable from every project.
+
+```jsonc
+"docSearch.extraRoots": [
+  {
+    "name": "vendor-docs", // unique id, used in ext://vendor-docs/... refs
+    "path": "~/repos/vendor/docs", // absolute; leading ~ is expanded
+    "glob": "pages/**/*.mdx" // optional; default **/*.{md,mdx}
+  }
+]
+```
+
+- Files under an external root appear everywhere (search results, `list_docs`, the mtime cache) under the key `ext://<name>/<relative-path>`, and can be fetched with `get`/`multi_get` using that ref or their docid.
+- The default glob includes `.mdx` — vendor docs corpora are commonly MDX. The chunker treats MDX as markdown.
+- External roots are scanned during reindex (command or `reindex_docs` tool); the save-time file watcher only covers the workspace, so refresh an external root by reindexing after you `git pull` it.
+- A root whose directory is missing (unmounted disk, not yet cloned) is skipped without pruning its existing index entries; removing the root from the setting prunes them on the next reindex.
+
+**Security note:** every configured root grants doc-search MCP/CLI clients read access to that directory subtree. The MCP server reads this setting from `.vscode/settings.json`, which is workspace-controlled — review it when opening untrusted workspaces. Refs into a root are containment-checked against the root's real path; `..` traversal out of a root is rejected.
+
 ### docSearch.indexLocation
 
 - **Type:** `enum`
@@ -118,14 +142,15 @@ When enabled, the extension automatically reindexes files when they are saved. O
 
 When running the MCP server standalone, these environment variables configure behavior:
 
-| Variable                    | Default             | Description                                                 |
-| --------------------------- | ------------------- | ----------------------------------------------------------- |
-| `DOC_SEARCH_WORKSPACE`      | (required)          | Workspace root path                                         |
-| `DOC_SEARCH_GLOB`           | `doc/**/*.md`       | File glob pattern                                           |
-| `DOC_SEARCH_HOME`           | `~/.doc-search`     | Base directory for global index (requires absolute path)    |
-| `DOC_SEARCH_INDEX_LOCATION` | `global`            | Index location mode: `global` or `workspace`                |
-| `DOC_SEARCH_INDEX_DIR`      | `.doc-search-index` | Workspace-mode index directory (relative to workspace root) |
-| `USE_OPENAI`                | `0`                 | Set to `1` to use OpenAI embeddings                         |
-| `OPENAI_API_KEY`            | (empty)             | OpenAI API key                                              |
-| `OLLAMA_URL`                | (empty)             | Ollama server URL (enables Ollama provider)                 |
-| `OLLAMA_MODEL`              | `nomic-embed-text`  | Ollama model name                                           |
+| Variable                    | Default             | Description                                                                                            |
+| --------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------ |
+| `DOC_SEARCH_WORKSPACE`      | (required)          | Workspace root path                                                                                    |
+| `DOC_SEARCH_GLOB`           | `doc/**/*.md`       | File glob pattern                                                                                      |
+| `DOC_SEARCH_EXTRA_ROOTS`    | (empty)             | JSON array of external roots (same shape as `docSearch.extraRoots`); overrides the settings.json value |
+| `DOC_SEARCH_HOME`           | `~/.doc-search`     | Base directory for global index (requires absolute path)                                               |
+| `DOC_SEARCH_INDEX_LOCATION` | `global`            | Index location mode: `global` or `workspace`                                                           |
+| `DOC_SEARCH_INDEX_DIR`      | `.doc-search-index` | Workspace-mode index directory (relative to workspace root)                                            |
+| `USE_OPENAI`                | `0`                 | Set to `1` to use OpenAI embeddings                                                                    |
+| `OPENAI_API_KEY`            | (empty)             | OpenAI API key                                                                                         |
+| `OLLAMA_URL`                | (empty)             | Ollama server URL (enables Ollama provider)                                                            |
+| `OLLAMA_MODEL`              | `nomic-embed-text`  | Ollama model name                                                                                      |

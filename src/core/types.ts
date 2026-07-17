@@ -3,6 +3,8 @@
  * No VS Code or MCP dependencies — pure TypeScript.
  */
 
+import type { ExtraRoot } from "./extraRoots.js";
+
 export interface DocChunk {
   /** Stable ID: md5(file:lineStart) first 12 hex chars */
   id: string;
@@ -76,6 +78,8 @@ export interface IndexStatus {
   needsReindex: boolean;
   /** The active docGlob pattern */
   docGlob: string;
+  /** Names of configured external roots (empty when none) */
+  extraRootNames: string[];
 }
 
 /**
@@ -145,6 +149,8 @@ export interface IndexerConfig {
   maxChunkChars: number;
   headingDepth: 1 | 2;
   embedProvider: EmbedProvider;
+  /** Validated external roots (see extraRoots.ts). Defaults to []. */
+  extraRoots: ExtraRoot[];
 }
 
 /**
@@ -162,5 +168,6 @@ export function validateConfig(
     headingDepth: raw.headingDepth === 1 ? 1 : 2,
     maxChunkChars: Math.max(100, Math.min(50_000, Number(raw.maxChunkChars) || 4000)),
     embedProvider,
+    extraRoots: raw.extraRoots ?? [],
   };
 }
