@@ -55,7 +55,7 @@ Open VS Code settings and set:
 ]
 ```
 
-Their files appear in results as `ext://vendor-docs/<path>` and are fetchable through `get`/`multi_get` like any other ref. External roots are re-scanned on reindex (the save-time watcher covers only the workspace). Note that a configured root grants doc-search clients read access to that subtree — review the setting in untrusted workspaces. Details in [doc/configuration.md](doc/configuration.md).
+Their files appear in results as `ext://vendor-docs/<path>` and are fetchable through `get`/`multi_get` like any other ref. External roots are re-scanned on reindex (the save-time watcher covers only the workspace), and can be edited in the settings panel ("Doc Search: Open Settings" → "External folders") or directly in settings.json. Note that a configured root grants doc-search clients read access to that subtree — review the setting in untrusted workspaces. Details in [doc/configuration.md](doc/configuration.md).
 
 ### Use it
 

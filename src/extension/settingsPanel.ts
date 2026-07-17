@@ -1,10 +1,58 @@
 import * as vscode from "vscode";
 import { execFile } from "node:child_process";
 import { OllamaEmbedder, OpenAIEmbedder } from "../core/embedder.js";
+import { parseExtraRoots } from "../core/extraRoots.js";
 import { getNonce } from "./utils.js";
 
 /** SecretStorage key for the OpenAI API key. Single source of truth. */
 const OPENAI_SECRET_KEY = "docSearch.openaiApiKey";
+
+/** Row shape exchanged with the webview's external-folders editor. */
+interface ExtraRootRow {
+  name: string;
+  path: string;
+  glob: string;
+}
+
+/**
+ * Coerce the raw extraRoots setting into rows the webview can render.
+ * Malformed entries are kept (as far as they can be stringified) so the
+ * user can see and fix them in the editor rather than having them
+ * silently vanish; authoritative validation stays in parseExtraRoots.
+ */
+export function extraRootsToRows(raw: unknown): ExtraRootRow[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter(
+      (e): e is Record<string, unknown> => typeof e === "object" && e !== null && !Array.isArray(e),
+    )
+    .map((e) => ({
+      name: typeof e.name === "string" ? e.name : "",
+      path: typeof e.path === "string" ? e.path : "",
+      glob: typeof e.glob === "string" ? e.glob : "",
+    }));
+}
+
+/**
+ * Sanitize rows coming back from the webview into the persisted setting
+ * shape: trimmed strings, `glob` omitted when empty (so the engine default
+ * applies), fully-empty rows dropped.
+ */
+export function rowsToExtraRoots(
+  raw: unknown,
+): Array<{ name: string; path: string; glob?: string }> {
+  return extraRootsToRows(raw)
+    .map((row) => {
+      const entry: { name: string; path: string; glob?: string } = {
+        name: row.name.trim(),
+        path: row.path.trim(),
+      };
+      const glob = row.glob.trim();
+      if (glob) entry.glob = glob;
+      return entry;
+    })
+    .filter((e) => e.name || e.path || e.glob);
+}
 
 export class SettingsPanel {
   private static instance: SettingsPanel | undefined;
@@ -67,6 +115,7 @@ export class SettingsPanel {
             ollamaModel: cfg.get("ollamaModel", "nomic-embed-text"),
             openaiApiKey,
             autoReindex: cfg.get("autoReindex", true),
+            extraRoots: extraRootsToRows(cfg.get("extraRoots", [])),
           },
         });
         break;
@@ -88,6 +137,14 @@ export class SettingsPanel {
           await cfg.update("ollamaModel", msg.config.ollamaModel, target);
           await cfg.update("autoReindex", msg.config.autoReindex, target);
 
+          // External roots: persist as-typed (trimmed, empty rows dropped);
+          // remove the setting entirely when the list is empty. Validation
+          // stays in parseExtraRoots — its warnings are surfaced below so
+          // the user learns which entries the engine will ignore.
+          const extraRoots = rowsToExtraRoots(msg.config.extraRoots);
+          await cfg.update("extraRoots", extraRoots.length ? extraRoots : undefined, target);
+          const rootWarnings = parseExtraRoots(extraRoots).warnings;
+
           // H3: persist the OpenAI key to SecretStorage only. Empty string
           // deletes the secret so the user can clear it from the UI.
           const newKey = typeof msg.config.openaiApiKey === "string" ? msg.config.openaiApiKey : "";
@@ -108,7 +165,12 @@ export class SettingsPanel {
             oldProvider !== msg.config.embedProvider ||
             (msg.config.embedProvider === "ollama" && oldOllamaModel !== msg.config.ollamaModel);
 
-          this.panel.webview.postMessage({ type: "saveResult", ok: true, providerChanged });
+          this.panel.webview.postMessage({
+            type: "saveResult",
+            ok: true,
+            providerChanged,
+            rootWarnings,
+          });
           if (providerChanged) {
             // Reindex immediately with the new provider — no window reload needed
             vscode.commands.executeCommand("docSearch.reindex", true);
@@ -361,6 +423,28 @@ export class SettingsPanel {
     white-space: nowrap;
   }
   .btn-inline:hover { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+  .root-row {
+    display: grid;
+    grid-template-columns: 1fr 2fr 1.4fr auto;
+    gap: 6px;
+    margin-bottom: 6px;
+    align-items: center;
+  }
+  .root-row input { width: 100%; }
+  .root-row .btn-remove {
+    padding: 4px 10px;
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+  }
+  .root-header {
+    display: grid;
+    grid-template-columns: 1fr 2fr 1.4fr auto;
+    gap: 6px;
+    font-size: 0.85em;
+    color: var(--vscode-descriptionForeground);
+    margin: 8px 0 4px;
+  }
+  .root-header span:last-child { visibility: hidden; }
 </style>
 </head>
 <body>
@@ -467,6 +551,22 @@ export class SettingsPanel {
       <code>.gitignore</code>).
     </div>
     <input type="text" id="indexDir" placeholder=".doc-search-index">
+  </div>
+
+  <h2>External folders</h2>
+  <div class="hint">
+    Folders <strong>outside this workspace</strong> to index alongside your docs —
+    e.g. a locally cloned vendor-docs repo. Results show up as
+    <code>ext://&lt;name&gt;/…</code>. Path must be absolute (a leading <code>~</code> works);
+    the pattern defaults to <code>**/*.{md,mdx}</code>.
+  </div>
+  <div class="warning">
+    Each folder here becomes readable by doc-search MCP clients. Only add folders
+    you're happy to expose to AI assistants in this workspace.
+  </div>
+  <div id="extraRootRows"></div>
+  <div class="btn-row" style="margin-top:8px">
+    <button class="btn-secondary" id="addRootBtn">Add folder</button>
   </div>
 
   <h2>Behavior</h2>
@@ -599,6 +699,63 @@ export class SettingsPanel {
       status.className = "";
     }
 
+    // --- External folders editor -----------------------------------------
+    const rootRows = $("extraRootRows");
+
+    function addRootRow(root) {
+      if (!rootRows.querySelector(".root-header")) {
+        const header = document.createElement("div");
+        header.className = "root-header";
+        for (const label of ["Name", "Folder", "Pattern (optional)", "x"]) {
+          const span = document.createElement("span");
+          span.textContent = label;
+          header.appendChild(span);
+        }
+        rootRows.appendChild(header);
+      }
+      const row = document.createElement("div");
+      row.className = "root-row";
+      const mk = (cls, placeholder, value) => {
+        const input = document.createElement("input");
+        input.type = "text";
+        input.className = cls;
+        input.placeholder = placeholder;
+        input.value = value || "";
+        row.appendChild(input);
+        return input;
+      };
+      mk("root-name", "vendor-docs", root && root.name);
+      mk("root-path", "~/repos/vendor/docs", root && root.path);
+      mk("root-glob", "**/*.{md,mdx}", root && root.glob);
+      const remove = document.createElement("button");
+      remove.className = "btn-remove";
+      remove.textContent = "Remove";
+      remove.addEventListener("click", () => {
+        row.remove();
+        if (!rootRows.querySelector(".root-row")) {
+          const header = rootRows.querySelector(".root-header");
+          if (header) header.remove();
+        }
+      });
+      row.appendChild(remove);
+      rootRows.appendChild(row);
+    }
+
+    function collectExtraRoots() {
+      return Array.from(rootRows.querySelectorAll(".root-row")).map((row) => ({
+        name: row.querySelector(".root-name").value,
+        path: row.querySelector(".root-path").value,
+        glob: row.querySelector(".root-glob").value,
+      }));
+    }
+
+    function applyExtraRoots(roots) {
+      rootRows.textContent = "";
+      for (const root of roots || []) addRootRow(root);
+    }
+
+    $("addRootBtn").addEventListener("click", () => addRootRow());
+
     function collectConfig() {
       return {
         docGlob: $("docGlob").value,
@@ -610,6 +767,7 @@ export class SettingsPanel {
         ollamaModel: $("ollamaModel").value,
         openaiApiKey: $("openaiApiKey").value,
         autoReindex: $("autoReindex").checked,
+        extraRoots: collectExtraRoots(),
       };
     }
 
@@ -623,6 +781,7 @@ export class SettingsPanel {
       $("ollamaModel").value = cfg.ollamaModel;
       $("openaiApiKey").value = cfg.openaiApiKey;
       $("autoReindex").checked = cfg.autoReindex;
+      applyExtraRoots(cfg.extraRoots);
       toggleSections();
     }
 
@@ -671,6 +830,12 @@ export class SettingsPanel {
       if (msg.type === "saveResult") {
         if (msg.ok) {
           clearStatus();
+          if (msg.rootWarnings && msg.rootWarnings.length) {
+            showStatus(
+              "Saved, but some external folders will be ignored: " + msg.rootWarnings.join(" "),
+              false,
+            );
+          }
           if (!msg.providerChanged) {
             $("savedBanner").classList.add("visible");
           }

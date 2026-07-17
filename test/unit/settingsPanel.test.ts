@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as vscode from "vscode";
-import { SettingsPanel } from "../../src/extension/settingsPanel.js";
+import {
+  SettingsPanel,
+  extraRootsToRows,
+  rowsToExtraRoots,
+} from "../../src/extension/settingsPanel.js";
 
 vi.mock("node:child_process");
 
@@ -415,6 +419,130 @@ describe("SettingsPanel", () => {
       const latestCfg = vi.mocked(vscode.workspace.getConfiguration).mock.results.at(-1)?.value;
       expect(latestCfg.update).toHaveBeenCalledWith("openaiApiKey", undefined, expect.anything());
       void cfg;
+    });
+
+    // -----------------------------------------------------------------------
+    // External folders (extraRoots) editor
+    // -----------------------------------------------------------------------
+
+    it("on ready, includes extraRoots rows in the config message", async () => {
+      vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+        get: vi.fn((key: string, def: any) =>
+          key === "extraRoots" ? [{ name: "vendor", path: "~/docs" }] : def,
+        ),
+        update: vi.fn(),
+      } as any);
+
+      SettingsPanel.createOrShow(mockContext);
+      const handler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
+      await handler({ type: "ready" });
+
+      const configMessage = mockPanel.webview.postMessage.mock.calls.find(
+        (c: any) => c[0].type === "config",
+      );
+      expect(configMessage?.[0].config.extraRoots).toEqual([
+        { name: "vendor", path: "~/docs", glob: "" },
+      ]);
+    });
+
+    it("saveConfig persists sanitized extraRoots (glob omitted when empty, empty rows dropped)", async () => {
+      SettingsPanel.createOrShow(mockContext);
+      const handler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
+
+      await handler({
+        type: "saveConfig",
+        config: {
+          docGlob: "doc/**/*.md",
+          indexDir: ".doc-search-index",
+          headingDepth: 2,
+          maxChunkChars: 4000,
+          embedProvider: "local",
+          ollamaUrl: "http://localhost:11434",
+          ollamaModel: "nomic-embed-text",
+          openaiApiKey: "",
+          autoReindex: true,
+          extraRoots: [
+            { name: " vendor ", path: " ~/docs ", glob: "  " },
+            { name: "", path: "", glob: "" },
+            { name: "b", path: "/srv/b", glob: "pages/**/*.mdx" },
+          ],
+        },
+      });
+
+      const cfg = vi.mocked(vscode.workspace.getConfiguration).mock.results[0]?.value;
+      expect(cfg.update).toHaveBeenCalledWith(
+        "extraRoots",
+        [
+          { name: "vendor", path: "~/docs" },
+          { name: "b", path: "/srv/b", glob: "pages/**/*.mdx" },
+        ],
+        expect.anything(),
+      );
+    });
+
+    it("saveConfig removes the extraRoots setting when the list is empty", async () => {
+      SettingsPanel.createOrShow(mockContext);
+      const handler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
+
+      await handler({
+        type: "saveConfig",
+        config: {
+          docGlob: "doc/**/*.md",
+          indexDir: ".doc-search-index",
+          headingDepth: 2,
+          maxChunkChars: 4000,
+          embedProvider: "local",
+          ollamaUrl: "http://localhost:11434",
+          ollamaModel: "nomic-embed-text",
+          openaiApiKey: "",
+          autoReindex: true,
+          extraRoots: [],
+        },
+      });
+
+      const cfg = vi.mocked(vscode.workspace.getConfiguration).mock.results[0]?.value;
+      expect(cfg.update).toHaveBeenCalledWith("extraRoots", undefined, expect.anything());
+    });
+
+    it("saveConfig surfaces parseExtraRoots warnings in saveResult", async () => {
+      SettingsPanel.createOrShow(mockContext);
+      const handler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
+
+      await handler({
+        type: "saveConfig",
+        config: {
+          docGlob: "doc/**/*.md",
+          indexDir: ".doc-search-index",
+          headingDepth: 2,
+          maxChunkChars: 4000,
+          embedProvider: "local",
+          ollamaUrl: "http://localhost:11434",
+          ollamaModel: "nomic-embed-text",
+          openaiApiKey: "",
+          autoReindex: true,
+          extraRoots: [{ name: "bad name!", path: "relative/path", glob: "" }],
+        },
+      });
+
+      const saveResult = mockPanel.webview.postMessage.mock.calls.find(
+        (c: any) => c[0].type === "saveResult",
+      );
+      expect(saveResult?.[0].ok).toBe(true);
+      expect(saveResult?.[0].rootWarnings.length).toBeGreaterThan(0);
+    });
+
+    it("extraRootsToRows tolerates malformed input", () => {
+      expect(extraRootsToRows(undefined)).toEqual([]);
+      expect(extraRootsToRows("nope")).toEqual([]);
+      expect(extraRootsToRows([null, "x", { name: 5, path: "/a" }])).toEqual([
+        { name: "", path: "/a", glob: "" },
+      ]);
+    });
+
+    it("rowsToExtraRoots keeps partially-filled rows so validation can flag them", () => {
+      expect(rowsToExtraRoots([{ name: "v", path: "", glob: "" }])).toEqual([
+        { name: "v", path: "" },
+      ]);
     });
 
     it("saveConfig with providerChanged kicks docSearch.reindex", async () => {

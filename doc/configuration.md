@@ -25,7 +25,7 @@ src/**/*.md,wiki/**   # Multiple patterns
 - **Type:** `array` of `{ name, path, glob? }` objects
 - **Default:** `[]`
 
-Additional directories **outside the workspace** to index alongside the workspace docs — for example a locally cloned vendor-documentation repo you want searchable from every project.
+Additional directories **outside the workspace** to index alongside the workspace docs — for example a locally cloned vendor-documentation repo you want searchable from every project. Editable in the settings panel (**Doc Search: Open Settings** → "External folders") or directly in settings.json.
 
 ```jsonc
 "docSearch.extraRoots": [
