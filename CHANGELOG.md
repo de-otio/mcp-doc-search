@@ -5,6 +5,20 @@ All notable changes to **mcp-doc-search** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-07-17
+
+### Added
+
+- **External folders are now editable in the settings panel.** "Doc Search:
+  Open Settings" gained an "External folders" section — a name/path/pattern
+  list editor for `docSearch.extraRoots` with add/remove rows, so the 0.4.0
+  feature no longer requires hand-editing settings.json. Entries are saved
+  as typed (trimmed; empty pattern falls back to the `**/*.{md,mdx}` default;
+  the setting is removed entirely when the list is empty), and validation
+  warnings from the engine (`parseExtraRoots`) are shown after saving so you
+  learn immediately which entries would be ignored and why. The section
+  includes the read-access security note inline.
+
 ## [0.4.0] - 2026-07-17
 
 ### Added
