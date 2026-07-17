@@ -5,6 +5,20 @@ All notable changes to **mcp-doc-search** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-07-17
+
+### Fixed
+
+- **The reindex command and Index Status panel ignored external roots.** The
+  fresh-config indexer built for `docSearch.reindex` and the status panel
+  omitted `extraRoots`, so "Files found" showed workspace files only and —
+  worse — running a reindex from there **pruned every `ext://` entry** from
+  the index (they were re-added by the next reindex through a correctly
+  configured path, e.g. the MCP server's `reindex_docs`, at the cost of
+  re-embedding). Only the activation-time catch-up indexer and the MCP
+  server/CLI had the roots wired. The fresh-indexer path now parses
+  `extraRoots` like every other construction site; regression-tested.
+
 ## [0.5.0] - 2026-07-17
 
 ### Added
