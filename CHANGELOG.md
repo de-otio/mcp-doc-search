@@ -5,7 +5,32 @@ All notable changes to **mcp-doc-search** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.3] - 2026-06-24
+## [0.4.0] - 2026-07-17
+
+### Added
+
+- **External documentation roots (`docSearch.extraRoots`).** Index directories
+  _outside_ the workspace alongside the workspace docs — e.g. a locally cloned
+  vendor-documentation repo — and search them from any project session. Each
+  root gets a unique `name` and an absolute `path` (leading `~` expanded); an
+  optional `glob` defaults to `**/*.{md,mdx}`, so MDX corpora work out of the
+  box. Files under a root are keyed as `ext://<name>/<relative-path>` in search
+  results, `list_docs`, and the mtime cache, and can be fetched with `get` /
+  `multi_get` via that ref or their docid. Also configurable for the standalone
+  MCP server / CLI via the `DOC_SEARCH_EXTRA_ROOTS` env var (JSON array), which
+  overrides the settings.json value.
+  - **Containment per root:** every `ext://` ref is re-validated against the
+    realpath of its declared root; `..` traversal out of a root is rejected,
+    unknown or malformed roots are dropped with a warning, and a bad entry
+    never takes the engine down.
+  - **Missing-root safety:** a configured root whose directory is absent
+    (unmounted disk, not yet cloned) is skipped without pruning its existing
+    index entries; removing the root from the setting prunes them on the next
+    reindex.
+  - **Scope note:** the save-time file watcher covers only the workspace —
+    refresh an external root by reindexing after updating it. A configured
+    root grants doc-search MCP/CLI clients read access to that subtree; review
+    the setting when opening untrusted workspaces.
 
 ### Security
 
