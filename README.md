@@ -100,6 +100,8 @@ list_contexts()
 remove_context("doc/api.md")
 ```
 
+If the client is an AI coding agent, see the [Agent Guide](doc/agent-guide.md) for token-efficient usage patterns (chunk-level retrieval, multi-repo federation, delegating sweeps to subagents).
+
 ## Embedding providers
 
 | Provider          | Quality          | Setup                                                 | Cost            |

@@ -5,6 +5,18 @@ All notable changes to **mcp-doc-search** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Agent usage guide** (`doc/agent-guide.md`): token-efficient patterns for
+  AI coding agents driving the MCP tools — why chunk-level retrieval beats
+  whole-file reads in agentic sessions, scoped `get`/`multi_get` usage,
+  multi-repo federation via external roots, delegating broad doc sweeps to
+  subagents, and operational notes (config-at-startup, centralized index,
+  sandboxed-shell reindex pitfalls). Linked from the README and the MCP
+  integration doc.
+
 ## [0.5.2] - 2026-08-08
 
 ### Fixed

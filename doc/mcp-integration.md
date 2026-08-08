@@ -109,6 +109,11 @@ claude mcp add doc-search \
   -- node ~/.vscode/extensions/de-otio.mcp-doc-search-*/dist/mcp-server.js
 ```
 
+> Using an AI coding agent as the client? The [Agent Guide](agent-guide.md)
+> covers token-efficient usage patterns — chunk-level retrieval, multi-repo
+> federation via external roots, and delegating broad doc sweeps to
+> subagents.
+
 ## MCP Tools
 
 Once connected, the assistant can call three tools:

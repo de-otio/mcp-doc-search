@@ -41,4 +41,5 @@ The system chunks your markdown files at heading boundaries, generates vector em
 - [Configuration](configuration.md) — all settings and options
 - [Architecture](architecture.md) — technical deep dive
 - [MCP Integration](mcp-integration.md) — using with MCP-compatible AI assistants
+- [Agent Guide](agent-guide.md) — token-efficient usage patterns for AI coding agents
 - [Development](development.md) — contributing and building from source
