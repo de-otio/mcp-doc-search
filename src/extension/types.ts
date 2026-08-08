@@ -6,8 +6,7 @@
  * Search panel message types
  */
 export type SearchMessage =
-  | { type: "search"; query: string }
-  | { type: "openResult"; file: string; line: number };
+  { type: "search"; query: string } | { type: "openResult"; file: string; line: number };
 
 export type SearchResultMessage =
   | {
@@ -101,5 +100,4 @@ export type IndexStatusResultMessage = {
 export type McpSetupMessage = { type: "copy" };
 
 export type McpSetupResultMessage =
-  | { type: "copyResult"; ok: boolean }
-  | { type: "copyResultError"; error: string };
+  { type: "copyResult"; ok: boolean } | { type: "copyResultError"; error: string };
