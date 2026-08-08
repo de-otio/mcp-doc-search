@@ -517,13 +517,13 @@ async function main(): Promise<void> {
 }
 
 // Only run main when this file is executed directly, not when imported by tests.
-// In the bundled CJS output, require.main === module; in ESM, check import.meta.url.
-// We use a process.argv check that works in both contexts.
-const isMain =
-  typeof require !== "undefined"
-    ? require.main === module
-    : process.argv[1]?.endsWith("mcp-doc-search.js") ||
-      process.argv[1]?.endsWith("mcp-doc-search.ts");
+// In the bundled CJS output, require.main === module — except when loaded via
+// the stable ~/.doc-search/bin launcher, where require.main is the launcher;
+// the argv check covers that (the launcher is itself named mcp-doc-search.js).
+// In ESM, only the argv check applies.
+const argvIsCli =
+  process.argv[1]?.endsWith("mcp-doc-search.js") || process.argv[1]?.endsWith("mcp-doc-search.ts");
+const isMain = typeof require !== "undefined" ? require.main === module || argvIsCli : argvIsCli;
 
 if (isMain) {
   main().catch((err) => {

@@ -15,6 +15,7 @@ import { SearchPanel } from "./searchPanel.js";
 import { SettingsPanel } from "./settingsPanel.js";
 import { IndexStatusPanel } from "./indexStatusPanel.js";
 import { McpSetupPanel } from "./mcpSetupPanel.js";
+import { writeStableLaunchers } from "./stableBin.js";
 import { ensureGitignored } from "../core/gitignore.js";
 
 interface CommandDeps {
@@ -170,7 +171,11 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
 
     vscode.commands.registerCommand("docSearch.generateMcpJson", async () => {
       const extensionDir = context.extensionPath;
-      const mcpServerPath = path.join(extensionDir, "dist", "mcp-server.js");
+      // Prefer the stable launcher so the generated config survives extension
+      // upgrades; fall back to the versioned path if ~/.doc-search/bin is
+      // unwritable.
+      const mcpServerPath =
+        writeStableLaunchers(extensionDir) ?? path.join(extensionDir, "dist", "mcp-server.js");
       const mcpJsonPath = path.join(workspaceRoot, ".mcp.json");
 
       const env: Record<string, string> = {

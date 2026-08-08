@@ -84,7 +84,7 @@ Pass `explain: true` to `search_docs` to get a detailed breakdown:
 
 ### MCP integration
 
-After running "Generate .mcp.json", connect any MCP-compatible client (Claude Code, Cursor, etc.). The MCP tools appear automatically:
+After running "Generate .mcp.json", connect any MCP-compatible client (Claude Code, Cursor, etc.). The generated config points at the **stable launcher** `~/.doc-search/bin/mcp-server.js` — a forwarder the extension refreshes on every activation — so it keeps working across extension upgrades instead of embedding a versioned install path. The MCP tools appear automatically:
 
 ```
 search_docs("authentication flow")               → semantic search
@@ -114,7 +114,7 @@ The OpenAI API key is stored in VS Code's SecretStorage (the OS keychain) — ne
 
 ## CLI
 
-A standalone CLI is included — no MCP client required.
+A standalone CLI is included — no MCP client required. The extension keeps an upgrade-stable copy at `~/.doc-search/bin/mcp-doc-search.js` (run it as `node ~/.doc-search/bin/mcp-doc-search.js …`).
 
 ```bash
 # Semantic search

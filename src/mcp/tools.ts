@@ -187,7 +187,12 @@ export function registerTools(server: Server, deps: EngineDeps): void {
         {
           name: "get",
           description: [
-            "Retrieve the full content of a single documentation file.",
+            "Retrieve the content of a single documentation file.",
+            "",
+            "**Prefer a scoped fetch over the whole file:** following up a `search_docs` hit,",
+            "pass `from_line` (near the hit's line) with `max_lines` or a small `max_bytes`",
+            "instead of pulling the full document — every byte returned stays in context for",
+            "the rest of the session. Reserve whole-file fetches for files you are about to edit.",
             "",
             "ref accepts:",
             "  - A relative file path (e.g. 'doc/foo.md')",
@@ -225,6 +230,8 @@ export function registerTools(server: Server, deps: EngineDeps): void {
             "",
             "Each ref is a path, #docid, bare 6-char hex docid, or ext://<root>/... external-root ref.",
             "Glob patterns match workspace files only; refer to external-root files individually.",
+            "Scope the batch: `from_line`/`max_lines`/`max_bytes` apply to every file, so cap them",
+            "when you only need each file's opening section rather than up to 10 KB per file.",
             "Returns { docs: Array<{ file, docid, content, lines, truncated }>, errors: Array<{ ref, error }> }.",
             "max_bytes is enforced per file. Errors are collected; one bad ref doesn't fail the batch.",
           ].join("\n"),

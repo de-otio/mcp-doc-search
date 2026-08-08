@@ -19,6 +19,9 @@ vi.mock("../../src/core/indexLocation.js", () => ({
   })),
   removeSupersededLegacyIndex: vi.fn(() => undefined),
 }));
+vi.mock("../../src/extension/stableBin.js", () => ({
+  writeStableLaunchers: vi.fn(() => "/mock-home/.doc-search/bin/mcp-server.js"),
+}));
 
 describe("Extension", () => {
   let mockContext: any;
@@ -64,6 +67,14 @@ describe("Extension", () => {
       await activate(mockContext);
 
       expect(mockContext.secrets.get).toHaveBeenCalled();
+    });
+
+    it("refreshes the stable launchers for the current extension build", async () => {
+      const { writeStableLaunchers } = await import("../../src/extension/stableBin.js");
+
+      await activate(mockContext);
+
+      expect(vi.mocked(writeStableLaunchers)).toHaveBeenCalledWith("/mock/extension");
     });
 
     it("should return early if no workspace folders", async () => {

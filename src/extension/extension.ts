@@ -15,6 +15,7 @@ import {
   removeSupersededLegacyIndex,
 } from "../core/indexLocation.js";
 import { repairMcpJson } from "./mcpJson.js";
+import { writeStableLaunchers } from "./stableBin.js";
 import * as path from "node:path";
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -48,13 +49,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
   }
 
-  // Keep an existing .mcp.json pointing at THIS extension build. An upgrade
-  // moves the install dir, so a previously generated .mcp.json embeds a now-
-  // defunct absolute path to mcp-server.js; re-point it (no-op if absent/current).
-  const expectedMcpServer = path.join(context.extensionPath, "dist", "mcp-server.js");
+  // Refresh the stable launchers (~/.doc-search/bin) to forward to THIS build,
+  // then re-point any existing .mcp.json still embedding a versioned extension
+  // path at the stable launcher instead — once repointed, future upgrades need
+  // no .mcp.json changes at all. Falls back to the versioned path if the bin
+  // directory is unwritable (no-op if .mcp.json is absent/current).
+  const expectedMcpServer =
+    writeStableLaunchers(context.extensionPath) ??
+    path.join(context.extensionPath, "dist", "mcp-server.js");
   if (repairMcpJson(workspaceRoot, expectedMcpServer)) {
     vscode.window.showInformationMessage(
-      "Doc Search: updated .mcp.json to the current extension path. Reload the window for MCP clients to pick it up.",
+      "Doc Search: updated .mcp.json to the stable server path (~/.doc-search/bin). Reload the window for MCP clients to pick it up.",
     );
   }
   const store = new LanceVectorStore(indexDir);

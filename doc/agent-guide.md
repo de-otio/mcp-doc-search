@@ -69,6 +69,11 @@ This composes with federation: one subagent sweep can cover every
 - The index is centralized under `~/.doc-search/indexes/<workspace-key>`
   (see [configuration](configuration.md)); the in-tree
   `.doc-search-index/` layout is deprecated.
+- Point `.mcp.json` (and shell invocations) at the **stable launcher**
+  `~/.doc-search/bin/mcp-server.js` / `~/.doc-search/bin/mcp-doc-search.js`
+  rather than the versioned extension install dir — the versioned path dies
+  on every extension upgrade; the launcher is refreshed on activation and
+  survives them.
 - Sandboxed agent shells often block `localhost`: with the Ollama
   embedding provider, a CLI reindex then fails every file with a bare
   `fetch failed`. Run reindexes outside the sandbox (or allowlist

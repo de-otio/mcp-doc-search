@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Stable launcher path** (`~/.doc-search/bin/`): activation now writes tiny
+  forwarder scripts (`mcp-server.js`, `mcp-doc-search.js`) at a
+  version-independent path under the doc-search home and refreshes them on
+  every upgrade. "Generate .mcp.json" embeds the stable path, and the
+  activation-time `.mcp.json` repair now repoints stale versioned extension
+  paths at it — so a configured MCP server survives extension upgrades in
+  every workspace, including ones never reopened in VS Code. Respects
+  `DOC_SEARCH_HOME`; falls back to the versioned path if the bin directory is
+  unwritable. The CLI's run-directly guard now also recognizes being loaded
+  through the launcher.
+- **Scoped-fetch guidance in the `get`/`multi_get` tool descriptions**: the
+  MCP tool descriptions now steer agents toward `from_line`/`max_lines`/
+  `max_bytes` fetches around a search hit instead of whole-file pulls, and
+  toward capping per-file limits in batch fetches — the token-economics
+  rationale lives in `doc/agent-guide.md`.
+
 - **Agent usage guide** (`doc/agent-guide.md`): token-efficient patterns for
   AI coding agents driving the MCP tools — why chunk-level retrieval beats
   whole-file reads in agentic sessions, scoped `get`/`multi_get` usage,
@@ -16,6 +32,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subagents, and operational notes (config-at-startup, centralized index,
   sandboxed-shell reindex pitfalls). Linked from the README and the MCP
   integration doc.
+
+### Security
+
+- **Cleared all open Dependabot alerts (7) and `npm audit` findings.**
+  Transitive bumps: `sharp` ≥ 0.35.0 (libvips CVEs — the only runtime-scope
+  alert), `js-yaml` ≥ 4.3.1, `hono` ≥ 4.13.1, `@hono/node-server` ≥ 2.0.5
+  (all dev-scope), plus `npm audit fix` for `body-parser`, `brace-expansion`,
+  `path-to-regexp`, and `protobufjs`. Dev-dependency group bump
+  (`@modelcontextprotocol/sdk` 1.30, `prettier` 3.9, `typescript-eslint`
+  8.66, `@types/node`, `@vitest/coverage-v8`) and CI action bumps
+  (`actions/setup-node@v7`, pinned `github/codeql-action@v4.37.3`).
 
 ## [0.5.2] - 2026-08-08
 
