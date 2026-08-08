@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   budgets tokens, so token-dense content (config dumps, tables) could
   overflow Ollama's `num_ctx` from within `maxChunkChars`, failing the file
   with `Ollama embedding failed (500): the input length exceeds the context
-  length`. The Ollama embedder now halves the text and retries (up to 3
+length`. The Ollama embedder now halves the text and retries (up to 3
   halvings) when it sees that specific error, embedding the chunk's head —
   with a stderr warning — instead of losing the file entirely. Other 5xx
   errors are still thrown unchanged.

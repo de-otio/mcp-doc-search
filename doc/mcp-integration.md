@@ -159,17 +159,17 @@ Trigger a documentation reindex.
 
 The MCP server is configured via the `env` block in `.mcp.json`. The **Generate .mcp.json** command fills these in automatically from your extension settings. Indexes are centralized under `~/.doc-search` (see [Configuration](configuration.md)), so no index-location variables are needed; the in-tree layout is deprecated, and `DOC_SEARCH_INDEX_LOCATION=workspace` exists only to keep it where unavoidable.
 
-| Variable                    | Default             | Description                                                                    |
-| --------------------------- | ------------------- | ------------------------------------------------------------------------------ |
-| `DOC_SEARCH_WORKSPACE`      | `process.cwd()`     | Absolute path to workspace root                                                |
-| `DOC_SEARCH_GLOB`           | `doc/**/*.md`       | File glob pattern                                                              |
-| `DOC_SEARCH_HOME`           | `~/.doc-search`     | Base directory for the global index (absolute path)                            |
-| `DOC_SEARCH_INDEX_LOCATION` | `global`            | Index location mode: `global` or `workspace` (deprecated)                      |
-| `DOC_SEARCH_INDEX_DIR`      | `.doc-search-index` | Deprecated: workspace-mode index directory; ignored in global mode             |
-| `USE_OPENAI`                | `0`                 | Set to `1` to use OpenAI embeddings                                            |
-| `OPENAI_API_KEY`            | —                   | Required if `USE_OPENAI=1`                                                     |
-| `OLLAMA_URL`                | —                   | Ollama server URL (presence enables Ollama provider)                           |
-| `OLLAMA_MODEL`              | `nomic-embed-text`  | Ollama model name                                                              |
+| Variable                    | Default             | Description                                                        |
+| --------------------------- | ------------------- | ------------------------------------------------------------------ |
+| `DOC_SEARCH_WORKSPACE`      | `process.cwd()`     | Absolute path to workspace root                                    |
+| `DOC_SEARCH_GLOB`           | `doc/**/*.md`       | File glob pattern                                                  |
+| `DOC_SEARCH_HOME`           | `~/.doc-search`     | Base directory for the global index (absolute path)                |
+| `DOC_SEARCH_INDEX_LOCATION` | `global`            | Index location mode: `global` or `workspace` (deprecated)          |
+| `DOC_SEARCH_INDEX_DIR`      | `.doc-search-index` | Deprecated: workspace-mode index directory; ignored in global mode |
+| `USE_OPENAI`                | `0`                 | Set to `1` to use OpenAI embeddings                                |
+| `OPENAI_API_KEY`            | —                   | Required if `USE_OPENAI=1`                                         |
+| `OLLAMA_URL`                | —                   | Ollama server URL (presence enables Ollama provider)               |
+| `OLLAMA_MODEL`              | `nomic-embed-text`  | Ollama model name                                                  |
 
 ## Shared Index
 

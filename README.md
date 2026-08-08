@@ -35,15 +35,15 @@ code --install-extension mcp-doc-search-<target>-<version>.vsix
 
 Open VS Code settings and set:
 
-| Setting                   | Default             | Description                                                                                  |
-| ------------------------- | ------------------- | -------------------------------------------------------------------------------------------- |
+| Setting                   | Default             | Description                                                                                                     |
+| ------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------- |
 | `docSearch.indexLocation` | `global`            | Where to store the index: `global` (default, under `~/.doc-search`) or `workspace` (legacy in-tree; deprecated) |
-| `docSearch.docGlob`       | `doc/**/*.md`       | Glob pattern for docs to index                                                               |
-| `docSearch.extraRoots`    | `[]`                | Extra directories outside the workspace to index (e.g. a cloned vendor-docs repo); see below |
-| `docSearch.indexDir`      | `.doc-search-index` | Deprecated — workspace mode only: where to store the legacy in-tree index                    |
-| `docSearch.headingDepth`  | `2`                 | Split on `#` only (1) or `#` and `##` (2)                                                    |
-| `docSearch.embedProvider` | `local`             | `local`, `ollama`, or `openai`                                                               |
-| `docSearch.autoReindex`   | `true`              | Auto-reindex on file save                                                                    |
+| `docSearch.docGlob`       | `doc/**/*.md`       | Glob pattern for docs to index                                                                                  |
+| `docSearch.extraRoots`    | `[]`                | Extra directories outside the workspace to index (e.g. a cloned vendor-docs repo); see below                    |
+| `docSearch.indexDir`      | `.doc-search-index` | Deprecated — workspace mode only: where to store the legacy in-tree index                                       |
+| `docSearch.headingDepth`  | `2`                 | Split on `#` only (1) or `#` and `##` (2)                                                                       |
+| `docSearch.embedProvider` | `local`             | `local`, `ollama`, or `openai`                                                                                  |
+| `docSearch.autoReindex`   | `true`              | Auto-reindex on file save                                                                                       |
 
 **Index location:** Indexes are centralized under `~/.doc-search/indexes/` (outside your project tree). Any existing `.doc-search-index` folder is migrated there automatically on first run; if a global index already exists for the workspace, the now-redundant in-tree `.doc-search-index` is removed automatically on activation, so you never end up with both. The in-tree `.doc-search-index` layout (workspace mode) is **deprecated** — set `docSearch.indexLocation` to `workspace` only if you must keep it.
 
