@@ -37,15 +37,15 @@ Open VS Code settings and set:
 
 | Setting                   | Default             | Description                                                                                  |
 | ------------------------- | ------------------- | -------------------------------------------------------------------------------------------- |
-| `docSearch.indexLocation` | `global`            | Where to store the index: `global` (default, under `~/.doc-search`) or `workspace` (in-tree) |
+| `docSearch.indexLocation` | `global`            | Where to store the index: `global` (default, under `~/.doc-search`) or `workspace` (legacy in-tree; deprecated) |
 | `docSearch.docGlob`       | `doc/**/*.md`       | Glob pattern for docs to index                                                               |
 | `docSearch.extraRoots`    | `[]`                | Extra directories outside the workspace to index (e.g. a cloned vendor-docs repo); see below |
-| `docSearch.indexDir`      | `.doc-search-index` | Workspace mode only: where to store the vector index                                         |
+| `docSearch.indexDir`      | `.doc-search-index` | Deprecated — workspace mode only: where to store the legacy in-tree index                    |
 | `docSearch.headingDepth`  | `2`                 | Split on `#` only (1) or `#` and `##` (2)                                                    |
 | `docSearch.embedProvider` | `local`             | `local`, `ollama`, or `openai`                                                               |
 | `docSearch.autoReindex`   | `true`              | Auto-reindex on file save                                                                    |
 
-**Index location:** By default, the search index is stored under `~/.doc-search/indexes/` (outside your project tree) and automatically migrates any existing `.doc-search-index` folder on first run. If a global index already exists for the workspace, the now-redundant in-tree `.doc-search-index` is removed automatically on activation, so you never end up with both. To use the legacy in-tree location, set `docSearch.indexLocation` to `workspace`.
+**Index location:** Indexes are centralized under `~/.doc-search/indexes/` (outside your project tree). Any existing `.doc-search-index` folder is migrated there automatically on first run; if a global index already exists for the workspace, the now-redundant in-tree `.doc-search-index` is removed automatically on activation, so you never end up with both. The in-tree `.doc-search-index` layout (workspace mode) is **deprecated** — set `docSearch.indexLocation` to `workspace` only if you must keep it.
 
 **External roots:** `docSearch.extraRoots` indexes directories _outside_ the workspace alongside your docs — e.g. a locally cloned vendor-documentation repo:
 
