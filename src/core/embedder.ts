@@ -108,6 +108,9 @@ export class OllamaEmbedder implements EmbedProvider {
   private model: string;
   private baseUrl: string;
 
+  /** Max halvings when the model rejects a prompt for exceeding its context window. */
+  private static readonly MAX_CONTEXT_HALVINGS = 3;
+
   constructor(model = "nomic-embed-text", baseUrl = "http://localhost:11434") {
     this.model = model;
     this.baseUrl = baseUrl.replace(/\/$/, "");
@@ -116,27 +119,57 @@ export class OllamaEmbedder implements EmbedProvider {
   async embed(texts: string[], prefix = ""): Promise<number[][]> {
     const results: number[][] = [];
     for (const text of texts) {
-      const prompt = prefix ? `${prefix}${text}` : text;
+      results.push(await this.embedOne(text, prefix));
+    }
+    return results;
+  }
+
+  /** Ollama's 500 body when the tokenized prompt exceeds the model's num_ctx. */
+  private static isContextLengthError(body: string): boolean {
+    return body.includes("exceeds the context length");
+  }
+
+  private async embedOne(text: string, prefix: string): Promise<number[]> {
+    // The chunker budgets CHARACTERS but the model budgets TOKENS, so dense
+    // content (config dumps, tables, base64) can overflow the context window
+    // from within the char budget. Recover by halving the text and retrying:
+    // an embedding of the chunk's head keeps the file retrievable, where a
+    // hard failure would drop it from the index entirely.
+    let attempt = text;
+    for (let halvings = 0; ; halvings++) {
+      const prompt = prefix ? `${prefix}${attempt}` : attempt;
       const response = await fetchWithTimeout(`${this.baseUrl}/api/embeddings`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: this.model, prompt }),
       });
-      if (!response.ok) {
-        const body = await response.text();
-        if (response.status === 404 && body.includes("not found")) {
-          throw new Error(
-            `Ollama model "${this.model}" is required but has not been downloaded yet. ` +
-              `Open a terminal and run: ollama pull ${this.model}\n` +
-              `Once the download completes, try again.`,
+      if (response.ok) {
+        if (halvings > 0) {
+          console.warn(
+            `[doc-search] chunk exceeded the embedding model's context window; ` +
+              `embedded its first ${attempt.length} of ${text.length} chars instead`,
           );
         }
-        throw new Error(`Ollama embedding failed (${response.status}): ${body}`);
+        const data = (await response.json()) as { embedding: number[] };
+        return data.embedding;
       }
-      const data = (await response.json()) as { embedding: number[] };
-      results.push(data.embedding);
+      const body = await response.text();
+      if (response.status === 404 && body.includes("not found")) {
+        throw new Error(
+          `Ollama model "${this.model}" is required but has not been downloaded yet. ` +
+            `Open a terminal and run: ollama pull ${this.model}\n` +
+            `Once the download completes, try again.`,
+        );
+      }
+      if (
+        OllamaEmbedder.isContextLengthError(body) &&
+        halvings < OllamaEmbedder.MAX_CONTEXT_HALVINGS
+      ) {
+        attempt = attempt.slice(0, Math.ceil(attempt.length / 2));
+        continue;
+      }
+      throw new Error(`Ollama embedding failed (${response.status}): ${body}`);
     }
-    return results;
   }
 }
 

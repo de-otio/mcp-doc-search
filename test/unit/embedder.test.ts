@@ -63,6 +63,61 @@ describe("OllamaEmbedder", () => {
     const embedder = new OllamaEmbedder();
     await expect(embedder.embed(["test"])).rejects.toThrow("500");
   });
+
+  it("halves the text and retries when the model reports a context-length overflow", async () => {
+    const fakeEmbedding = [0.1, 0.2, 0.3];
+    const prompts: string[] = [];
+    const prefix = "search_document: ";
+    // Dense text whose tokenization "overflows" until it has been halved twice
+    const text = "x".repeat(4000);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        const body = JSON.parse(init?.body as string) as { prompt: string };
+        prompts.push(body.prompt);
+        if (body.prompt.length - prefix.length > 1000) {
+          return makeFakeResponse({ error: "the input length exceeds the context length" }, 500);
+        }
+        return makeFakeResponse({ embedding: fakeEmbedding });
+      }),
+    );
+
+    const embedder = new OllamaEmbedder();
+    const result = await embedder.embed([text], prefix);
+
+    expect(result).toEqual([fakeEmbedding]);
+    // 4000 → 2000 → 1000 chars: two rejections, then success
+    expect(prompts).toHaveLength(3);
+    expect(prompts[0]).toBe(`${prefix}${text}`);
+    expect(prompts[1]).toBe(`${prefix}${"x".repeat(2000)}`);
+    expect(prompts[2]).toBe(`${prefix}${"x".repeat(1000)}`);
+  });
+
+  it("gives up after bounded halvings when the overflow never clears", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        calls.push((JSON.parse(init?.body as string) as { prompt: string }).prompt);
+        return makeFakeResponse({ error: "the input length exceeds the context length" }, 500);
+      }),
+    );
+
+    const embedder = new OllamaEmbedder();
+    await expect(embedder.embed(["y".repeat(4000)])).rejects.toThrow("exceeds the context length");
+    // Initial attempt + 3 halvings, then give up
+    expect(calls).toHaveLength(4);
+  });
+
+  it("does not retry a 500 that is not a context-length error", async () => {
+    const fetchMock = vi.fn(async () => makeFakeResponse({ error: "model crashed" }, 500));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const embedder = new OllamaEmbedder();
+    await expect(embedder.embed(["test"])).rejects.toThrow("model crashed");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ---------------------------------------------------------------------------
