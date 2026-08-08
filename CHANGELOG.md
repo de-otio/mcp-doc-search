@@ -5,6 +5,29 @@ All notable changes to **mcp-doc-search** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] - 2026-08-08
+
+### Fixed
+
+- **A chunk denser than the embedding model's context window no longer drops
+  the file from the index.** The chunker budgets characters but the model
+  budgets tokens, so token-dense content (config dumps, tables) could
+  overflow Ollama's `num_ctx` from within `maxChunkChars`, failing the file
+  with `Ollama embedding failed (500): the input length exceeds the context
+  length`. The Ollama embedder now halves the text and retries (up to 3
+  halvings) when it sees that specific error, embedding the chunk's head —
+  with a stderr warning — instead of losing the file entirely. Other 5xx
+  errors are still thrown unchanged.
+
+### Changed
+
+- **Docs: the in-tree `.doc-search-index` layout is now explicitly documented
+  as deprecated.** Indexes are centralized under `~/.doc-search/indexes/`
+  (the `global` default since 0.3.0); README, configuration, and
+  MCP-integration docs now mark workspace mode, `docSearch.indexDir`, and
+  `DOC_SEARCH_INDEX_DIR` as deprecated instead of merely "legacy". No
+  behavior change.
+
 ## [0.5.1] - 2026-07-17
 
 ### Fixed
