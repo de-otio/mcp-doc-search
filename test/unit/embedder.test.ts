@@ -4,6 +4,7 @@ import {
   OpenAIEmbedder,
   LocalEmbedder,
   createEmbedProvider,
+  isFatalEmbedKind,
 } from "../../src/core/embedder.js";
 
 // ---------------------------------------------------------------------------
@@ -19,6 +20,20 @@ function makeFakeResponse(body: unknown, status = 200): Response {
     text: async () => bodyText,
     json: async () => body,
   } as unknown as Response;
+}
+
+/** What an AbortController firing looks like to fetch's caller. */
+function makeAbortError(): Error {
+  const err = new Error("This operation was aborted");
+  err.name = "AbortError";
+  return err;
+}
+
+/** What Node surfaces for a refused/reset connection: TypeError with a cause. */
+function makeConnectionError(code: string): Error {
+  const err = new TypeError("fetch failed");
+  (err as unknown as { cause: { code: string } }).cause = { code };
+  return err;
 }
 
 // ---------------------------------------------------------------------------
@@ -117,6 +132,110 @@ describe("OllamaEmbedder", () => {
     const embedder = new OllamaEmbedder();
     await expect(embedder.embed(["test"])).rejects.toThrow("model crashed");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a request that timed out", async () => {
+    // A request left unanswered for the whole timeout will not answer 100ms
+    // later; retrying only doubled every stall.
+    const fetchMock = vi.fn(async () => {
+      throw makeAbortError();
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const embedder = new OllamaEmbedder();
+    await expect(embedder.embed(["test"])).rejects.toThrow("timed out");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("still retries a transient connection error once", async () => {
+    const fetchMock = vi.fn(async () => {
+      throw makeConnectionError("ECONNRESET");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const embedder = new OllamaEmbedder();
+    await expect(embedder.embed(["test"])).rejects.toThrow(/Cannot reach/);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OllamaEmbedder.healthCheck — telling "daemon down" from "daemon broken"
+// ---------------------------------------------------------------------------
+
+describe("OllamaEmbedder.healthCheck", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("reports unreachable when the daemon is not listening", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw makeConnectionError("ECONNREFUSED");
+      }),
+    );
+
+    const health = await new OllamaEmbedder().healthCheck();
+
+    expect(health.ok).toBe(false);
+    expect(health.kind).toBe("unreachable");
+    expect(isFatalEmbedKind(health.kind!)).toBe(true);
+  });
+
+  it("reports runner-load-failed when /api/version answers but embedding hangs", async () => {
+    // Regression test for the real-world fault: an Ollama daemon left running
+    // across an upgrade serves /api/version normally (no model needed) while
+    // every model load fails and the embed request is never answered.
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).endsWith("/api/version")) {
+        return makeFakeResponse({ version: "0.16.3" });
+      }
+      throw makeAbortError();
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const health = await new OllamaEmbedder("nomic-embed-text", "http://127.0.0.1:11434", {
+      probeTimeoutMs: 50,
+    }).healthCheck();
+
+    expect(health.ok).toBe(false);
+    expect(health.kind).toBe("runner-load-failed");
+    expect(health.detail).toContain("0.16.3");
+    expect(health.hint).toMatch(/[Rr]estart Ollama/);
+  });
+
+  it("reports model-missing when the model has not been pulled", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        String(url).endsWith("/api/version")
+          ? makeFakeResponse({ version: "0.33.0" })
+          : makeFakeResponse({ error: 'model "nomic-embed-text" not found' }, 404),
+      ),
+    );
+
+    const health = await new OllamaEmbedder().healthCheck();
+
+    expect(health.ok).toBe(false);
+    expect(health.kind).toBe("model-missing");
+    expect(health.hint).toContain("ollama pull");
+  });
+
+  it("reports ok when the daemon answers and the probe embeds", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        String(url).endsWith("/api/version")
+          ? makeFakeResponse({ version: "0.33.0" })
+          : makeFakeResponse({ embedding: [0.1, 0.2, 0.3] }),
+      ),
+    );
+
+    const health = await new OllamaEmbedder().healthCheck();
+
+    expect(health.ok).toBe(true);
+    expect(health.detail).toContain("0.33.0");
   });
 });
 

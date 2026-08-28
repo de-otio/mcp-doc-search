@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { Indexer } from "../../src/core/indexer.js";
+import { EmbedError, EmbedderUnavailableError } from "../../src/core/embedder.js";
 import type { LanceVectorStore } from "../../src/core/vectorstore.js";
 import type { EmbedProvider, IndexerConfig } from "../../src/core/types.js";
 
@@ -105,6 +106,148 @@ describe("Indexer", () => {
       expect(stats.indexed).toBe(1);
       expect(stats.failedFiles).toBe(1);
       expect(stats.firstError).toBe("Embedding failed");
+    });
+
+    /**
+     * Point the mocked glob/statSync/chunkMarkdown trio at N synthetic files,
+     * each yielding one chunk.
+     */
+    async function setupFiles(count: number): Promise<void> {
+      const { glob } = await import("glob");
+      const { chunkMarkdown } = await import("../../src/core/chunker.js");
+      const { statSync } = await import("node:fs");
+
+      const paths = Array.from({ length: count }, (_, i) => `/workspace/doc/file${i}.md`);
+      vi.mocked(glob).mockResolvedValue(paths);
+      vi.mocked(statSync).mockReturnValue({ mtimeMs: 1000 } as any);
+      vi.mocked(chunkMarkdown).mockImplementation(
+        (_file: any, _root: any, _max: any, _depth: any, rel: any) => [
+          { id: `chunk-${rel}`, text: "content", file: rel, heading: "H", lineStart: 0 },
+        ],
+      );
+      mockStore.ensureTable.mockResolvedValue(undefined);
+      mockStore.deleteByFile.mockResolvedValue(undefined);
+      mockStore.upsert.mockResolvedValue(undefined);
+    }
+
+    it("aborts before embedding anything when the preflight health check fails", async () => {
+      await setupFiles(10);
+      mockEmbedProvider.healthCheck = vi.fn().mockResolvedValue({
+        ok: false,
+        kind: "runner-load-failed",
+        detail: "Ollama 0.16.3 is running but did not load the model",
+        hint: "Restart Ollama",
+      });
+
+      const indexer = new Indexer(config, mockStore as any);
+
+      await expect(indexer.reindex(true)).rejects.toBeInstanceOf(EmbedderUnavailableError);
+      // The whole point: not one wasted embed attempt.
+      expect(mockEmbedProvider.embed).not.toHaveBeenCalled();
+    });
+
+    it("carries the failure kind and hint on the thrown error", async () => {
+      await setupFiles(10);
+      mockEmbedProvider.healthCheck = vi.fn().mockResolvedValue({
+        ok: false,
+        kind: "unreachable",
+        detail: "No Ollama server responding",
+        hint: "Start Ollama",
+      });
+
+      const indexer = new Indexer(config, mockStore as any);
+      const err = await indexer.reindex(true).catch((e) => e);
+
+      expect(err).toBeInstanceOf(EmbedderUnavailableError);
+      expect(err.kind).toBe("unreachable");
+      expect(err.hint).toBe("Start Ollama");
+    });
+
+    it("skips the preflight probe for small incremental runs", async () => {
+      // A save-triggered reindex should not pay for a probe round trip.
+      await setupFiles(2);
+      mockEmbedProvider.healthCheck = vi.fn().mockResolvedValue({ ok: true });
+      mockEmbedProvider.embed.mockResolvedValue([[0.1, 0.2]]);
+
+      const indexer = new Indexer(config, mockStore as any);
+      await indexer.reindex(true);
+
+      expect(mockEmbedProvider.healthCheck).not.toHaveBeenCalled();
+    });
+
+    it("aborts immediately on a fatal embed error rather than trying every file", async () => {
+      await setupFiles(10);
+      mockEmbedProvider.embed.mockRejectedValue(
+        new EmbedError("model not pulled", "model-missing", { hint: "ollama pull x" }),
+      );
+
+      const indexer = new Indexer(config, mockStore as any);
+      const err = await indexer.reindex(true).catch((e) => e);
+
+      expect(err).toBeInstanceOf(EmbedderUnavailableError);
+      expect(err.kind).toBe("model-missing");
+      // One attempt, not ten.
+      expect(mockEmbedProvider.embed).toHaveBeenCalledTimes(1);
+    });
+
+    it("aborts after three consecutive non-fatal failures", async () => {
+      await setupFiles(10);
+      mockEmbedProvider.embed.mockRejectedValue(new Error("transient"));
+
+      const indexer = new Indexer(config, mockStore as any);
+
+      await expect(indexer.reindex(true)).rejects.toBeInstanceOf(EmbedderUnavailableError);
+      expect(mockEmbedProvider.embed).toHaveBeenCalledTimes(3);
+    });
+
+    it("resets the failure streak after a success", async () => {
+      await setupFiles(6);
+      // fail, fail, succeed, fail, fail, succeed — never 3 in a row.
+      mockEmbedProvider.embed
+        .mockRejectedValueOnce(new Error("e1"))
+        .mockRejectedValueOnce(new Error("e2"))
+        .mockResolvedValueOnce([[0.1, 0.2]])
+        .mockRejectedValueOnce(new Error("e3"))
+        .mockRejectedValueOnce(new Error("e4"))
+        .mockResolvedValueOnce([[0.1, 0.2]]);
+
+      const indexer = new Indexer(config, mockStore as any);
+      const stats = await indexer.reindex(true);
+
+      expect(stats.indexed).toBe(2);
+      expect(stats.failedFiles).toBe(4);
+    });
+
+    it("reports a 'failed' phase to onProgress so callers can show progress", async () => {
+      // Regression: the error path used to `continue` without any onProgress
+      // call, freezing the UI on the previous phase for the whole run.
+      await setupFiles(2);
+      mockEmbedProvider.embed.mockRejectedValue(new Error("boom"));
+
+      const phases: string[] = [];
+      const indexer = new Indexer(config, mockStore as any);
+      await indexer.reindex(true, (_p, _t, _f, phase) => {
+        phases.push(phase);
+      });
+
+      expect(phases).toContain("failed");
+    });
+
+    it("persists the mtime cache when a run is abandoned", async () => {
+      // Successful files are already in the vector store; dropping their cache
+      // entries would force a pointless re-embed on the next run.
+      await setupFiles(10);
+      mockEmbedProvider.embed
+        .mockResolvedValueOnce([[0.1, 0.2]])
+        .mockRejectedValue(new EmbedError("gone", "unreachable"));
+
+      const indexer = new Indexer(config, mockStore as any);
+      const saveSpy = vi.spyOn(indexer as any, "saveMtimeCache");
+
+      await expect(indexer.reindex(true)).rejects.toBeInstanceOf(EmbedderUnavailableError);
+
+      expect(saveSpy).toHaveBeenCalledTimes(1);
+      expect(Object.keys(saveSpy.mock.calls[0][0] as object)).toContain("doc/file0.md");
     });
 
     it("should skip unchanged files when force=false", async () => {

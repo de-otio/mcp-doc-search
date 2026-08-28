@@ -126,6 +126,28 @@ export interface EmbedderPipeline {
   }>;
 }
 
+/**
+ * Why an embedding provider is unusable.
+ *
+ * The distinction that matters to callers is *lifetime*: `unreachable`,
+ * `model-missing`, `runner-load-failed` and `auth` are whole-run conditions —
+ * every file will fail identically, so retrying the next one is wasted work.
+ * `http-error` and `unknown` may be transient or file-specific.
+ */
+export type EmbedFailureKind =
+  "unreachable" | "model-missing" | "runner-load-failed" | "auth" | "http-error" | "unknown";
+
+/** Outcome of an EmbedProvider health probe. */
+export interface HealthResult {
+  ok: boolean;
+  /** Set when `ok` is false. */
+  kind?: EmbedFailureKind;
+  /** Operator-facing detail (versions, status codes). Never contains secrets. */
+  detail?: string;
+  /** One-line remediation shown to the user. */
+  hint?: string;
+}
+
 export interface EmbedProvider {
   /**
    * Generate embeddings for a batch of texts.
@@ -133,6 +155,15 @@ export interface EmbedProvider {
    * @param prefix - Optional prefix for task-specific embedding (e.g. "search_document: ")
    */
   embed(texts: string[], prefix?: string): Promise<number[][]>;
+
+  /**
+   * Optional: verify the provider can actually embed, before a run commits to it.
+   *
+   * Exists because a broken embedder fails every file identically: without a
+   * preflight, a whole-corpus reindex discovers that one 30s timeout at a time.
+   * Optional so hand-built and mock providers remain valid EmbedProviders.
+   */
+  healthCheck?(): Promise<HealthResult>;
 
   /**
    * Optional: dispose of any cached model/pipeline resources.

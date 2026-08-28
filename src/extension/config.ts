@@ -9,6 +9,7 @@ export interface ExtensionConfig {
   embedProvider: "local" | "ollama" | "openai";
   ollamaUrl: string;
   ollamaModel: string;
+  ollamaAutoRestart: "never" | "prompt" | "auto";
   openaiApiKey: string;
   autoReindex: boolean;
   /** Raw extraRoots setting; validated via parseExtraRoots at engine setup. */
@@ -24,8 +25,9 @@ export function readConfig(apiKey = ""): ExtensionConfig {
     headingDepth: cfg.get("headingDepth", 2) as 1 | 2,
     maxChunkChars: cfg.get("maxChunkChars", 4000),
     embedProvider: cfg.get("embedProvider", "local") as "local" | "ollama" | "openai",
-    ollamaUrl: cfg.get("ollamaUrl", "http://localhost:11434"),
+    ollamaUrl: cfg.get("ollamaUrl", "http://127.0.0.1:11434"),
     ollamaModel: cfg.get("ollamaModel", "nomic-embed-text"),
+    ollamaAutoRestart: cfg.get("ollamaAutoRestart", "prompt") as "never" | "prompt" | "auto",
     openaiApiKey: apiKey || cfg.get("openaiApiKey", ""),
     autoReindex: cfg.get("autoReindex", true),
     extraRoots: cfg.get("extraRoots", []),

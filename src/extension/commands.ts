@@ -3,9 +3,10 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import { resolveIndexLocation, resolveMode } from "../core/indexLocation.js";
 import { Indexer } from "../core/indexer.js";
-import type { EmbedProvider } from "../core/types.js";
+import type { EmbedProvider, IndexStats } from "../core/types.js";
 import { validateConfig } from "../core/types.js";
-import { createEmbedProvider } from "../core/embedder.js";
+import { createEmbedProvider, EmbedderUnavailableError } from "../core/embedder.js";
+import { handleEmbedderFailure, resetRecoveryAttempts } from "./embedderRecovery.js";
 import type { LanceVectorStore } from "../core/vectorstore.js";
 import { parseExtraRoots } from "../core/extraRoots.js";
 import type { ExtensionConfig } from "./config.js";
@@ -97,12 +98,12 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         force = choice.force;
       }
 
-      const freshIndexer = await buildFreshIndexer();
+      const runOnce = async (): Promise<IndexStats> => {
+        const freshIndexer = await buildFreshIndexer();
 
-      statusBar.setIndexing();
-      IndexStatusPanel.notifyProgress("scanning");
-      try {
-        const stats = await vscode.window.withProgress(
+        statusBar.setIndexing();
+        IndexStatusPanel.notifyProgress("scanning");
+        return vscode.window.withProgress(
           {
             location: vscode.ProgressLocation.Notification,
             title: "Doc Search",
@@ -110,28 +111,70 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
           },
           async (progress) => {
             let lastIncrement = 0;
-            return freshIndexer.reindex(force, (processed, total, file, phase) => {
-              const baseName = file ? path.basename(file) : "";
-              if (phase === "scanning") {
-                progress.report({ message: "Scanning files…" });
-              } else if (phase === "loading") {
-                progress.report({
-                  message:
-                    total > 0 ? `Loading AI model… (0 / ${total} files)` : "Loading AI model…",
-                });
-              } else {
-                const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
-                const increment = pct - lastIncrement;
-                lastIncrement = pct;
-                progress.report({
-                  message: `${processed} / ${total} files — ${baseName}`,
-                  increment,
-                });
+            // A static "Loading AI model…" makes a slow load and a hung one
+            // look identical. Tick the elapsed seconds so they don't.
+            let loadingTicker: ReturnType<typeof setInterval> | undefined;
+            const stopTicker = (): void => {
+              if (loadingTicker) {
+                clearInterval(loadingTicker);
+                loadingTicker = undefined;
               }
-              IndexStatusPanel.notifyProgress(phase, processed, total);
-            });
+            };
+
+            try {
+              return await freshIndexer.reindex(force, (processed, total, file, phase) => {
+                const baseName = file ? path.basename(file) : "";
+                if (phase === "scanning") {
+                  stopTicker();
+                  progress.report({ message: "Scanning files…" });
+                } else if (phase === "loading") {
+                  const startedAt = Date.now();
+                  const suffix = total > 0 ? ` (0 / ${total} files)` : "";
+                  progress.report({ message: `Loading AI model…${suffix}` });
+                  stopTicker();
+                  loadingTicker = setInterval(() => {
+                    const seconds = Math.round((Date.now() - startedAt) / 1000);
+                    progress.report({ message: `Loading AI model… ${seconds}s${suffix}` });
+                  }, 1000);
+                } else if (phase === "failed") {
+                  stopTicker();
+                  progress.report({ message: `${processed} / ${total} — failed: ${baseName}` });
+                } else {
+                  stopTicker();
+                  const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
+                  const increment = pct - lastIncrement;
+                  lastIncrement = pct;
+                  progress.report({
+                    message: `${processed} / ${total} files — ${baseName}`,
+                    increment,
+                  });
+                }
+                IndexStatusPanel.notifyProgress(phase, processed, total);
+              });
+            } finally {
+              stopTicker();
+            }
           },
         );
+      };
+
+      resetRecoveryAttempts();
+      // Set when handleEmbedderFailure has already told the user, so the
+      // generic handler below does not report the same failure twice.
+      let alreadyReported = false;
+
+      try {
+        let stats: IndexStats;
+        try {
+          stats = await runOnce();
+        } catch (err) {
+          if (!(err instanceof EmbedderUnavailableError)) throw err;
+          const outcome = await handleEmbedderFailure(err);
+          alreadyReported = true;
+          if (outcome !== "recovered") throw err;
+          alreadyReported = false;
+          stats = await runOnce();
+        }
 
         statusBar.setReady();
         await IndexStatusPanel.notifyDone(stats);
@@ -149,7 +192,9 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         const msg = err instanceof Error ? err.message : String(err);
         statusBar.setError(`Reindex failed: ${msg}`);
         IndexStatusPanel.notifyError(msg);
-        vscode.window.showErrorMessage(`Doc Search: Reindex failed — ${msg}`);
+        if (!alreadyReported) {
+          vscode.window.showErrorMessage(`Doc Search: Reindex failed — ${msg}`);
+        }
       }
     }),
 

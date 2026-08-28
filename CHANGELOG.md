@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Embedding providers are probed before a large reindex.** Every provider now
+  implements a health check, and the indexer runs it once up front instead of
+  discovering a broken provider one file at a time. Failures are classified —
+  server unreachable, model not downloaded, model runner cannot load, bad API
+  key — and each carries a specific remediation. A reindex against a stopped
+  Ollama now fails in about 100 ms with `No Ollama server responding at <url>`,
+  where it previously spent ~60 s per file before reporting anything. The probe
+  is skipped for runs of fewer than five files, so save-triggered incremental
+  reindexes stay cheap.
+- **Restart recovery for Ollama** via the new `docSearch.ollamaAutoRestart`
+  setting (`never` / `prompt` / `auto`, default `prompt`). When Ollama is
+  running but cannot load its model, the error notification offers a **Restart
+  Ollama** button; on success the reindex is retried once. Restarts use a fixed
+  internal command list (`brew services` or user `systemctl`), never a shell and
+  never `sudo`; supervisors that would need root — or that manage `Ollama.app` —
+  are reported with the command to run by hand rather than driven automatically.
+  Error text is enriched with the daemon-vs-binary version skew when the Ollama
+  CLI reports one.
+- **Reindex aborts instead of grinding** when the provider is unusable: fatal
+  failures stop immediately, and any three consecutive embed failures end the
+  run. The mtime cache is written before aborting, so files already indexed are
+  not re-embedded on the next run.
+
+### Fixed
+
+- **Indexing no longer appears frozen on "Loading AI model…" when every file
+  fails.** The error path did not report progress — it skipped straight to the
+  next file — so a provider that failed on every file left the UI pinned to
+  whichever phase came before it, for the length of the corpus. Failures are now
+  reported as their own progress phase, and the loading message counts elapsed
+  seconds so a slow model load is visibly distinct from a stalled one.
+- **A timed-out embedding request is no longer retried.** The single retry is
+  meant for a connection refused or reset in transit; applying it to a timeout
+  simply doubled every stall (30 s became 60 s per file). Connection errors are
+  still retried once.
+
+### Changed
+
+- `docSearch.ollamaUrl` now defaults to `http://127.0.0.1:11434` instead of
+  `http://localhost:11434`. Ollama binds IPv4 only, while some systems resolve
+  `localhost` to `::1` first. Existing explicit settings are unaffected.
+- `Indexer.reindex()` throws `EmbedderUnavailableError` when it abandons a run,
+  and its `onProgress` callback gained a `"failed"` phase. All in-tree callers
+  already handled thrown errors; external callers of the core API should catch
+  it.
+
 ## [0.6.0] - 2026-08-08
 
 ### Added

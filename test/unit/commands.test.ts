@@ -44,7 +44,10 @@ vi.mock("../../src/core/indexLocation.js", () => ({
     shouldGitignore: false,
   })),
 }));
-vi.mock("../../src/core/embedder.js", () => ({
+vi.mock("../../src/core/embedder.js", async (importOriginal) => ({
+  // Keep the real error classes: commands.ts branches on `instanceof`, so a
+  // stubbed class would silently never match.
+  ...(await importOriginal<typeof import("../../src/core/embedder.js")>()),
   createEmbedProvider: vi.fn(() => ({ embed: vi.fn() })),
 }));
 let _indexerImpl: () => any = () => ({

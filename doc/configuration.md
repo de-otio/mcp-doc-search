@@ -102,9 +102,12 @@ Changing the provider requires a full reindex since embedding dimensions differ.
 ### docSearch.ollamaUrl
 
 - **Type:** `string`
-- **Default:** `http://localhost:11434`
+- **Default:** `http://127.0.0.1:11434`
 
 URL of the Ollama server. Only used when `embedProvider` is set to `ollama`.
+
+The default is the IPv4 literal rather than `localhost` on purpose: Ollama binds
+IPv4 only, while some systems resolve `localhost` to `::1` first.
 
 ### docSearch.ollamaModel
 
@@ -112,6 +115,28 @@ URL of the Ollama server. Only used when `embedProvider` is set to `ollama`.
 - **Default:** `nomic-embed-text`
 
 Ollama model to use for embeddings. Only used when `embedProvider` is set to `ollama`.
+
+### docSearch.ollamaAutoRestart
+
+- **Type:** `string`
+- **Options:** `never`, `prompt`, `auto`
+- **Default:** `prompt`
+
+What to do when Ollama is reachable but cannot load its model — most often a
+daemon left running across an upgrade (see
+[Ollama stops embedding after an upgrade](#ollama-stops-embedding-after-an-upgrade)).
+
+| Value    | Behaviour                                                             |
+| -------- | --------------------------------------------------------------------- |
+| `never`  | Report the problem only.                                              |
+| `prompt` | Offer a **Restart Ollama** button on the error notification.          |
+| `auto`   | Restart Ollama, wait for it to come back, and retry the reindex once. |
+
+Restarts go through your service manager — `brew services restart ollama` or
+`systemctl --user restart ollama` — chosen from a fixed internal list. Nothing
+runs as root, and no configured value is ever passed to a shell. Where the
+service is managed in a way the extension will not drive itself (a system-wide
+systemd unit, or `Ollama.app`), it reports the command for you to run instead.
 
 ### docSearch.openaiApiKey
 
@@ -154,3 +179,22 @@ When running the MCP server standalone, these environment variables configure be
 | `OPENAI_API_KEY`            | (empty)             | OpenAI API key                                                                                         |
 | `OLLAMA_URL`                | (empty)             | Ollama server URL (enables Ollama provider)                                                            |
 | `OLLAMA_MODEL`              | `nomic-embed-text`  | Ollama model name                                                                                      |
+
+## Troubleshooting
+
+### Ollama stops embedding after an upgrade
+
+Upgrading Ollama does not restart the running server. The old daemon keeps
+answering `/api/version` — so it looks healthy — while it spawns the _new_
+runner binary with arguments that binary no longer accepts, and every model
+load fails. Indexing appears to hang.
+
+Doc Search detects this before indexing and offers to restart Ollama (see
+[`docSearch.ollamaAutoRestart`](#docsearchollamaautorestart)). To fix it by hand:
+
+```bash
+brew services restart ollama     # or: systemctl --user restart ollama
+```
+
+`ollama --version` printing two different versions (`ollama version is X`
+followed by `Warning: client version is Y`) confirms the skew.

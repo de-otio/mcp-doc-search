@@ -8,9 +8,16 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { glob } from "glob";
 import { chunkMarkdown, computeDocid } from "./chunker.js";
+import { EmbedError, EmbedderUnavailableError, isFatalEmbedKind } from "./embedder.js";
 import { EXT_REF_SCHEME, extKey, parseExtKey } from "./extraRoots.js";
 import { PathTraversalError, resolveSafePath, resolveWithinBase } from "./safePath.js";
-import type { IndexerConfig, IndexStats, IndexStatus, PathContext } from "./types.js";
+import type {
+  EmbedFailureKind,
+  IndexerConfig,
+  IndexStats,
+  IndexStatus,
+  PathContext,
+} from "./types.js";
 import type { LanceVectorStore, VectorRecord } from "./vectorstore.js";
 
 /** Per-file entry in the mtime cache. Supports both old (string) and new (object) formats. */
@@ -35,6 +42,16 @@ export class Indexer {
   private config: IndexerConfig;
   private store: LanceVectorStore;
   private _contextCache: PathContext | null = null;
+
+  /**
+   * Consecutive per-file embed failures tolerated before abandoning the run.
+   * Non-fatal errors can be genuinely file-specific, so allow a few; a longer
+   * streak means the provider itself is broken.
+   */
+  private static readonly MAX_CONSECUTIVE_EMBED_FAILURES = 3;
+
+  /** Below this many files to index, skip the preflight probe (see reindex). */
+  private static readonly MIN_FILES_FOR_PREFLIGHT = 5;
 
   constructor(config: IndexerConfig, store: LanceVectorStore) {
     // Normalize: callers constructing a config by hand may omit extraRoots.
@@ -125,11 +142,15 @@ export class Indexer {
    * Crawl doc files, embed changed files, upsert into vector store.
    * Returns stats: { indexed, skipped, totalChunks, durationMs, pruned }
    *
+   * Throws EmbedderUnavailableError when the embedding provider is unusable —
+   * either at preflight or after repeated failures mid-run.
+   *
    * @param force - Re-index all files even if unchanged
    * @param onProgress - Optional callback invoked after each file is processed.
    *   Receives (processedCount, totalToProcess, currentFile, phase) where
-   *   phase is "scanning" before the loop starts, "loading" on first embed,
-   *   or "indexing" during the main loop.
+   *   phase is "scanning" before the loop starts, "loading" while the provider
+   *   is being probed, "indexing" after a file is stored, or "failed" after a
+   *   file could not be embedded.
    */
   async reindex(
     force = false,
@@ -137,7 +158,7 @@ export class Indexer {
       processed: number,
       total: number,
       file: string,
-      phase: "scanning" | "loading" | "indexing",
+      phase: "scanning" | "loading" | "indexing" | "failed",
     ) => void,
   ): Promise<IndexStats> {
     const t0 = Date.now();
@@ -181,6 +202,50 @@ export class Indexer {
     let totalChunks = 0;
     let firstEmbed = true;
     let firstError: string | undefined;
+    let consecutiveFailures = 0;
+
+    // Persist whatever has been indexed so far. Called on the normal path and
+    // before an abort: the successful files' vectors are already in the store,
+    // so dropping their cache entries would force a pointless re-embed.
+    const persistCache = (): void => {
+      const staleSet = new Set(staleKeys);
+      const mergedCache: MtimeCache = {};
+      for (const [k, v] of Object.entries(cache)) {
+        if (!staleSet.has(k)) mergedCache[k] = v;
+      }
+      for (const [k, v] of Object.entries(newCache)) {
+        mergedCache[k] = v;
+      }
+      this.saveMtimeCache(mergedCache);
+    };
+
+    const abort = (message: string, kind: EmbedFailureKind, hint?: string): never => {
+      persistCache();
+      throw new EmbedderUnavailableError(message, kind, { hint, indexed });
+    };
+
+    // Preflight: a broken provider fails every file identically, so probe once
+    // here rather than rediscovering it one timeout at a time across the corpus.
+    //
+    // Skipped for very small runs. The probe costs a round trip (and, on a paid
+    // provider, a request) and its whole value is avoiding N failures on a large
+    // corpus — with a handful of files the first real embed surfaces the problem
+    // just as fast. This keeps save-triggered incremental reindexes cheap.
+    if (
+      toIndex.length >= Indexer.MIN_FILES_FOR_PREFLIGHT &&
+      this.config.embedProvider.healthCheck
+    ) {
+      onProgress?.(0, toIndex.length, "", "loading");
+      firstEmbed = false;
+      const health = await this.config.embedProvider.healthCheck();
+      if (!health.ok) {
+        abort(
+          health.detail ?? "The embedding provider is not available.",
+          health.kind ?? "unknown",
+          health.hint,
+        );
+      }
+    }
 
     for (const { absPath: filePath, key: rel } of entries) {
       const mtime = String(statSync(filePath).mtimeMs);
@@ -226,8 +291,24 @@ export class Indexer {
         console.error(`Warning: embedding failed for ${rel}: ${msg}`);
         if (firstError === undefined) firstError = msg;
         failedFiles++;
+        consecutiveFailures++;
+        // Report the failure so callers keep showing progress. Without this the
+        // UI stays frozen on whatever phase preceded it while the run grinds on.
+        onProgress?.(indexed, toIndex.length, rel, "failed");
+
+        if (err instanceof EmbedError && isFatalEmbedKind(err.kind)) {
+          abort(`${rel}: ${msg}`, err.kind, err.hint);
+        }
+        if (consecutiveFailures >= Indexer.MAX_CONSECUTIVE_EMBED_FAILURES) {
+          abort(
+            `Embedding failed for ${consecutiveFailures} files in a row; last error — ${rel}: ${msg}`,
+            err instanceof EmbedError ? err.kind : "unknown",
+            err instanceof EmbedError ? err.hint : undefined,
+          );
+        }
         continue;
       }
+      consecutiveFailures = 0;
 
       // Ensure table exists with the correct vector dimension
       await this.store.ensureTable(embeddings[0].length);
@@ -250,15 +331,7 @@ export class Indexer {
     }
 
     // Merge new cache with unchanged entries from old cache, excluding pruned keys
-    const staleSet = new Set(staleKeys);
-    const mergedCache: MtimeCache = {};
-    for (const [k, v] of Object.entries(cache)) {
-      if (!staleSet.has(k)) mergedCache[k] = v;
-    }
-    for (const [k, v] of Object.entries(newCache)) {
-      mergedCache[k] = v;
-    }
-    this.saveMtimeCache(mergedCache);
+    persistCache();
 
     return {
       indexed,

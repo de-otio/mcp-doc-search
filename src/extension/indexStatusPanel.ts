@@ -1,5 +1,8 @@
 import * as vscode from "vscode";
 import type { Indexer } from "../core/indexer.js";
+import type { IndexStats } from "../core/types.js";
+import { EmbedderUnavailableError } from "../core/embedder.js";
+import { handleEmbedderFailure, resetRecoveryAttempts } from "./embedderRecovery.js";
 import { getNonce } from "./utils.js";
 
 /**
@@ -106,15 +109,28 @@ export class IndexStatusPanel {
     if (IndexStatusPanel.busy) return;
     IndexStatusPanel.busy = true;
     this.panel.webview.postMessage({ type: "indexing", phase: "scanning" });
-    try {
+
+    const runOnce = async (): Promise<IndexStats> => {
       const indexer = await this.indexerFactory();
-      const stats = await indexer.reindex(force, (processed, total, _file, phase) => {
+      return indexer.reindex(force, (processed, total, _file, phase) => {
         try {
           this.panel.webview.postMessage({ type: "indexing", phase, processed, total });
         } catch {
           // panel disposed during reindex
         }
       });
+    };
+
+    resetRecoveryAttempts();
+    try {
+      let stats: IndexStats;
+      try {
+        stats = await runOnce();
+      } catch (err) {
+        if (!(err instanceof EmbedderUnavailableError)) throw err;
+        if ((await handleEmbedderFailure(err)) !== "recovered") throw err;
+        stats = await runOnce();
+      }
       IndexStatusPanel.busy = false;
       await this.sendStatus();
       this.panel.webview.postMessage({ type: "reindexDone", stats });
@@ -446,14 +462,25 @@ export class IndexStatusPanel {
     }
 
     let incrementalEnabled = false;
+    let loadingTicker = null;
+    let failedCount = 0;
+
+    function stopLoadingTicker() {
+      if (loadingTicker !== null) {
+        clearInterval(loadingTicker);
+        loadingTicker = null;
+      }
+    }
 
     $("incrementalBtn").addEventListener("click", () => {
       $("resultMsg").style.display = "none";
+      failedCount = 0;
       vscode.postMessage({ type: "reindex", force: false });
     });
 
     $("fullBtn").addEventListener("click", () => {
       $("resultMsg").style.display = "none";
+      failedCount = 0;
       vscode.postMessage({ type: "reindex", force: true });
     });
 
@@ -461,12 +488,14 @@ export class IndexStatusPanel {
       const msg = e.data;
 
       if (msg.type === "status") {
+        stopLoadingTicker();
         render(msg);
         setIndexing(false);
         $("indexingMsg").style.display = "none";
       }
 
       if (msg.type === "error") {
+        stopLoadingTicker();
         $("loading").style.display = "none";
         $("errorMsg").style.display = "block";
         $("errorMsg").textContent = "Error: " + msg.message;
@@ -476,18 +505,30 @@ export class IndexStatusPanel {
         setIndexing(true);
         $("indexingMsg").style.display = "block";
         const { phase, processed, total } = msg;
+        stopLoadingTicker();
         if (phase === "scanning") {
           $("indexingMsg").textContent = "Scanning files…";
         } else if (phase === "loading") {
-          $("indexingMsg").textContent = total > 0
-            ? "Loading AI model… (0 / " + total + " files)"
-            : "Loading AI model…";
+          // Tick the elapsed time so a slow model load is visibly distinct
+          // from a stalled one.
+          const suffix = total > 0 ? " (0 / " + total + " files)" : "";
+          const startedAt = Date.now();
+          $("indexingMsg").textContent = "Loading AI model…" + suffix;
+          loadingTicker = setInterval(() => {
+            const seconds = Math.round((Date.now() - startedAt) / 1000);
+            $("indexingMsg").textContent = "Loading AI model… " + seconds + "s" + suffix;
+          }, 1000);
+        } else if (phase === "failed") {
+          failedCount++;
+          $("indexingMsg").textContent =
+            processed + " / " + total + " files indexed, " + failedCount + " failed…";
         } else {
           $("indexingMsg").textContent = processed + " / " + total + " files indexed…";
         }
       }
 
       if (msg.type === "reindexDone") {
+        stopLoadingTicker();
         $("indexingMsg").style.display = "none";
         const { indexed, totalChunks, skipped, failedFiles = 0, firstError } = msg.stats;
         const el = $("resultMsg");
@@ -517,6 +558,7 @@ export class IndexStatusPanel {
       }
 
       if (msg.type === "reindexError") {
+        stopLoadingTicker();
         $("indexingMsg").style.display = "none";
         setIndexing(false);
         const el = $("resultMsg");

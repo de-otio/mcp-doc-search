@@ -216,13 +216,28 @@
         },
         "docSearch.ollamaUrl": {
           "type": "string",
-          "default": "http://localhost:11434",
+          "default": "http://127.0.0.1:11434",
           "description": "Ollama server URL (used when embedProvider is 'ollama')"
         },
         "docSearch.ollamaModel": {
           "type": "string",
           "default": "nomic-embed-text",
           "description": "Ollama model name (used when embedProvider is 'ollama')"
+        },
+        "docSearch.ollamaAutoRestart": {
+          "type": "string",
+          "default": "prompt",
+          "enum": [
+            "never",
+            "prompt",
+            "auto"
+          ],
+          "enumDescriptions": [
+            "Never restart Ollama; only report the problem",
+            "Offer a Restart Ollama button when the server is unusable",
+            "Restart Ollama automatically, then retry the reindex once"
+          ],
+          "markdownDescription": "What to do when Ollama is running but cannot load its model — usually a daemon left running across an upgrade. Restarts use your service manager (`brew services` or user `systemctl`) and never run as root."
         },
         "docSearch.openaiApiKey": {
           "type": "string",

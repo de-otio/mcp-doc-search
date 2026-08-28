@@ -4,7 +4,7 @@
  */
 
 import { createRequire } from "node:module";
-import type { EmbedProvider, EmbedderPipeline } from "./types.js";
+import type { EmbedFailureKind, EmbedProvider, EmbedderPipeline, HealthResult } from "./types.js";
 
 // WHY require() (not dynamic import()):
 //   The published VSIX ships only @huggingface/transformers/dist/transformers.node.cjs;
@@ -19,8 +19,99 @@ export function loadTransformers(): typeof import("@huggingface/transformers") {
 }
 
 /**
- * Fetch with timeout and single retry on network errors.
+ * An embedding failed in a way the caller can act on.
+ *
+ * `kind` carries the *lifetime* of the failure so the indexer can tell a
+ * whole-run condition (dead daemon, missing model, bad key) from a per-file
+ * one, instead of rediscovering it once per file.
+ */
+export class EmbedError extends Error {
+  readonly kind: EmbedFailureKind;
+  readonly hint?: string;
+  /** The request was aborted by its own timeout rather than answered. */
+  readonly timedOut: boolean;
+
+  constructor(
+    message: string,
+    kind: EmbedFailureKind = "unknown",
+    options: { hint?: string; timedOut?: boolean } = {},
+  ) {
+    super(message);
+    this.name = "EmbedError";
+    this.kind = kind;
+    this.hint = options.hint;
+    this.timedOut = options.timedOut ?? false;
+  }
+}
+
+/** Kinds where every subsequent file would fail the same way — abort the run. */
+const FATAL_EMBED_KINDS: ReadonlySet<EmbedFailureKind> = new Set<EmbedFailureKind>([
+  "unreachable",
+  "model-missing",
+  "runner-load-failed",
+  "auth",
+]);
+
+export function isFatalEmbedKind(kind: EmbedFailureKind): boolean {
+  return FATAL_EMBED_KINDS.has(kind);
+}
+
+/**
+ * Thrown when a run is abandoned because the embedding provider is unusable.
+ *
+ * Distinct from EmbedError: that describes one failed request, this describes
+ * a run that stopped because continuing could not help. It is thrown rather
+ * than reported in IndexStats so a dead embedder can never be mistaken for a
+ * successful reindex by a caller that forgot to check a field.
+ */
+export class EmbedderUnavailableError extends Error {
+  readonly kind: EmbedFailureKind;
+  readonly hint?: string;
+  /** Files successfully indexed before the run was abandoned. */
+  readonly indexed: number;
+
+  constructor(
+    message: string,
+    kind: EmbedFailureKind,
+    options: { hint?: string; indexed?: number },
+  ) {
+    super(message);
+    this.name = "EmbedderUnavailableError";
+    this.kind = kind;
+    this.hint = options.hint;
+    this.indexed = options.indexed ?? 0;
+  }
+}
+
+/** True when a fetch rejection is our own AbortController firing (i.e. a timeout). */
+function isTimeoutError(err: unknown): boolean {
+  return err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError");
+}
+
+/** Node surfaces connection failures as `TypeError: fetch failed` with a `cause`. */
+const CONNECTION_ERROR_CODES = new Set([
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ECONNRESET",
+  "EAI_AGAIN",
+]);
+
+function isConnectionError(err: unknown): boolean {
+  const cause = (err as { cause?: { code?: string } } | undefined)?.cause;
+  return typeof cause?.code === "string" && CONNECTION_ERROR_CODES.has(cause.code);
+}
+
+/**
+ * Fetch with timeout and a single retry on *connection* errors.
  * Does not retry on 4xx/5xx HTTP errors.
+ *
+ * WHY timeouts are not retried: the retry exists for a connection that was
+ * refused or reset in transit, which a 100ms backoff can genuinely fix. A
+ * request that went unanswered for the full timeout will not answer after
+ * 100ms — retrying it only doubles the stall, which is precisely what made a
+ * broken local daemon look like a hang rather than a failure.
  */
 async function fetchWithTimeout(
   url: string,
@@ -37,9 +128,15 @@ async function fetchWithTimeout(
       return await fetch(url, { ...init, signal: controller.signal });
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
-      // On network error, only retry if not a 4xx/5xx (those won't change on retry)
+      if (isTimeoutError(err)) {
+        // Left as "unknown" on purpose: what a timeout *means* is
+        // provider-specific, so the caller reclassifies it.
+        throw new EmbedError(`Request to ${url} timed out after ${timeoutMs}ms`, "unknown", {
+          timedOut: true,
+        });
+      }
       if (attempt === 0) {
-        // Wait briefly before retry on network timeout/error
+        // Wait briefly before retrying a transient connection error
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
     } finally {
@@ -47,6 +144,9 @@ async function fetchWithTimeout(
     }
   }
 
+  if (isConnectionError(lastError)) {
+    throw new EmbedError(`Cannot reach ${url}: ${lastError?.message}`, "unreachable");
+  }
   throw lastError || new Error("Fetch failed after retries");
 }
 
@@ -91,6 +191,24 @@ export class LocalEmbedder implements EmbedProvider {
   }
 
   /**
+   * Loading the pipeline *is* the probe: the first call downloads the ONNX
+   * model, and a failed download would otherwise fail every file in turn.
+   */
+  async healthCheck(): Promise<HealthResult> {
+    try {
+      await this.embed(["ok"]);
+      return { ok: true, detail: "Built-in model (all-MiniLM-L6-v2)" };
+    } catch (err) {
+      return {
+        ok: false,
+        kind: "unknown",
+        detail: err instanceof Error ? err.message : String(err),
+        hint: "The built-in model is downloaded on first use — check network access.",
+      };
+    }
+  }
+
+  /**
    * Release the cached pipeline so the next embed() call will reload it.
    * Useful in long-lived HTTP daemon mode to free memory during idle periods.
    */
@@ -107,13 +225,22 @@ export class LocalEmbedder implements EmbedProvider {
 export class OllamaEmbedder implements EmbedProvider {
   private model: string;
   private baseUrl: string;
+  private probeTimeoutMs: number;
 
   /** Max halvings when the model rejects a prompt for exceeding its context window. */
   private static readonly MAX_CONTEXT_HALVINGS = 3;
 
-  constructor(model = "nomic-embed-text", baseUrl = "http://localhost:11434") {
+  /** `/api/version` needs no model loaded, so a healthy daemon answers immediately. */
+  private static readonly VERSION_TIMEOUT_MS = 3_000;
+
+  constructor(
+    model = "nomic-embed-text",
+    baseUrl = "http://127.0.0.1:11434",
+    options: { probeTimeoutMs?: number } = {},
+  ) {
     this.model = model;
     this.baseUrl = baseUrl.replace(/\/$/, "");
+    this.probeTimeoutMs = options.probeTimeoutMs ?? 30_000;
   }
 
   async embed(texts: string[], prefix = ""): Promise<number[][]> {
@@ -124,12 +251,76 @@ export class OllamaEmbedder implements EmbedProvider {
     return results;
   }
 
+  /**
+   * Distinguish "daemon down" from "daemon up but cannot load the model".
+   *
+   * WHY the two-step probe: `/api/version` is served without touching a model,
+   * so it answers even when the runner is broken (e.g. a daemon left running
+   * across an upgrade spawns a newer runner binary with flags it does not
+   * accept — every load then fails while the HTTP request simply hangs). The
+   * pair "version responds, embed times out" identifies that class of fault
+   * over HTTP alone, with no CLI or shell access required.
+   */
+  async healthCheck(): Promise<HealthResult> {
+    let version = "unknown";
+    try {
+      const response = await fetchWithTimeout(
+        `${this.baseUrl}/api/version`,
+        { method: "GET" },
+        OllamaEmbedder.VERSION_TIMEOUT_MS,
+      );
+      if (!response.ok) {
+        return {
+          ok: false,
+          kind: "http-error",
+          detail: `Ollama at ${this.baseUrl} returned ${response.status} for /api/version`,
+          hint: "Check that the URL points at an Ollama server.",
+        };
+      }
+      const data = (await response.json()) as { version?: string };
+      if (data.version) version = data.version;
+    } catch {
+      return {
+        ok: false,
+        kind: "unreachable",
+        detail: `No Ollama server responding at ${this.baseUrl}`,
+        hint: "Start Ollama (`ollama serve`), or switch the provider to the built-in model.",
+      };
+    }
+
+    try {
+      await this.embedOne("ok", "", this.probeTimeoutMs);
+      return { ok: true, detail: `Ollama ${version}, model "${this.model}"` };
+    } catch (err) {
+      if (err instanceof EmbedError && err.timedOut) {
+        return {
+          ok: false,
+          kind: "runner-load-failed",
+          detail:
+            `Ollama ${version} is running but did not load "${this.model}" ` +
+            `within ${Math.round(this.probeTimeoutMs / 1000)}s`,
+          hint:
+            "Restart Ollama — a daemon left running across an upgrade cannot start " +
+            "its model runner. Check the Ollama server log if a restart does not help.",
+        };
+      }
+      if (err instanceof EmbedError) {
+        return { ok: false, kind: err.kind, detail: err.message, hint: err.hint };
+      }
+      return {
+        ok: false,
+        kind: "unknown",
+        detail: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
   /** Ollama's 500 body when the tokenized prompt exceeds the model's num_ctx. */
   private static isContextLengthError(body: string): boolean {
     return body.includes("exceeds the context length");
   }
 
-  private async embedOne(text: string, prefix: string): Promise<number[]> {
+  private async embedOne(text: string, prefix: string, timeoutMs?: number): Promise<number[]> {
     // The chunker budgets CHARACTERS but the model budgets TOKENS, so dense
     // content (config dumps, tables, base64) can overflow the context window
     // from within the char budget. Recover by halving the text and retrying:
@@ -138,11 +329,15 @@ export class OllamaEmbedder implements EmbedProvider {
     let attempt = text;
     for (let halvings = 0; ; halvings++) {
       const prompt = prefix ? `${prefix}${attempt}` : attempt;
-      const response = await fetchWithTimeout(`${this.baseUrl}/api/embeddings`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: this.model, prompt }),
-      });
+      const response = await fetchWithTimeout(
+        `${this.baseUrl}/api/embeddings`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: this.model, prompt }),
+        },
+        timeoutMs,
+      );
       if (response.ok) {
         if (halvings > 0) {
           console.warn(
@@ -155,10 +350,12 @@ export class OllamaEmbedder implements EmbedProvider {
       }
       const body = await response.text();
       if (response.status === 404 && body.includes("not found")) {
-        throw new Error(
+        throw new EmbedError(
           `Ollama model "${this.model}" is required but has not been downloaded yet. ` +
             `Open a terminal and run: ollama pull ${this.model}\n` +
             `Once the download completes, try again.`,
+          "model-missing",
+          { hint: `Run: ollama pull ${this.model}` },
         );
       }
       if (
@@ -168,7 +365,10 @@ export class OllamaEmbedder implements EmbedProvider {
         attempt = attempt.slice(0, Math.ceil(attempt.length / 2));
         continue;
       }
-      throw new Error(`Ollama embedding failed (${response.status}): ${body}`);
+      throw new EmbedError(
+        `Ollama embedding failed (${response.status}): ${body}`,
+        response.status === 401 || response.status === 403 ? "auth" : "http-error",
+      );
     }
   }
 }
@@ -199,12 +399,42 @@ export class OpenAIEmbedder implements EmbedProvider {
       body: JSON.stringify({ model: this.model, input }),
     });
     if (!response.ok) {
-      throw new Error(`OpenAI embedding failed (${response.status}): ${await response.text()}`);
+      const status = response.status;
+      throw new EmbedError(
+        `OpenAI embedding failed (${status}): ${await response.text()}`,
+        status === 401 || status === 403 ? "auth" : "http-error",
+        status === 401 || status === 403
+          ? { hint: "Check the OpenAI API key in Doc Search settings." }
+          : {},
+      );
     }
     const data = (await response.json()) as {
       data: Array<{ embedding: number[] }>;
     };
     return data.data.map((r) => r.embedding);
+  }
+
+  async healthCheck(): Promise<HealthResult> {
+    try {
+      await this.embed(["ok"]);
+      return { ok: true, detail: `OpenAI model "${this.model}"` };
+    } catch (err) {
+      if (err instanceof EmbedError) {
+        // A network blip is not a reason to abandon a whole reindex, so a
+        // timeout here stays non-fatal (unlike a local daemon that hangs).
+        return {
+          ok: false,
+          kind: err.timedOut ? "unknown" : err.kind,
+          detail: err.message,
+          hint: err.hint,
+        };
+      }
+      return {
+        ok: false,
+        kind: "unknown",
+        detail: err instanceof Error ? err.message : String(err),
+      };
+    }
   }
 }
 

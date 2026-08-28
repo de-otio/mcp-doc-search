@@ -112,6 +112,15 @@ If the client is an AI coding agent, see the [Agent Guide](doc/agent-guide.md) f
 
 The OpenAI API key is stored in VS Code's SecretStorage (the OS keychain) — never in `settings.json`. For the standalone MCP server and CLI, set the `OPENAI_API_KEY` environment variable in your `.mcp.json` `env` block or shell; the generated `.mcp.json` (via **Doc Search: Generate .mcp.json**) copies the key from SecretStorage into that block for you.
 
+Doc Search probes the provider before a large reindex and stops with a specific
+error — server unreachable, model not pulled, bad key — rather than failing file
+by file. One case is worth knowing about: **upgrading Ollama does not restart the
+running server**, and a stale daemon keeps answering `/api/version` while every
+model load fails, so indexing looks like it has hung. Doc Search offers to
+restart it for you; by hand it is `brew services restart ollama` (or
+`systemctl --user restart ollama`). See
+[Ollama stops embedding after an upgrade](doc/configuration.md#ollama-stops-embedding-after-an-upgrade).
+
 ## CLI
 
 A standalone CLI is included — no MCP client required. The extension keeps an upgrade-stable copy at `~/.doc-search/bin/mcp-doc-search.js` (run it as `node ~/.doc-search/bin/mcp-doc-search.js …`).
