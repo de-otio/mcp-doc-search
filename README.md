@@ -11,8 +11,8 @@ Large repos can have hundreds or thousands of markdown files of documentation. T
 
 - **VS Code extension**: type-ahead search in the command palette, auto-reindex on save, status bar indicator
 - **MCP server**: `search_docs`, `list_docs`, `reindex_docs`, `get`, `multi_get`, plus per-file `set_context` / `list_contexts` / `remove_context` tools so any MCP-compatible AI assistant can find and read the right document in a single call
-- **Local embeddings**: auto-downloads `all-MiniLM-L6-v2` (ONNX, 22MB) on first use, then works fully offline — no API key required
-- **Heading-aware chunking**: splits markdown on `#`/`##` boundaries, skips code fences, prepends document title as breadcrumb context
+- **Local embeddings**: auto-downloads `all-MiniLM-L6-v2` (ONNX, ~90 MB) on first use, then works fully offline — no API key required; `multilingual-e5-small`, EmbeddingGemma and `nomic-embed-text-v1.5` are one setting away
+- **Heading-aware chunking**: splits markdown on `#`/`##` boundaries, sizes chunks to the model's context window, never cuts a code fence or table, and prefixes every chunk with a `[path › H1 › H2]` breadcrumb
 - **Hybrid search**: vector similarity fused with a BM25 full-text index (reciprocal rank fusion), so exact identifiers and German terms are matched literally, not only by meaning
 
 ## Quick start
@@ -121,9 +121,11 @@ If the client is an AI coding agent, see the [Agent Guide](doc/agent-guide.md) f
 
 | Provider          | Quality          | Setup                                                 | Cost            |
 | ----------------- | ---------------- | ----------------------------------------------------- | --------------- |
-| `local` (default) | Good (384-dim)   | None — ships with extension                           | Free            |
+| `local` (default) | Good (384-dim)   | None — model downloaded on first use                  | Free            |
 | `ollama`          | Better (768-dim) | `brew install ollama && ollama pull nomic-embed-text` | Free            |
 | `openai`          | Best (1536-dim)  | Enter the key in the Doc Search Settings panel        | ~$0.02/M tokens |
+
+The `local` provider runs one of four bundled-runtime models, chosen with `docSearch.localModel` (env `DOC_SEARCH_LOCAL_MODEL` for the MCP server and CLI): `all-MiniLM-L6-v2` (default, English, ~90 MB), `multilingual-e5-small` (~95 languages incl. German, ~118 MB), `embeddinggemma-300m` (100+ languages, 768-dim, ~310 MB) and `nomic-embed-text-v1.5` (English, 768-dim, 8k-token window, ~131 MB). Non-English docs should use one of the multilingual models; switching downloads the model once and rebuilds the index. See [Configuration](doc/configuration.md#docsearchlocalmodel).
 
 The OpenAI API key is stored in VS Code's SecretStorage (the OS keychain) — never in `settings.json`. For the standalone MCP server and CLI, export `OPENAI_API_KEY` in your shell; the generated `.mcp.json` (via **Doc Search: Generate .mcp.json**) references it as `"${OPENAI_API_KEY}"`, which Claude Code expands at launch, and never contains the key itself.
 

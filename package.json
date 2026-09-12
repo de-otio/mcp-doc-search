@@ -207,8 +207,8 @@
         },
         "docSearch.maxChunkChars": {
           "type": "number",
-          "default": 4000,
-          "description": "Maximum characters per chunk"
+          "default": 0,
+          "markdownDescription": "Maximum characters per chunk, breadcrumb included. `0` (default) derives the budget from the embedding model's context window: 800 for `all-MiniLM-L6-v2`, 1536 for `multilingual-e5-small`, 6144 for EmbeddingGemma, 8000 for `nomic-embed-text-v1.5`; 4000 for Ollama and OpenAI. The model ignores text past its window, so a larger value adds no searchable context. An explicit value always wins."
         },
         "docSearch.embedProvider": {
           "type": "string",
@@ -219,6 +219,23 @@
             "openai"
           ],
           "description": "Embedding provider: local (bundled ONNX model), ollama, or openai"
+        },
+        "docSearch.localModel": {
+          "type": "string",
+          "default": "Xenova/all-MiniLM-L6-v2",
+          "enum": [
+            "Xenova/all-MiniLM-L6-v2",
+            "Xenova/multilingual-e5-small",
+            "onnx-community/embeddinggemma-300m-ONNX",
+            "nomic-ai/nomic-embed-text-v1.5"
+          ],
+          "enumDescriptions": [
+            "English, 384-dim, 256-token window, ~90 MB download (default)",
+            "~95 languages incl. German, 384-dim, 512-token window, ~118 MB download",
+            "100+ languages, 768-dim, 2048-token window, ~310 MB download",
+            "English, 768-dim, 8192-token window, ~131 MB download"
+          ],
+          "markdownDescription": "Model for the built-in (`local`) provider. Switching downloads the new model on first use and rebuilds the index, because vectors from different models cannot be compared."
         },
         "docSearch.ollamaUrl": {
           "type": "string",

@@ -126,6 +126,16 @@ limit }` when it was cut, and a file larger than 16 MiB is refused before
   are ordered by the fused rank, so `score` is no longer monotonic in rank.
   The substring bonus (+0.03 per term) is gone. `explain` reports
   `vectorRank`, `ftsRank` and `rrfScore` instead of `keywordBonus`.
+- **Chunk size follows the model.** `docSearch.maxChunkChars` now defaults to
+  `0` = automatic: the model's context window × 3 characters, clamped to
+  800–8000 (800 for all-MiniLM-L6-v2, 1536 for multilingual-e5-small; Ollama
+  and OpenAI keep 4000). The old fixed 4000 exceeded MiniLM's 256-token window,
+  so the tail of every large chunk was silently dropped from its vector. An
+  explicit value still wins.
+- **Breadcrumbs name the file and headings.** Chunks are prefixed with
+  `[path › H1 › H2]` instead of `[DocTitle]`; a section that must be split is
+  never cut inside a code fence or a table; and files without headings are
+  split too instead of being truncated at the budget. Chunk ids are unchanged.
 
 ### Added
 
@@ -158,6 +168,18 @@ limit }` when it was cut, and a file larger than 16 MiB is refused before
   ranked lists to the same fusion.
 - The `search_docs` description now says how to phrase a query: one concept
   per call, exact identifiers included, German is fine.
+- **Selectable built-in embedding model.** `docSearch.localModel` (env
+  `DOC_SEARCH_LOCAL_MODEL` for the MCP server and CLI) chooses which model the
+  `local` provider runs: `Xenova/multilingual-e5-small` (German and ~90 other
+  languages), `onnx-community/embeddinggemma-300m-ONNX` and
+  `nomic-ai/nomic-embed-text-v1.5` join the default `all-MiniLM-L6-v2`. A
+  registry records each model's dimension, context window and task prefixes,
+  so the local provider now applies the prefixes its model was trained with
+  and embeds in batches of 32 instead of one text per call. The default model
+  is unchanged; switching downloads the new weights on first use and rebuilds
+  the index.
+- Every provider reports its identity (`provider`, `model`, `dim`) so the
+  index can record which model built it.
 
 ## [0.7.1] - 2026-09-12
 

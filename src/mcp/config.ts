@@ -197,7 +197,7 @@ export async function createEngineFromEnv(): Promise<EngineDeps> {
       process.env.OLLAMA_MODEL ?? trusted("docSearch.ollamaModel") ?? DEFAULT_OLLAMA_MODEL;
     embedProvider = new OllamaEmbedder(String(ollamaModel), resolveOllamaUrl(trusted));
   } else {
-    embedProvider = new LocalEmbedder();
+    embedProvider = new LocalEmbedder({ model: process.env.DOC_SEARCH_LOCAL_MODEL });
   }
 
   const store = new LanceVectorStore(indexDir);

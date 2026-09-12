@@ -1,12 +1,16 @@
 import * as vscode from "vscode";
+import { DEFAULT_LOCAL_MODEL } from "../core/embedder.js";
 
 export interface ExtensionConfig {
   docGlob: string;
   indexDir: string;
   indexLocation: "global" | "workspace";
   headingDepth: 1 | 2;
+  /** 0 = automatic: derived from the embedding model's context window. */
   maxChunkChars: number;
   embedProvider: "local" | "ollama" | "openai";
+  /** LOCAL_MODELS id used when embedProvider is "local". */
+  localModel: string;
   ollamaUrl: string;
   ollamaModel: string;
   ollamaAutoRestart: "never" | "prompt" | "auto";
@@ -23,8 +27,9 @@ export function readConfig(apiKey = ""): ExtensionConfig {
     indexDir: cfg.get("indexDir", ".doc-search-index"),
     indexLocation: cfg.get("indexLocation", "global") as "global" | "workspace",
     headingDepth: cfg.get("headingDepth", 2) as 1 | 2,
-    maxChunkChars: cfg.get("maxChunkChars", 4000),
+    maxChunkChars: cfg.get("maxChunkChars", 0),
     embedProvider: cfg.get("embedProvider", "local") as "local" | "ollama" | "openai",
+    localModel: cfg.get("localModel", DEFAULT_LOCAL_MODEL),
     ollamaUrl: cfg.get("ollamaUrl", "http://127.0.0.1:11434"),
     ollamaModel: cfg.get("ollamaModel", "nomic-embed-text"),
     ollamaAutoRestart: cfg.get("ollamaAutoRestart", "prompt") as "never" | "prompt" | "auto",

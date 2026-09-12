@@ -79,9 +79,19 @@ Lower depth means larger chunks with more context. Higher depth means smaller, m
 ### docSearch.maxChunkChars
 
 - **Type:** `number`
-- **Default:** `4000`
+- **Default:** `0` (automatic)
 
-Maximum characters per chunk. Chunks exceeding this limit are truncated. Most embedding models work best with chunks under 512 tokens (~2000 characters), but the default is set higher to preserve context. The local model handles up to 512 tokens natively.
+Maximum characters per chunk, breadcrumb included. `0` derives the budget from the embedding model's context window — `ctxTokens × 3`, clamped to 800–8000:
+
+| Model                                     | Window (tokens) | Chunk budget (chars) |
+| ----------------------------------------- | --------------- | -------------------- |
+| `Xenova/all-MiniLM-L6-v2` (default)       | 256             | 800                  |
+| `Xenova/multilingual-e5-small`            | 512             | 1536                 |
+| `onnx-community/embeddinggemma-300m-ONNX` | 2048            | 6144                 |
+| `nomic-ai/nomic-embed-text-v1.5`          | 8192            | 8000                 |
+| Ollama / OpenAI                           | not known       | 4000                 |
+
+An explicit value always wins (clamped to 100–50000). Why the model decides: the tokenizer truncates silently past the window, so with the old fixed default of 4000 the second half of every large chunk contributed nothing to its vector under the default model. Sections longer than the budget are split with a 15 % (max 200 characters) overlap between consecutive chunks; a split never lands inside a code fence or a table — the block starts the next chunk intact, and only a block longer than the whole budget is cut. Files without headings are split the same way instead of being truncated.
 
 ### docSearch.embedProvider
 
@@ -91,13 +101,31 @@ Maximum characters per chunk. Chunks exceeding this limit are truncated. Most em
 
 Which embedding provider to use:
 
-| Provider | Model                  | Dimensions | Notes                                                          |
-| -------- | ---------------------- | ---------- | -------------------------------------------------------------- |
-| `local`  | all-MiniLM-L6-v2       | 384        | No setup required. ONNX model (~22MB) downloaded on first use. |
-| `ollama` | Configurable           | 768        | Requires a running Ollama server.                              |
-| `openai` | text-embedding-3-small | 1536       | Requires API key. Best quality.                                |
+| Provider | Model                                  | Dimensions | Notes                                                  |
+| -------- | -------------------------------------- | ---------- | ------------------------------------------------------ |
+| `local`  | Selectable, see `docSearch.localModel` | 384 / 768  | No setup required. ONNX model downloaded on first use. |
+| `ollama` | Configurable                           | 768        | Requires a running Ollama server.                      |
+| `openai` | text-embedding-3-small                 | 1536       | Requires API key. Best quality.                        |
 
-Changing the provider requires a full reindex since embedding dimensions differ.
+Changing the provider — or the local model — requires a full reindex, since vectors from different models cannot be compared.
+
+### docSearch.localModel
+
+- **Type:** `enum`
+- **Default:** `Xenova/all-MiniLM-L6-v2`
+
+Which model the built-in (`local`) provider runs. All four run fully offline after a one-time download; each entry in the registry (`src/core/localModels.ts`) records the model's dimension, context window and the task prefixes it was trained with, which the embedder applies automatically.
+
+| Model                                     | Languages                  | Dim | Window | Download | Prefixes (query / document)                                |
+| ----------------------------------------- | -------------------------- | --- | ------ | -------- | ---------------------------------------------------------- |
+| `Xenova/all-MiniLM-L6-v2` (default)       | English                    | 384 | 256    | ~90 MB   | none                                                       |
+| `Xenova/multilingual-e5-small`            | ~95 languages incl. German | 384 | 512    | ~118 MB  | `query: ` / `passage: `                                    |
+| `onnx-community/embeddinggemma-300m-ONNX` | 100+ languages             | 768 | 2048   | ~310 MB  | `task: search result \| query: ` / `title: none \| text: ` |
+| `nomic-ai/nomic-embed-text-v1.5`          | English                    | 768 | 8192   | ~131 MB  | `search_query: ` / `search_document: `                     |
+
+Pick `multilingual-e5-small` for German or mixed-language documentation: the default is English-only and embeds German text poorly. EmbeddingGemma is the strongest multilingual option and `nomic-embed-text-v1.5` the strongest for English (it is the same model Ollama's `nomic-embed-text` runs). Switching models downloads the new weights on first use and triggers a full re-embed of the index. The default is unchanged from earlier releases, so existing users are not forced into a download.
+
+For the MCP server and CLI, set `DOC_SEARCH_LOCAL_MODEL` to one of the ids above.
 
 ### docSearch.ollamaUrl
 
@@ -204,19 +232,20 @@ the file after changing `extraRoots` or the provider.
 
 When running the MCP server standalone, these environment variables configure behavior:
 
-| Variable                              | Default             | Description                                                                                                   |
-| ------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `DOC_SEARCH_WORKSPACE`                | (required)          | Workspace root path (`${CLAUDE_PROJECT_DIR}` in a generated `.mcp.json`; Claude Code expands it)              |
-| `DOC_SEARCH_GLOB`                     | `doc/**/*.md`       | File glob pattern                                                                                             |
-| `DOC_SEARCH_EXTRA_ROOTS`              | (empty)             | JSON array of external roots (same shape as `docSearch.extraRoots`); the only source unless the opt-in is set |
-| `DOC_SEARCH_TRUST_WORKSPACE_SETTINGS` | (unset)             | Set to `1` to also read `extraRoots`, the provider, Ollama URL and model from `.vscode/settings.json`         |
-| `DOC_SEARCH_HOME`                     | `~/.doc-search`     | Base directory for global index (requires absolute path)                                                      |
-| `DOC_SEARCH_INDEX_LOCATION`           | `global`            | Index location mode: `global` or `workspace` (deprecated)                                                     |
-| `DOC_SEARCH_INDEX_DIR`                | `.doc-search-index` | Deprecated: workspace-mode index directory (relative to workspace root)                                       |
-| `USE_OPENAI`                          | `0`                 | Set to `1` to use OpenAI embeddings                                                                           |
-| `OPENAI_API_KEY`                      | (empty)             | OpenAI API key (a generated `.mcp.json` references it as `${OPENAI_API_KEY}`; export it in your shell)        |
-| `OLLAMA_URL`                          | (empty)             | Ollama server URL (enables Ollama provider; any host is accepted from the environment)                        |
-| `OLLAMA_MODEL`                        | `nomic-embed-text`  | Ollama model name                                                                                             |
+| Variable                              | Default                   | Description                                                                                                   |
+| ------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `DOC_SEARCH_WORKSPACE`                | (required)                | Workspace root path (`${CLAUDE_PROJECT_DIR}` in a generated `.mcp.json`; Claude Code expands it)              |
+| `DOC_SEARCH_GLOB`                     | `doc/**/*.md`             | File glob pattern                                                                                             |
+| `DOC_SEARCH_EXTRA_ROOTS`              | (empty)                   | JSON array of external roots (same shape as `docSearch.extraRoots`); the only source unless the opt-in is set |
+| `DOC_SEARCH_TRUST_WORKSPACE_SETTINGS` | (unset)                   | Set to `1` to also read `extraRoots`, the provider, Ollama URL and model from `.vscode/settings.json`         |
+| `DOC_SEARCH_HOME`                     | `~/.doc-search`           | Base directory for global index (requires absolute path)                                                      |
+| `DOC_SEARCH_INDEX_LOCATION`           | `global`                  | Index location mode: `global` or `workspace` (deprecated)                                                     |
+| `DOC_SEARCH_INDEX_DIR`                | `.doc-search-index`       | Deprecated: workspace-mode index directory (relative to workspace root)                                       |
+| `USE_OPENAI`                          | `0`                       | Set to `1` to use OpenAI embeddings                                                                           |
+| `OPENAI_API_KEY`                      | (empty)                   | OpenAI API key (a generated `.mcp.json` references it as `${OPENAI_API_KEY}`; export it in your shell)        |
+| `OLLAMA_URL`                          | (empty)                   | Ollama server URL (enables Ollama provider; any host is accepted from the environment)                        |
+| `OLLAMA_MODEL`                        | `nomic-embed-text`        | Ollama model name                                                                                             |
+| `DOC_SEARCH_LOCAL_MODEL`              | `Xenova/all-MiniLM-L6-v2` | Built-in model for the `local` provider; one of the ids listed under `docSearch.localModel`                   |
 
 ## Troubleshooting
 

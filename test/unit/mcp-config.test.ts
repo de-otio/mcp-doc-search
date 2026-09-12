@@ -24,6 +24,7 @@ describe("MCP Config", () => {
     delete process.env.OPENAI_API_KEY;
     delete process.env.DOC_SEARCH_EXTRA_ROOTS;
     delete process.env.DOC_SEARCH_TRUST_WORKSPACE_SETTINGS;
+    delete process.env.DOC_SEARCH_LOCAL_MODEL;
 
     // Pin DOC_SEARCH_HOME to a known path so global-mode index paths are
     // predictable and don't depend on the real os.homedir().
@@ -144,6 +145,34 @@ describe("MCP Config", () => {
 
       expect(engine).toHaveProperty("indexer");
       expect(engine).toHaveProperty("embedProvider");
+    });
+
+    it("selects the built-in model from DOC_SEARCH_LOCAL_MODEL", async () => {
+      const { readFileSync } = await import("node:fs");
+      const { connect } = await import("@lancedb/lancedb");
+
+      vi.mocked(readFileSync).mockReturnValue("{}");
+      vi.mocked(connect).mockResolvedValue({
+        openTable: vi.fn().mockRejectedValue(new Error("Not found")),
+      });
+      process.env.DOC_SEARCH_LOCAL_MODEL = "Xenova/multilingual-e5-small";
+
+      const engine = await createEngineFromEnv();
+
+      expect(engine.embedProvider.identity?.()).toEqual({
+        provider: "local",
+        model: "Xenova/multilingual-e5-small",
+        dim: 384,
+      });
+    });
+
+    it("fails loudly on an unknown DOC_SEARCH_LOCAL_MODEL rather than substituting the default", async () => {
+      const { readFileSync } = await import("node:fs");
+
+      vi.mocked(readFileSync).mockReturnValue("{}");
+      process.env.DOC_SEARCH_LOCAL_MODEL = "Xenova/typo-model";
+
+      await expect(createEngineFromEnv()).rejects.toThrow(/Unknown local embedding model/);
     });
 
     // ---------------------------------------------------------------------

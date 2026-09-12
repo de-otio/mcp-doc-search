@@ -38,6 +38,7 @@ export type SettingsMessage =
         headingDepth: 1 | 2;
         maxChunkChars: number;
         embedProvider: string;
+        localModel: string;
         ollamaUrl: string;
         ollamaModel: string;
         autoReindex: boolean;
@@ -60,6 +61,7 @@ export type SettingsResultMessage =
         headingDepth: 1 | 2;
         maxChunkChars: number;
         embedProvider: string;
+        localModel: string;
         ollamaUrl: string;
         ollamaModel: string;
         autoReindex: boolean;

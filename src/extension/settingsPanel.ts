@@ -1,6 +1,11 @@
 import * as vscode from "vscode";
 import { execFile } from "node:child_process";
-import { OllamaEmbedder, OpenAIEmbedder } from "../core/embedder.js";
+import {
+  DEFAULT_LOCAL_MODEL,
+  LOCAL_MODELS,
+  OllamaEmbedder,
+  OpenAIEmbedder,
+} from "../core/embedder.js";
 import { parseExtraRoots } from "../core/extraRoots.js";
 import { getNonce } from "./utils.js";
 
@@ -109,8 +114,9 @@ export class SettingsPanel {
             docGlob: cfg.get("docGlob", "doc/**/*.md"),
             indexDir: cfg.get("indexDir", ".doc-search-index"),
             headingDepth: cfg.get("headingDepth", 2),
-            maxChunkChars: cfg.get("maxChunkChars", 4000),
+            maxChunkChars: cfg.get("maxChunkChars", 0),
             embedProvider: cfg.get("embedProvider", "local"),
+            localModel: cfg.get("localModel", DEFAULT_LOCAL_MODEL),
             ollamaUrl: cfg.get("ollamaUrl", "http://localhost:11434"),
             ollamaModel: cfg.get("ollamaModel", "nomic-embed-text"),
             openaiApiKey,
@@ -127,12 +133,20 @@ export class SettingsPanel {
         try {
           const oldProvider = cfg.get("embedProvider", "local");
           const oldOllamaModel = cfg.get("ollamaModel", "nomic-embed-text");
+          const oldLocalModel = cfg.get("localModel", DEFAULT_LOCAL_MODEL);
+          // The picker only offers registry ids, but the wire is untyped and
+          // an unknown id would make every LocalEmbedder construction throw.
+          const localModel =
+            typeof msg.config.localModel === "string" && LOCAL_MODELS[msg.config.localModel]
+              ? msg.config.localModel
+              : DEFAULT_LOCAL_MODEL;
 
           await cfg.update("docGlob", msg.config.docGlob, target);
           await cfg.update("indexDir", msg.config.indexDir, target);
           await cfg.update("headingDepth", msg.config.headingDepth, target);
           await cfg.update("maxChunkChars", msg.config.maxChunkChars, target);
           await cfg.update("embedProvider", msg.config.embedProvider, target);
+          await cfg.update("localModel", localModel, target);
           await cfg.update("ollamaUrl", msg.config.ollamaUrl, target);
           await cfg.update("ollamaModel", msg.config.ollamaModel, target);
           await cfg.update("autoReindex", msg.config.autoReindex, target);
@@ -163,7 +177,8 @@ export class SettingsPanel {
 
           const providerChanged =
             oldProvider !== msg.config.embedProvider ||
-            (msg.config.embedProvider === "ollama" && oldOllamaModel !== msg.config.ollamaModel);
+            (msg.config.embedProvider === "ollama" && oldOllamaModel !== msg.config.ollamaModel) ||
+            (msg.config.embedProvider === "local" && oldLocalModel !== localModel);
 
           this.panel.webview.postMessage({
             type: "saveResult",
@@ -273,6 +288,12 @@ export class SettingsPanel {
 
   private getHtml(): string {
     const nonce = getNonce();
+    const localModelOptions = Object.values(LOCAL_MODELS)
+      .map((m) => {
+        const suffix = m.id === DEFAULT_LOCAL_MODEL ? " — default" : "";
+        return `<option value="${m.id}">${m.label} — ${m.languages}, ${m.dim}-dim, ~${m.downloadMb} MB download${suffix}</option>`;
+      })
+      .join("\n        ");
     return /*html*/ `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -467,11 +488,25 @@ export class SettingsPanel {
 
   <div id="localInfo" class="provider-section">
     <p>
-      Uses a small AI model (all-MiniLM-L6-v2) that runs entirely on your machine.
-      No internet connection, no account, and no ongoing cost. Good accuracy for
-      most documentation. The model file (~22 MB) is downloaded automatically the
-      first time you index.
+      Runs an AI model entirely on your machine: no account, no ongoing cost, and no
+      internet connection after the one-time download.
     </p>
+    <div class="field">
+      <label for="localModel">Model</label>
+      <div class="hint">
+        The default is English-only and the smallest. Pick multilingual-e5-small for
+        German (or other non-English) documentation; EmbeddingGemma is the strongest
+        multilingual choice, nomic-embed-text the strongest for English.
+      </div>
+      <select id="localModel">
+        ${localModelOptions}
+      </select>
+      <div class="warning">
+        Switching models downloads the new model on first use (size shown above) and
+        rebuilds the whole search index, because vectors from different models cannot
+        be compared.
+      </div>
+    </div>
   </div>
 
   <div id="ollamaSection" class="provider-section">
@@ -589,8 +624,14 @@ export class SettingsPanel {
   </div>
   <div class="field">
     <label for="maxChunkChars">Maximum section length (characters)</label>
-    <div class="hint">Sections longer than this are truncated. Larger values index more context but may reduce search precision.</div>
-    <input type="number" id="maxChunkChars" min="500" max="32000">
+    <div class="hint">
+      0 = automatic: the budget follows the selected model's context window (800 for
+      all-MiniLM-L6-v2, 1,536 for multilingual-e5-small, 6,144 for EmbeddingGemma, 8,000 for
+      nomic; 4,000 for Ollama and OpenAI). The model ignores text past its window, so a
+      larger value adds no searchable context. Longer sections are split with a short
+      overlap; code fences and tables are never cut.
+    </div>
+    <input type="number" id="maxChunkChars" min="0" max="50000">
   </div>
 
   <div class="btn-row">
@@ -633,7 +674,7 @@ export class SettingsPanel {
     const ollamaConfig = $("ollamaConfig");
 
     const providerHints = {
-      local: "The first build downloads the AI model (~22 MB). Subsequent builds are fast.",
+      local: "The first build downloads the selected model (size shown in the list). Subsequent builds are fast.",
       ollama: "Indexing speed depends on your machine. Large doc sets may take a few minutes.",
       openai: "Indexing makes API calls to OpenAI. Large doc sets may take a minute and incur a small cost.",
     };
@@ -763,6 +804,7 @@ export class SettingsPanel {
         headingDepth: parseInt($("headingDepth").value, 10),
         maxChunkChars: parseInt($("maxChunkChars").value, 10),
         embedProvider: providerSelect.value,
+        localModel: $("localModel").value,
         ollamaUrl: $("ollamaUrl").value,
         ollamaModel: $("ollamaModel").value,
         openaiApiKey: $("openaiApiKey").value,
@@ -777,6 +819,7 @@ export class SettingsPanel {
       $("headingDepth").value = String(cfg.headingDepth);
       $("maxChunkChars").value = cfg.maxChunkChars;
       providerSelect.value = cfg.embedProvider;
+      $("localModel").value = cfg.localModel;
       $("ollamaUrl").value = cfg.ollamaUrl;
       $("ollamaModel").value = cfg.ollamaModel;
       $("openaiApiKey").value = cfg.openaiApiKey;

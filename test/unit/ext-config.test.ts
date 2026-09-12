@@ -49,7 +49,7 @@ describe("Extension Config", () => {
       expect(config.openaiApiKey).toBe("custom-key");
     });
 
-    it("should read all 9 settings", () => {
+    it("should read every setting", () => {
       const mockCfg = {
         get: vi.fn((key: string, defaultValue: any) => defaultValue),
       };
@@ -64,10 +64,26 @@ describe("Extension Config", () => {
       expect(config).toHaveProperty("headingDepth");
       expect(config).toHaveProperty("maxChunkChars");
       expect(config).toHaveProperty("embedProvider");
+      expect(config).toHaveProperty("localModel");
       expect(config).toHaveProperty("ollamaUrl");
       expect(config).toHaveProperty("ollamaModel");
       expect(config).toHaveProperty("openaiApiKey");
       expect(config).toHaveProperty("autoReindex");
+    });
+  });
+
+  describe("readConfig defaults", () => {
+    it("defaults maxChunkChars to 0 (auto) and localModel to the registry default", () => {
+      const mockCfg = {
+        get: vi.fn((key: string, defaultValue: any) => defaultValue),
+      };
+
+      vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(mockCfg as any);
+
+      const config = readConfig();
+
+      expect(config.maxChunkChars).toBe(0);
+      expect(config.localModel).toBe("Xenova/all-MiniLM-L6-v2");
     });
   });
 
