@@ -23,7 +23,7 @@ src/
 │   ├── chunker.ts     # Markdown heading-aware chunking
 │   ├── embedder.ts    # Embedding providers (local, Ollama, OpenAI)
 │   ├── vectorstore.ts # LanceDB wrapper
-│   ├── searcher.ts    # Hybrid vector + keyword search
+│   ├── searcher.ts    # Hybrid vector + full-text search (RRF)
 │   └── indexer.ts     # Crawl, chunk, embed, upsert pipeline
 ├── extension/      # VS Code extension integration
 │   ├── extension.ts      # Entry point and activation
@@ -140,7 +140,7 @@ Splitting on markdown headings (rather than fixed character counts) preserves do
 
 ### Hybrid search
 
-Pure vector search can miss exact keyword matches. The keyword boost (0.03 per matching term, with camelCase expansion) ensures that documents containing the exact search terms rank higher.
+Pure vector search can miss exact keyword matches, and a chunk outside the vector top-3n can never be recovered by re-ranking alone. The searcher therefore runs a BM25 full-text query in parallel and fuses both candidate lists with reciprocal rank fusion, so chunks containing the exact terms are found even when the embedding misses them, and chunks both sides agree on rank first. The full-text index lives in LanceDB (`Index.fts()` on `text`) and is rebuilt by the indexer after every run that writes rows.
 
 ### Stable chunk IDs
 

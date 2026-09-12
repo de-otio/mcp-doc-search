@@ -116,6 +116,10 @@ limit }` when it was cut, and a file larger than 16 MiB is refused before
   `node22`). The stable launchers under `~/.doc-search/bin` exit 1 with a
   one-line message on an older runtime instead of failing inside a native
   module. Minimum VS Code is now 1.101.
+- **Scores.** `score` is the chunk's cosine similarity (still 0–1); results
+  are ordered by the fused rank, so `score` is no longer monotonic in rank.
+  The substring bonus (+0.03 per term) is gone. `explain` reports
+  `vectorRank`, `ftsRank` and `rrfScore` instead of `keywordBonus`.
 
 ### Added
 
@@ -135,6 +139,19 @@ limit }` when it was cut, and a file larger than 16 MiB is refused before
   package name and version (built in from `package.json`; it was a hard-coded
   `0.1.0`) and ships server `instructions` with the three agent-guide rules
   (search before reading, scoped `get` by `#docid`, delegate broad sweeps).
+- **Full-text side for hybrid search.** Every query now also runs against a
+  BM25 inverted index over chunk text (LanceDB `Index.fts()`), and the vector
+  and full-text candidate lists are fused with reciprocal rank fusion
+  (k = 60). A chunk the embedding misses but the exact terms hit — an
+  identifier, a setting key, a German compound — is recovered instead of
+  being unreachable. The index is built by `reindex` and rebuilt after every
+  run that writes rows; an index created before this release ranks by
+  vector similarity only until its next reindex.
+- **Multi-query.** `search_docs` accepts `queries: string[]` (at most 5
+  distinct queries including `query`); each phrasing contributes its own
+  ranked lists to the same fusion.
+- The `search_docs` description now says how to phrase a query: one concept
+  per call, exact identifiers included, German is fine.
 
 ## [0.7.1] - 2026-09-12
 

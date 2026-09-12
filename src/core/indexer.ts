@@ -679,6 +679,18 @@ export class Indexer {
     // Merge new cache with unchanged entries from old cache, excluding pruned keys
     persistCache();
 
+    // Full-text index: rebuild after any run that wrote or pruned rows (stale
+    // postings from the delete-before-add above would otherwise break queries;
+    // see LanceVectorStore.ensureFtsIndex), and build it once on an index that
+    // predates full-text search. Must precede compaction: optimize() rejects
+    // unindexed rows carrying new tokens. Failure is not fatal — search falls
+    // back to vector-only until the next reindex.
+    try {
+      await this.store.ensureFtsIndex(indexed > 0 || staleKeys.length > 0);
+    } catch (err) {
+      console.warn(`Full-text index: failed: ${err instanceof Error ? err.message : err}`);
+    }
+
     // Every write above left a table version behind; reclaim them once enough
     // have piled up. Checked regardless of whether this run wrote anything so
     // a backlog from before compaction existed is cleared on the next run.

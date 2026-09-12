@@ -48,6 +48,7 @@ function makeIndexer(config?: Partial<IndexerConfig>): Indexer {
     listFiles: vi.fn(),
     retainedVersions: vi.fn().mockReturnValue(0),
     compact: vi.fn(),
+    ensureFtsIndex: vi.fn(),
   } as unknown as LanceVectorStore;
 
   const defaultConfig: IndexerConfig = {
@@ -81,6 +82,7 @@ describe("Indexer", () => {
       listFiles: vi.fn(),
       retainedVersions: vi.fn().mockReturnValue(0),
       compact: vi.fn(),
+      ensureFtsIndex: vi.fn(),
     };
 
     mockEmbedProvider = {

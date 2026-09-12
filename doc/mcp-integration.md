@@ -224,22 +224,25 @@ a hint to Claude-family clients about how large a single result may get.
 
 ### search_docs
 
-Search documentation using natural language.
+Hybrid search: the query is matched by meaning (embeddings) and literally (a BM25 full-text index), and the two candidate lists are fused by reciprocal rank fusion. Phrase one concept per call and include exact identifiers where you know them; German queries are fine.
 
 **Parameters:**
 
-| Name    | Type   | Default    | Description                         |
-| ------- | ------ | ---------- | ----------------------------------- |
-| `query` | string | (required) | Natural language search query       |
-| `n`     | number | 5          | Maximum number of results to return |
+| Name      | Type     | Default    | Description                                                                                    |
+| --------- | -------- | ---------- | ---------------------------------------------------------------------------------------------- |
+| `query`   | string   | (required) | Natural language search query                                                                  |
+| `queries` | string[] | —          | Alternative phrasings fused into the same ranking (at most 5 distinct queries incl. `query`)   |
+| `n`       | number   | 5          | Maximum number of results to return                                                            |
+| `explain` | boolean  | false      | Add a per-result `explanation` (`vectorRank`, `ftsRank`, `rrfScore`, `keywordTermsMatched`, …) |
 
 **Returns:** Array of search results, each containing:
 
 - `file` — relative path to the source file
 - `heading` — the section heading
-- `text` — chunk text content
+- `excerpt` — first 600 characters of the chunk
 - `lineStart` — line number in the source file
-- `score` — relevance score (0-1, higher is better)
+- `docid` — stable 6-char id, accepted by `get` / `multi_get` as `#docid`
+- `score` — cosine similarity (0-1, higher is better); results are ordered by the fused rank, so a literal match can appear above a higher score
 
 ### list_docs
 
