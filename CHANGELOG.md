@@ -103,6 +103,12 @@ limit }` when it was cut, and a file larger than 16 MiB is refused before
   atomically (temp file + rename), so a reader never sees a half-written file.
 - CLI `context list` printed "No context notes." even when notes existed (it
   treated the map as an array).
+- CLI `search` now prefixes excerpts with `[Context: …]` like `search_docs`
+  does; it never passed the indexer to the searcher.
+- A context prefix written with a trailing slash (`doc/`) never matched: the
+  prefix walk generates `doc`. Prefixes are now stored without trailing
+  slashes (`doc/`, `doc\` and `doc` are one key) and existing `context.json`
+  keys are normalised on load.
 
 ### Changed
 

@@ -811,6 +811,40 @@ describe("Indexer context API", () => {
       const indexer = makeIndexer();
       expect(indexer.getContextFor("doc/01-business/foo.md")).toBe("");
     });
+
+    it("matches a stored prefix spelled with a trailing slash", () => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      vi.mocked(readFileSync).mockReturnValue(JSON.stringify({ "doc/": "Docs with slash" }));
+      const indexer = makeIndexer();
+      expect(indexer.getContextFor("doc/api.md")).toBe("Docs with slash");
+      expect(indexer.listContexts()).toEqual({ doc: "Docs with slash" });
+    });
+
+    it("set_context('doc/') applies to doc/api.md and shares the key with 'doc'", () => {
+      // setContext/removeContext re-read context.json on every call, so let
+      // the fs mock hand back whatever was last written.
+      let onDisk = "{}";
+      vi.mocked(existsSync).mockReturnValue(true);
+      vi.mocked(readFileSync).mockImplementation(() => onDisk);
+      vi.mocked(writeFileSync).mockImplementation((_path, data) => {
+        onDisk = String(data);
+      });
+      const indexer = makeIndexer();
+
+      indexer.setContext("doc/", "API docs");
+      expect(indexer.getContextFor("doc/api.md")).toBe("API docs");
+      expect(indexer.getContextFor("doc/deep/er/file.md")).toBe("API docs");
+      expect(indexer.getContextFor("docs/api.md")).toBe("");
+      expect(Object.keys(JSON.parse(onDisk))).toEqual(["doc"]);
+
+      // Same subtree under either spelling (and Windows separators): one entry.
+      indexer.setContext("doc", "API docs, revised");
+      indexer.setContext("doc\\", "API docs, final");
+      expect(indexer.listContexts()).toEqual({ doc: "API docs, final" });
+      expect(indexer.removeContext("doc/")).toBe(true);
+      expect(indexer.getContextFor("doc/api.md")).toBe("");
+      expect(JSON.parse(onDisk)).toEqual({});
+    });
   });
 
   describe("setContext", () => {

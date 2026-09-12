@@ -157,6 +157,51 @@ describe("MCP protocol surface", () => {
     expect(result.structuredContent).toEqual({ results: textPayload(result) });
   });
 
+  it("search_docs: a hybrid explain result (vectorRank/ftsRank/rrfScore) validates", async () => {
+    const { search } = await import("../../src/core/searcher.js");
+    vi.mocked(search).mockResolvedValue([
+      {
+        file: "doc/guide.md",
+        heading: "Guide",
+        excerpt: "line two",
+        score: 0.9,
+        lineStart: 3,
+        docid: "abc123",
+        explanation: { vectorScore: 0.9, vectorRank: 1, ftsRank: 2, rrfScore: 0.0325 },
+      },
+      {
+        file: "doc/guide.md",
+        heading: "Settings",
+        excerpt: "docSearch.extraRoots",
+        score: 0.12,
+        lineStart: 40,
+        docid: "abc123",
+        // Recovered by the full-text side only.
+        explanation: { vectorScore: 0.12, vectorRank: null, ftsRank: 1, rrfScore: 0.0164 },
+      },
+    ]);
+
+    const result = await callValidated("search_docs", { query: "extraRoots", explain: true });
+
+    expect(result.isError).toBeFalsy();
+    expect(search).toHaveBeenCalledWith(
+      "extraRoots",
+      5,
+      expect.anything(),
+      expect.anything(),
+      { explain: true },
+      expect.anything(),
+    );
+    const { results } = result.structuredContent as { results: Array<Record<string, unknown>> };
+    expect(results[0].explanation).toEqual({
+      vectorScore: 0.9,
+      vectorRank: 1,
+      ftsRank: 2,
+      rrfScore: 0.0325,
+    });
+    expect(results[1].explanation).toMatchObject({ vectorRank: null, ftsRank: 1 });
+  });
+
   it("list_docs: structuredContent validates and wraps the text array under files", async () => {
     const result = await callValidated("list_docs", {});
     expect(result.structuredContent).toEqual({ files: textPayload(result) });

@@ -243,6 +243,16 @@ function normalizeContextEntry(value: unknown): ContextEntry | null {
   return { text: sanitized, updatedAt };
 }
 
+/**
+ * Canonical form of a context prefix: POSIX slashes, no trailing slash, so
+ * `doc/`, `doc\\` and `doc` name the same subtree. The empty string (root)
+ * is left alone; validation of absolute / `..` prefixes happens in
+ * `setContext` on the caller's spelling.
+ */
+export function normalizeContextPrefix(prefix: string): string {
+  return prefix.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
 export class Indexer {
   private config: IndexerConfig;
   private store: LanceVectorStore;
@@ -792,7 +802,8 @@ export class Indexer {
     if (raw && typeof raw === "object" && !Array.isArray(raw)) {
       for (const [prefix, value] of Object.entries(raw as Record<string, unknown>)) {
         const entry = normalizeContextEntry(value);
-        if (entry) entries[prefix] = entry;
+        // Legacy files may hold `doc/` and `doc` side by side; the last one wins.
+        if (entry) entries[normalizeContextPrefix(prefix)] = entry;
       }
     }
     this._contextCache = entries;
@@ -830,8 +841,12 @@ export class Indexer {
     candidates.push(""); // root context
 
     for (const candidate of candidates) {
-      if (Object.prototype.hasOwnProperty.call(ctx, candidate)) {
-        return ctx[candidate].text;
+      // Keys are normalized on load, but an in-memory map handed in by a
+      // caller may still spell a directory prefix with a trailing slash.
+      for (const key of candidate ? [candidate, `${candidate}/`] : [candidate]) {
+        if (Object.prototype.hasOwnProperty.call(ctx, key)) {
+          return ctx[key].text;
+        }
       }
     }
     return "";
@@ -839,7 +854,8 @@ export class Indexer {
 
   /**
    * Set a context description for a path prefix.
-   * - Normalizes prefix to POSIX slashes.
+   * - Normalizes prefix to POSIX slashes without a trailing slash
+   *   (`doc/` and `doc` are the same key).
    * - Throws `ContextValidationError` if prefix contains ".." or is absolute.
    * - Sanitizes text: newlines/tabs become spaces, other control and format
    *   characters are stripped, `[`/`]` become `(`/`)` so the stored text can
@@ -851,7 +867,7 @@ export class Indexer {
    * Returns the stored entry (sanitized text + `updatedAt`), or null on removal.
    */
   setContext(prefix: string, text: string): ContextEntry | null {
-    const normalized = prefix.replace(/\\/g, "/");
+    const normalized = normalizeContextPrefix(prefix);
 
     if (path.isAbsolute(normalized) || path.isAbsolute(prefix)) {
       throw new ContextValidationError(`Context prefix must not be absolute: "${prefix}"`);
@@ -896,7 +912,7 @@ export class Indexer {
    * Returns true if the entry existed, false otherwise.
    */
   removeContext(prefix: string): boolean {
-    const normalized = prefix.replace(/\\/g, "/");
+    const normalized = normalizeContextPrefix(prefix);
     // Reload from disk to pick up external edits
     this._contextCache = null;
     const ctx = { ...this.loadContextCache() };

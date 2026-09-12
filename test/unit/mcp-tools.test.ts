@@ -152,6 +152,58 @@ describe("MCP Tools", () => {
       }
     });
 
+    it("passes alternative phrasings (queries) through to search()", async () => {
+      const { search } = await import("../../src/core/searcher.js");
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1][1];
+
+      await callToolHandler({
+        params: {
+          name: "search_docs",
+          arguments: { query: "retry policy", queries: ["Wiederholung", "backoff", 42] },
+        },
+      });
+
+      expect(vi.mocked(search)).toHaveBeenCalledWith(
+        "retry policy",
+        5,
+        mockStore,
+        mockEmbedProvider,
+        { explain: false, queries: ["Wiederholung", "backoff", "42"] },
+        mockIndexer,
+      );
+    });
+
+    it("caps queries at five and ignores a non-array value", async () => {
+      const { search } = await import("../../src/core/searcher.js");
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1][1];
+
+      await callToolHandler({
+        params: {
+          name: "search_docs",
+          arguments: { query: "q", queries: ["a", "b", "c", "d", "e", "f", "g"] },
+        },
+      });
+      expect(vi.mocked(search).mock.calls.at(-1)![4]).toEqual({
+        explain: false,
+        queries: ["a", "b", "c", "d", "e"],
+      });
+
+      await callToolHandler({
+        params: { name: "search_docs", arguments: { query: "q", queries: "not-an-array" } },
+      });
+      expect(vi.mocked(search).mock.calls.at(-1)![4]).toEqual({ explain: false });
+    });
+
     it("should handle reindex_docs with force parameter", async () => {
       registerTools(mockServer, {
         store: mockStore,

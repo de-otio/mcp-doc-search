@@ -179,7 +179,7 @@ function readFilePortion(
 // Subcommand handlers
 // ---------------------------------------------------------------------------
 
-async function cmdSearch(
+export async function cmdSearch(
   positionals: string[],
   flags: Record<string, string | boolean>,
 ): Promise<void> {
@@ -196,7 +196,8 @@ async function cmdSearch(
   const explain = getFlag(flags, "explain", false);
 
   const deps = await createEngineFromEnv();
-  let results = await search(query, n, deps.store, deps.embedProvider);
+  // Pass the indexer so excerpts carry `[Context: ...]` like the MCP path.
+  let results = await search(query, n, deps.store, deps.embedProvider, { explain }, deps.indexer);
 
   if (minScore > 0) {
     results = results.filter((r) => r.score >= minScore);

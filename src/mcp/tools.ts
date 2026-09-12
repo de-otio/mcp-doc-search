@@ -603,7 +603,18 @@ export function registerTools(server: Server, deps: EngineDeps): void {
         }
         const n = Math.max(1, Math.min(100, Math.floor(Number(input.n) || 5)));
         const explain = input.explain === true;
-        const results = await search(query, n, store, embedProvider, { explain }, indexer);
+        // Alternative phrasings; search() dedupes and caps them (MAX_QUERIES).
+        const queries = Array.isArray(input.queries)
+          ? input.queries.map(String).slice(0, 5)
+          : undefined;
+        const results = await search(
+          query,
+          n,
+          store,
+          embedProvider,
+          queries ? { explain, queries } : { explain },
+          indexer,
+        );
         return {
           content: [{ type: "text", text: JSON.stringify(results) }],
         };

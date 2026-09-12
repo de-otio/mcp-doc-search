@@ -316,6 +316,41 @@ describe("CLI subcommands", () => {
   });
 
   // -------------------------------------------------------------------------
+  // search
+  // -------------------------------------------------------------------------
+
+  describe("search subcommand", () => {
+    it("passes the indexer to search() so excerpts carry [Context: ...] like the MCP path", async () => {
+      const { cmdSearch } = await import("../../bin/mcp-doc-search.js");
+      const { search } = await import("../../src/core/searcher.js");
+      vi.mocked(search).mockResolvedValue([
+        {
+          file: "doc/api.md",
+          heading: "Auth",
+          excerpt: "[Context: API docs] Tokens expire after an hour.",
+          score: 0.9,
+          lineStart: 4,
+          docid: "abc123",
+        },
+      ]);
+
+      await cmdSearch(["token expiry"], { n: "3", explain: true });
+
+      expect(search).toHaveBeenCalledWith(
+        "token expiry",
+        3,
+        mockStore,
+        mockEmbedProvider,
+        { explain: true },
+        mockIndexer,
+      );
+      const out = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+      expect(out).toContain("[0.900] doc/api.md:4 — Auth");
+      expect(out).toContain("[Context: API docs] Tokens expire after an hour.");
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // context list
   // -------------------------------------------------------------------------
 
