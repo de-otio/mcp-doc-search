@@ -167,6 +167,7 @@ describe("Indexer with external roots", () => {
       listFiles: vi.fn(),
       retainedVersions: vi.fn().mockReturnValue(0),
       compact: vi.fn(),
+      hasFtsIndex: vi.fn().mockResolvedValue(false),
     } as unknown as LanceVectorStore;
 
     embedProvider = {

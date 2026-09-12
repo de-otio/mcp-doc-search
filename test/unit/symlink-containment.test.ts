@@ -86,6 +86,7 @@ describe("symlink containment (real filesystem)", () => {
       listFiles: vi.fn(),
       retainedVersions: vi.fn().mockReturnValue(0),
       compact: vi.fn(),
+      hasFtsIndex: vi.fn().mockResolvedValue(false),
     } as unknown as LanceVectorStore;
     embedProvider = { embed: vi.fn(async (t: string[]) => t.map(() => [0.1, 0.2, 0.3])) };
   });
