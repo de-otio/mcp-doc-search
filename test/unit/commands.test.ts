@@ -72,6 +72,19 @@ vi.mock("../../src/core/indexer.js", () => ({
 vi.mock("../../src/core/gitignore.js", () => ({
   ensureGitignored: vi.fn(),
 }));
+vi.mock("../../src/extension/stableBin.js", () => ({
+  writeStableLaunchers: vi.fn(() => "/mock-home/.doc-search/bin/mcp-server.js"),
+}));
+vi.mock("../../src/extension/mcpJson.js", () => ({
+  isGitTracked: vi.fn(() => false),
+}));
+// portableLauncherPath derives the ${HOME} form from os.homedir(); pin it so the
+// stable launcher above is "inside" the home directory.
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  const homedir = () => "/mock-home";
+  return { ...actual, homedir, default: { ...actual.default, homedir } };
+});
 vi.mock("node:fs");
 
 describe("Commands", () => {
@@ -347,20 +360,136 @@ describe("Commands", () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
       vi.mocked(fs.readFileSync).mockReturnValue("");
       vi.mocked(fs.writeFileSync).mockReturnValue(undefined);
+      vi.mocked(fs.chmodSync).mockReturnValue(undefined);
     });
 
-    it("writes a fresh .mcp.json when none exists", async () => {
+    /** Run the command and return the parsed doc-search entry that was written. */
+    async function generate(): Promise<{ text: string; entry: any; options: any }> {
       registerCommands(mockContext, deps);
       const handler = findHandler("docSearch.generateMcpJson");
       await handler();
-
       expect(vi.mocked(fs.writeFileSync)).toHaveBeenCalledOnce();
-      const [path, contents] = vi.mocked(fs.writeFileSync).mock.calls[0];
-      expect(String(path)).toContain(".mcp.json");
-      const parsed = JSON.parse(String(contents));
-      expect(parsed.mcpServers["doc-search"]).toBeDefined();
-      expect(parsed.mcpServers["doc-search"].command).toBe("node");
-      expect(parsed.mcpServers["doc-search"].env.DOC_SEARCH_WORKSPACE).toBe("/workspace");
+      const [file, contents, options] = vi.mocked(fs.writeFileSync).mock.calls[0];
+      expect(String(file)).toContain(".mcp.json");
+      const text = String(contents);
+      return { text, entry: JSON.parse(text).mcpServers["doc-search"], options };
+    }
+
+    async function configWith(overrides: Record<string, unknown>): Promise<void> {
+      const { readConfig } = await import("../../src/extension/config.js");
+      vi.mocked(readConfig).mockReturnValue({
+        docGlob: "doc/**/*.md",
+        indexDir: ".doc-search-index",
+        indexLocation: "global",
+        maxChunkChars: 4000,
+        headingDepth: 2,
+        embedProvider: "local",
+        ollamaUrl: "http://127.0.0.1:11434",
+        ollamaModel: "nomic-embed-text",
+        autoReindex: true,
+        extraRoots: [],
+        ...overrides,
+      } as any);
+    }
+
+    it("writes a portable .mcp.json: ${HOME} launcher, ${CLAUDE_PROJECT_DIR} workspace, glob", async () => {
+      const { entry } = await generate();
+
+      expect(entry.command).toBe("node");
+      expect(entry.args).toEqual(["${HOME}/.doc-search/bin/mcp-server.js"]);
+      expect(entry.env.DOC_SEARCH_WORKSPACE).toBe("${CLAUDE_PROJECT_DIR}");
+      expect(entry.env.DOC_SEARCH_GLOB).toBe("doc/**/*.md");
+    });
+
+    it("writes the file with mode 0600 and tightens an existing file", async () => {
+      const { options } = await generate();
+
+      expect(options).toMatchObject({ mode: 0o600 });
+      expect(vi.mocked(fs.chmodSync)).toHaveBeenCalledWith(
+        expect.stringContaining(".mcp.json"),
+        0o600,
+      );
+    });
+
+    it("carries the user's extraRoots as DOC_SEARCH_EXTRA_ROOTS (federation must not break)", async () => {
+      const extraRoots = [{ name: "vendor", path: "~/repos/vendor/docs" }];
+      await configWith({ extraRoots });
+
+      const { entry } = await generate();
+
+      expect(JSON.parse(entry.env.DOC_SEARCH_EXTRA_ROOTS)).toEqual(extraRoots);
+    });
+
+    it("carries the Ollama provider as OLLAMA_URL / OLLAMA_MODEL", async () => {
+      await configWith({
+        embedProvider: "ollama",
+        ollamaUrl: "http://127.0.0.1:11434",
+        ollamaModel: "mxbai-embed-large",
+      });
+
+      const { entry } = await generate();
+
+      expect(entry.env.OLLAMA_URL).toBe("http://127.0.0.1:11434");
+      expect(entry.env.OLLAMA_MODEL).toBe("mxbai-embed-large");
+    });
+
+    it("references the OpenAI key as ${OPENAI_API_KEY} and never writes the secret (2.4)", async () => {
+      await configWith({ embedProvider: "openai" });
+      mockContext.secrets.get.mockResolvedValue("sk-live-secret");
+
+      const { entry, text } = await generate();
+
+      expect(entry.env.USE_OPENAI).toBe("1");
+      expect(entry.env.OPENAI_API_KEY).toBe("${OPENAI_API_KEY}");
+      expect(text).not.toContain("sk-live-secret");
+      expect(mockContext.secrets.get).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the absolute versioned path when the stable launcher cannot be written", async () => {
+      const { writeStableLaunchers } = await import("../../src/extension/stableBin.js");
+      vi.mocked(writeStableLaunchers).mockReturnValueOnce(undefined);
+
+      const { entry } = await generate();
+
+      expect(entry.args).toEqual(["/mock/extension/dist/mcp-server.js"]);
+    });
+
+    it("warns (without blocking) when .mcp.json is already tracked by git", async () => {
+      const { isGitTracked } = await import("../../src/extension/mcpJson.js");
+      vi.mocked(isGitTracked).mockReturnValueOnce(true);
+
+      await generate();
+
+      expect(vi.mocked(isGitTracked)).toHaveBeenCalledWith("/workspace", ".mcp.json");
+      expect(vi.mocked(vscode.window.showWarningMessage)).toHaveBeenCalledWith(
+        expect.stringContaining("tracked by git"),
+      );
+      expect(vi.mocked(McpSetupPanel.createOrShow)).toHaveBeenCalledWith(
+        mockContext,
+        expect.objectContaining({ mcpJsonTracked: true }),
+      );
+    });
+
+    it("does not warn when .mcp.json is not tracked", async () => {
+      await generate();
+      expect(vi.mocked(vscode.window.showWarningMessage)).not.toHaveBeenCalled();
+    });
+
+    it("hands the panel both the portable form (Claude) and the absolute form (other clients)", async () => {
+      await configWith({ embedProvider: "openai" });
+
+      await generate();
+
+      const panelDeps = vi.mocked(McpSetupPanel.createOrShow).mock.calls[0][1] as any;
+      expect(panelDeps.mcpServerPath).toBe("/mock-home/.doc-search/bin/mcp-server.js");
+      expect(panelDeps.env.DOC_SEARCH_WORKSPACE).toBe("/workspace");
+      expect(panelDeps.portable).toEqual({
+        mcpServerPath: "${HOME}/.doc-search/bin/mcp-server.js",
+        env: expect.objectContaining({ DOC_SEARCH_WORKSPACE: "${CLAUDE_PROJECT_DIR}" }),
+      });
+      // The key reference is identical in both forms — no literal anywhere.
+      expect(panelDeps.env.OPENAI_API_KEY).toBe("${OPENAI_API_KEY}");
+      expect(panelDeps.portable.env.OPENAI_API_KEY).toBe("${OPENAI_API_KEY}");
     });
 
     it("merges into an existing .mcp.json without clobbering siblings", async () => {

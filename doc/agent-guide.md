@@ -74,6 +74,16 @@ This composes with federation: one subagent sweep can cover every
   globs or `extraRoots`, an in-session `reindex_docs` still uses the old
   config — reindex via the standalone CLI (same engine, same index) or
   restart the session.
+- `extraRoots` and the embedding provider reach the server **through its
+  `env` block only** (`DOC_SEARCH_EXTRA_ROOTS`, `OLLAMA_URL` / `OLLAMA_MODEL`,
+  `USE_OPENAI`). The workspace's `.vscode/settings.json` is not trusted for
+  those keys — a cloned repo could otherwise grant itself read access to
+  `~` or redirect every query to a remote host — and the server's stderr
+  names any key it ignored. If federation "silently" covers only the
+  workspace, regenerate `.mcp.json` (**Doc Search: Generate .mcp.json**
+  writes the current setting into `env`) or, for a workspace whose settings
+  you wrote yourself, set `DOC_SEARCH_TRUST_WORKSPACE_SETTINGS=1`. See
+  [Trust model](configuration.md#trust-model).
 - The index is centralized under `~/.doc-search/indexes/<workspace-key>`
   (see [configuration](configuration.md)); the in-tree
   `.doc-search-index/` layout is deprecated.
@@ -81,7 +91,15 @@ This composes with federation: one subagent sweep can cover every
   `~/.doc-search/bin/mcp-server.js` / `~/.doc-search/bin/mcp-doc-search.js`
   rather than the versioned extension install dir — the versioned path dies
   on every extension upgrade; the launcher is refreshed on activation and
-  survives them.
+  survives them. A generated `.mcp.json` writes it as
+  `${HOME}/.doc-search/bin/mcp-server.js` with
+  `DOC_SEARCH_WORKSPACE: "${CLAUDE_PROJECT_DIR}"`, which Claude Code expands
+  at launch; the file is therefore the same for every user and checkout.
+- The OpenAI key is referenced as `${OPENAI_API_KEY}` in `.mcp.json`, never
+  written literally; it must be exported in the shell that starts the
+  client. When invoking the CLI from a sandboxed agent shell, that variable
+  may be absent — a bare `OpenAI API key is required` error means exactly
+  that.
 - Sandboxed agent shells often block `localhost`: with the Ollama
   embedding provider, a CLI reindex then fails every file with a bare
   `fetch failed`. Run reindexes outside the sandbox (or allowlist
