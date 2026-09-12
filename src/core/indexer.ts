@@ -767,6 +767,7 @@ export class Indexer {
       docGlob: this.config.docGlob,
       extraRootNames: this.config.extraRoots.map((r) => r.name),
       meta: this.loadIndexMeta() ?? undefined,
+      ftsIndex: await this.store.hasFtsIndex(),
     };
   }
 

@@ -415,6 +415,7 @@ export async function cmdStatus(flags: Record<string, string | boolean>): Promis
       `newFiles:      ${status.newFiles}\n` +
       `deletedFiles:  ${status.deletedFiles}\n` +
       `docGlob:       ${status.docGlob}\n` +
+      `fts:           ${status.ftsIndex === undefined ? "unknown" : status.ftsIndex ? "present" : "missing"}\n` +
       metaLines,
   );
 }

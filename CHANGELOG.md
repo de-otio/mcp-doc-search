@@ -105,6 +105,10 @@ limit }` when it was cut, and a file larger than 16 MiB is refused before
   treated the map as an array).
 - CLI `search` now prefixes excerpts with `[Context: …]` like `search_docs`
   does; it never passed the indexer to the searcher.
+- The MCP server and CLI defaulted `maxChunkChars` to a literal 4000 while the
+  extension defaults to `0` (model-derived), so an index touched from both
+  sides was rebuilt on every alternation. All entry points now resolve the
+  same model-derived budget and `index-meta.json` records the resolved value.
 - A context prefix written with a trailing slash (`doc/`) never matched: the
   prefix walk generates `doc`. Prefixes are now stored without trailing
   slashes (`doc/`, `doc\` and `doc` are one key) and existing `context.json`
@@ -180,6 +184,8 @@ limit }` when it was cut, and a file larger than 16 MiB is refused before
   the index.
 - Every provider reports its identity (`provider`, `model`, `dim`) so the
   index can record which model built it.
+- `status` (CLI and `IndexStatus.ftsIndex`) reports whether the full-text
+  index is present.
 
 ## [0.7.1] - 2026-09-12
 

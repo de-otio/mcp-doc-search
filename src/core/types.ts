@@ -140,6 +140,11 @@ export interface IndexStatus {
    * reindex).
    */
   meta?: IndexMeta;
+  /**
+   * Whether the full-text (BM25) index exists. False on an index built before
+   * hybrid search; `reindex` creates it. Absent when the store cannot say.
+   */
+  ftsIndex?: boolean;
 }
 
 /**

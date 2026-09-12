@@ -305,6 +305,24 @@ describe("CLI subcommands", () => {
       expect(out).toContain("2026-09-12T08:00:00.000Z");
     });
 
+    it("reports whether the full-text index is present", async () => {
+      const { cmdStatus } = await import("../../bin/mcp-doc-search.js");
+      const base = await mockIndexer.getStatus();
+
+      mockIndexer.getStatus.mockResolvedValue({ ...base, ftsIndex: true });
+      await cmdStatus({});
+      expect(stdoutSpy.mock.calls.map((c) => String(c[0])).join("")).toContain(
+        "fts:           present",
+      );
+
+      stdoutSpy.mockClear();
+      mockIndexer.getStatus.mockResolvedValue({ ...base, ftsIndex: false });
+      await cmdStatus({});
+      expect(stdoutSpy.mock.calls.map((c) => String(c[0])).join("")).toContain(
+        "fts:           missing",
+      );
+    });
+
     it("says so when no metadata has been recorded yet", async () => {
       const { cmdStatus } = await import("../../bin/mcp-doc-search.js");
 

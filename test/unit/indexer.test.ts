@@ -49,6 +49,7 @@ function makeIndexer(config?: Partial<IndexerConfig>): Indexer {
     retainedVersions: vi.fn().mockReturnValue(0),
     compact: vi.fn(),
     ensureFtsIndex: vi.fn(),
+    hasFtsIndex: vi.fn().mockResolvedValue(false),
   } as unknown as LanceVectorStore;
 
   const defaultConfig: IndexerConfig = {
@@ -83,6 +84,7 @@ describe("Indexer", () => {
       retainedVersions: vi.fn().mockReturnValue(0),
       compact: vi.fn(),
       ensureFtsIndex: vi.fn(),
+      hasFtsIndex: vi.fn().mockResolvedValue(false),
     };
 
     mockEmbedProvider = {
@@ -680,6 +682,17 @@ describe("Indexer", () => {
       expect(status).toHaveProperty("chunkCount");
       expect(status).toHaveProperty("lastIndexed");
       expect(status).toHaveProperty("needsReindex");
+    });
+
+    it("reports whether the full-text index exists", async () => {
+      const { glob } = await import("glob");
+      vi.mocked(glob).mockResolvedValue(["/workspace/doc/test.md"]);
+
+      mockStore.hasFtsIndex.mockResolvedValue(false);
+      expect((await new Indexer(config, mockStore as any).getStatus()).ftsIndex).toBe(false);
+
+      mockStore.hasFtsIndex.mockResolvedValue(true);
+      expect((await new Indexer(config, mockStore as any).getStatus()).ftsIndex).toBe(true);
     });
 
     it("drops a glob match that is itself a symlink (sec 2.3)", async () => {

@@ -157,7 +157,10 @@ export async function createEngineFromEnv(): Promise<EngineDeps> {
   const indexDir = resolved.indexDir;
   if (resolved.shouldGitignore && resolved.gitignoreEntry)
     ensureGitignored(workspaceRoot, resolved.gitignoreEntry);
-  const maxChunkChars = settings["docSearch.maxChunkChars"] ?? 4000;
+  // 0 = auto: validateConfig derives the budget from the embedding model, the
+  // same way the extension does, so both entry points record one value in
+  // index-meta.json and alternating between them never forces a rebuild.
+  const maxChunkChars = settings["docSearch.maxChunkChars"] ?? 0;
   const headingDepth = settings["docSearch.headingDepth"] ?? 2;
 
   // External roots: env var (JSON array) → settings.json (opt-in only) → none.

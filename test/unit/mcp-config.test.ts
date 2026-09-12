@@ -118,6 +118,24 @@ describe("MCP Config", () => {
       expect(engine.embedProvider).toBeInstanceOf(LocalEmbedder);
     });
 
+    it("resolves the chunk budget from the model (auto) like the extension does", async () => {
+      // A literal 4000 here made the server record a different maxChunkChars
+      // than the extension (which defaults to 0 = auto), so alternating
+      // between the two rebuilt the index every time.
+      const { readFileSync, existsSync } = await import("node:fs");
+      const { connect } = await import("@lancedb/lancedb");
+      vi.mocked(existsSync).mockReturnValue(true);
+      vi.mocked(readFileSync).mockReturnValue("{}");
+      vi.mocked(connect).mockResolvedValue({
+        openTable: vi.fn().mockRejectedValue(new Error("Not found")),
+      });
+
+      const engine = await createEngineFromEnv();
+
+      // all-MiniLM-L6-v2: 256 tokens × 3 chars, clamped to the 800 floor.
+      expect((engine.indexer as any).config.maxChunkChars).toBe(800);
+    });
+
     it("should handle malformed settings.json gracefully", async () => {
       const { readFileSync } = await import("node:fs");
       const { connect } = await import("@lancedb/lancedb");

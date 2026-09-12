@@ -25,6 +25,7 @@ import path from "node:path";
 import { Indexer, INDEX_SCHEMA_VERSION, ReindexInProgressError } from "../../src/core/indexer.js";
 import { LanceVectorStore, fileHashKey } from "../../src/core/vectorstore.js";
 import { DEFAULT_EXTRA_ROOT_GLOB } from "../../src/core/extraRoots.js";
+import { validateConfig } from "../../src/core/types.js";
 import type {
   EmbedIdentity,
   EmbedProvider,
@@ -277,6 +278,43 @@ describe("Indexer integrity (real LanceDB)", () => {
     expect(Date.parse(meta.createdAt)).not.toBeNaN();
     const status = await indexer.getStatus();
     expect(status.meta).toEqual(meta);
+  });
+
+  it("records the model-derived chunk budget (never 0) and stays stable across reindexes", async () => {
+    // Every entry point (extension, MCP server, CLI) passes its raw config
+    // through validateConfig with the live provider; 0 = "auto" resolves to
+    // the model's budget there, so index-meta.json must hold that number.
+    const MINILM: EmbedIdentity = { provider: "local", model: "Xenova/all-MiniLM-L6-v2", dim: 3 };
+    const auto = (provider: EmbedProvider): IndexerConfig =>
+      validateConfig({ ...makeConfig(provider), maxChunkChars: 0 }, provider);
+
+    const first = await new Indexer(auto(fakeProvider(3, MINILM)), store).reindex();
+    expect(first.rebuiltReason).toBeUndefined();
+    expect(readMeta(indexDir).maxChunkChars).toBe(800);
+
+    const again = await new Indexer(auto(fakeProvider(3, MINILM)), await freshStore()).reindex();
+    expect(again.rebuiltReason).toBeUndefined();
+    expect(again.indexed).toBe(0);
+    expect(readMeta(indexDir).maxChunkChars).toBe(800);
+  });
+
+  it("rebuilds when the local model changes to one of the same dimension", async () => {
+    const MINILM: EmbedIdentity = { provider: "local", model: "Xenova/all-MiniLM-L6-v2", dim: 3 };
+    const E5: EmbedIdentity = { provider: "local", model: "Xenova/multilingual-e5-small", dim: 3 };
+    const auto = (provider: EmbedProvider): IndexerConfig =>
+      validateConfig({ ...makeConfig(provider), maxChunkChars: 0 }, provider);
+
+    await new Indexer(auto(fakeProvider(3, MINILM)), store).reindex();
+    const stats = await new Indexer(auto(fakeProvider(3, E5)), await freshStore()).reindex();
+
+    expect(stats.rebuiltReason).toContain(
+      "model Xenova/all-MiniLM-L6-v2 → Xenova/multilingual-e5-small",
+    );
+    expect(stats.indexed).toBe(2);
+    expect(readMeta(indexDir)).toMatchObject({
+      model: "Xenova/multilingual-e5-small",
+      maxChunkChars: 1536,
+    });
   });
 
   it("rebuilds the whole index when the model changes, keeping unchanged files", async () => {
