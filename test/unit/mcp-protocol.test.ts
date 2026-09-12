@@ -81,6 +81,7 @@ describe("MCP protocol surface", () => {
       ),
       getWorkspaceRoot: vi.fn(() => tmpDir),
       keyForAbsPath: vi.fn((abs: string) => path.relative(tmpDir, abs)),
+      rootForAbsPath: vi.fn(() => tmpDir),
     };
     const store = {
       listFiles: vi.fn().mockResolvedValue([{ file: "doc/guide.md", title: "Guide" }]),
@@ -217,6 +218,33 @@ describe("MCP protocol surface", () => {
   ] as const)("%s: structuredContent validates and equals the text block", async (name, args) => {
     const result = await callValidated(name, args as Record<string, unknown>);
     expect(result.structuredContent).toEqual(textPayload(result));
+  });
+
+  it("get: returns the file slice, not an error, through the validated path", async () => {
+    // Guards against a mock gap: without rootForAbsPath the handler failed
+    // closed and the it.each case above validated an error payload instead.
+    const result = await callValidated("get", { ref: "#abc123", from_line: 3, max_lines: 1 });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({
+      file: "doc/guide.md",
+      docid: "abc123",
+      content: "line two",
+      lines: [3, 3],
+      truncated: false,
+    });
+  });
+
+  it("multi_get: mixes a resolved file with an unresolved ref without erroring", async () => {
+    const result = await callValidated("multi_get", { refs: "doc/guide.md, #nope" });
+    expect(result.isError).toBeFalsy();
+    const payload = result.structuredContent as {
+      docs: Array<Record<string, unknown>>;
+      errors: Array<Record<string, unknown>>;
+    };
+    expect(payload.docs).toHaveLength(1);
+    expect(payload.docs[0]).toMatchObject({ file: "doc/guide.md", docid: "abc123" });
+    expect(String(payload.docs[0].content)).toContain("line two");
+    expect(payload.errors).toEqual([{ ref: "#nope", error: expect.stringContaining("nope") }]);
   });
 
   it("an error result still carries matching structured content that validates", async () => {
