@@ -16,24 +16,69 @@ vi.mock("../../src/extension/config.js", () => ({
 
 const STABLE_LAUNCHER = "/mock-home/.doc-search/bin/mcp-server.js";
 
+const BASE_CONFIG = {
+  docGlob: "doc/**/*.md",
+  extraRoots: [],
+  embedProvider: "local" as const,
+  ollamaUrl: "http://127.0.0.1:11434",
+  ollamaModel: "nomic-embed-text",
+  openaiApiKey: "",
+};
+
 describe("buildProviderEnv", () => {
-  it("always carries the workspace root", () => {
-    expect(buildProviderEnv("/ws", { embedProvider: "local", openaiApiKey: "" })).toEqual({
+  it("carries the absolute workspace root and the glob, like the .mcp.json generator", () => {
+    expect(buildProviderEnv("/ws", BASE_CONFIG)).toEqual({
       DOC_SEARCH_WORKSPACE: "/ws",
+      DOC_SEARCH_GLOB: "doc/**/*.md",
     });
   });
 
-  it("adds the OpenAI pair only when that provider is active and a key exists", () => {
-    expect(buildProviderEnv("/ws", { embedProvider: "openai", openaiApiKey: "sk-test" })).toEqual({
+  it("forwards extra roots and the Ollama settings the server no longer reads from settings.json", () => {
+    const roots = [{ name: "notes", path: "~/notes" }];
+    expect(
+      buildProviderEnv("/ws", {
+        ...BASE_CONFIG,
+        extraRoots: roots,
+        embedProvider: "ollama",
+        ollamaUrl: "http://127.0.0.1:11434",
+        ollamaModel: "nomic-embed-text",
+      }),
+    ).toEqual({
       DOC_SEARCH_WORKSPACE: "/ws",
+      DOC_SEARCH_GLOB: "doc/**/*.md",
+      DOC_SEARCH_EXTRA_ROOTS: JSON.stringify(roots),
+      OLLAMA_URL: "http://127.0.0.1:11434",
+      OLLAMA_MODEL: "nomic-embed-text",
+    });
+  });
+
+  it("substitutes the literal OpenAI key for the ${OPENAI_API_KEY} reference VS Code cannot expand", () => {
+    const env = buildProviderEnv("/ws", {
+      ...BASE_CONFIG,
+      embedProvider: "openai",
+      openaiApiKey: "sk-test",
+    });
+    expect(env).toEqual({
+      DOC_SEARCH_WORKSPACE: "/ws",
+      DOC_SEARCH_GLOB: "doc/**/*.md",
+      USE_OPENAI: "1",
       OPENAI_API_KEY: "sk-test",
+    });
+    expect(Object.values(env)).not.toContain("${OPENAI_API_KEY}");
+  });
+
+  it("drops the key entry (so the editor's environment applies) when no key is stored", () => {
+    expect(buildProviderEnv("/ws", { ...BASE_CONFIG, embedProvider: "openai" })).toEqual({
+      DOC_SEARCH_WORKSPACE: "/ws",
+      DOC_SEARCH_GLOB: "doc/**/*.md",
       USE_OPENAI: "1",
     });
-    expect(buildProviderEnv("/ws", { embedProvider: "openai", openaiApiKey: "" })).toEqual({
+  });
+
+  it("ignores a stored key when the provider is not OpenAI", () => {
+    expect(buildProviderEnv("/ws", { ...BASE_CONFIG, openaiApiKey: "sk-test" })).toEqual({
       DOC_SEARCH_WORKSPACE: "/ws",
-    });
-    expect(buildProviderEnv("/ws", { embedProvider: "ollama", openaiApiKey: "sk-test" })).toEqual({
-      DOC_SEARCH_WORKSPACE: "/ws",
+      DOC_SEARCH_GLOB: "doc/**/*.md",
     });
   });
 });
@@ -50,7 +95,7 @@ describe("registerMcpServerDefinitionProvider", () => {
     };
     const { readConfig, readOpenAIApiKey } = await import("../../src/extension/config.js");
     vi.mocked(readOpenAIApiKey).mockResolvedValue("");
-    vi.mocked(readConfig).mockReturnValue({ embedProvider: "local", openaiApiKey: "" } as any);
+    vi.mocked(readConfig).mockReturnValue({ ...BASE_CONFIG } as any);
   });
 
   it("uses the id declared under contributes.mcpServerDefinitionProviders", () => {
@@ -85,7 +130,7 @@ describe("registerMcpServerDefinitionProvider", () => {
     expect(def.label).toBe(MCP_SERVER_LABEL);
     expect(def.command).toBe(process.execPath);
     expect(def.args).toEqual([STABLE_LAUNCHER]);
-    expect(def.env).toEqual({ DOC_SEARCH_WORKSPACE: "/ws" });
+    expect(def.env).toEqual({ DOC_SEARCH_WORKSPACE: "/ws", DOC_SEARCH_GLOB: "doc/**/*.md" });
     expect(def.version).toBe("9.9.9");
   });
 
@@ -102,6 +147,7 @@ describe("registerMcpServerDefinitionProvider", () => {
 
     vi.mocked(readOpenAIApiKey).mockResolvedValue("sk-live");
     vi.mocked(readConfig).mockReturnValue({
+      ...BASE_CONFIG,
       embedProvider: "openai",
       openaiApiKey: "sk-live",
     } as any);
@@ -111,6 +157,7 @@ describe("registerMcpServerDefinitionProvider", () => {
     expect(readConfig).toHaveBeenLastCalledWith("sk-live");
     expect(after.env).toEqual({
       DOC_SEARCH_WORKSPACE: "/ws",
+      DOC_SEARCH_GLOB: "doc/**/*.md",
       OPENAI_API_KEY: "sk-live",
       USE_OPENAI: "1",
     });

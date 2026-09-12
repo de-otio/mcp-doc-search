@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import type { ExtensionConfig } from "./config.js";
 import { readConfig, readOpenAIApiKey } from "./config.js";
+import { buildMcpServerEnv, OPENAI_API_KEY_REF } from "./mcpEnv.js";
 
 /**
  * Native MCP registration (VS Code 1.101+, `vscode.lm.registerMcpServerDefinitionProvider`).
@@ -19,23 +20,30 @@ export const MCP_PROVIDER_ID = "docSearch.mcpServers";
 export const MCP_SERVER_LABEL = "Doc Search";
 
 /** The subset of the extension config the env block depends on. */
-export type McpEnvConfig = Pick<ExtensionConfig, "embedProvider" | "openaiApiKey">;
+export type McpEnvConfig = Parameters<typeof buildMcpServerEnv>[0] &
+  Pick<ExtensionConfig, "openaiApiKey">;
 
 /**
- * Env block for a spawned MCP server: `DOC_SEARCH_WORKSPACE`, plus the
- * OpenAI pair when that provider is active and a key is available. Pure.
- *
- * TODO(WS2): unify with buildMcpServerEnv (src/extension/mcpEnv.ts) once that
- * helper lands, so the provider and the `.mcp.json` generator share one source.
+ * Env block for a natively registered MCP server: the same block the
+ * `.mcp.json` generator emits (`buildMcpServerEnv`), with two differences
+ * forced by the transport. VS Code passes a definition's env verbatim — it
+ * expands neither `${CLAUDE_PROJECT_DIR}` nor `${OPENAI_API_KEY}` — so the
+ * workspace is the absolute path, and the OpenAI key reference becomes the
+ * literal key from the extension's secret store when one is stored, or is
+ * dropped so the server inherits `OPENAI_API_KEY` from the editor's own
+ * environment. Pure.
  */
 export function buildProviderEnv(
   workspaceRoot: string,
   config: McpEnvConfig,
 ): Record<string, string> {
-  const env: Record<string, string> = { DOC_SEARCH_WORKSPACE: workspaceRoot };
-  if (config.embedProvider === "openai" && config.openaiApiKey) {
-    env.OPENAI_API_KEY = config.openaiApiKey;
-    env.USE_OPENAI = "1";
+  const env = buildMcpServerEnv(config, workspaceRoot);
+  if (env.OPENAI_API_KEY === OPENAI_API_KEY_REF) {
+    if (config.openaiApiKey) {
+      env.OPENAI_API_KEY = config.openaiApiKey;
+    } else {
+      delete env.OPENAI_API_KEY;
+    }
   }
   return env;
 }

@@ -91,7 +91,12 @@ describe("Extension", () => {
       const provider = vi.mocked(vscode.lm.registerMcpServerDefinitionProvider).mock.calls[0][1];
       const [def] = (await provider.provideMcpServerDefinitions({} as any)) as any[];
       expect(def.args).toEqual(["/mock-home/.doc-search/bin/mcp-server.js"]);
-      expect(def.env).toEqual({ DOC_SEARCH_WORKSPACE: "/workspace" });
+      // Same env the .mcp.json generator emits (buildMcpServerEnv), with the
+      // absolute workspace path because VS Code does not expand ${VAR} refs.
+      expect(def.env).toEqual({
+        DOC_SEARCH_WORKSPACE: "/workspace",
+        DOC_SEARCH_GLOB: "doc/**/*.md",
+      });
     });
 
     it("should return early if no workspace folders", async () => {

@@ -116,9 +116,6 @@ limit }` when it was cut, and a file larger than 16 MiB is refused before
   `node22`). The stable launchers under `~/.doc-search/bin` exit 1 with a
   one-line message on an older runtime instead of failing inside a native
   module. Minimum VS Code is now 1.101.
-- `@modelcontextprotocol/sdk`, `glob` and `jsonc-parser` are runtime
-  `dependencies` (they were listed under `devDependencies` although the
-  server and CLI bundles ship them).
 
 ### Added
 
