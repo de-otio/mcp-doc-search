@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Hardened the release pipeline.** Every GitHub Action is pinned to a
+  commit SHA; the workflow token is read-only except on the job that creates
+  the GitHub Release; the Marketplace publish and the release now run in a
+  `marketplace` environment that can require a maintainer's approval; manual
+  (non-dry-run) publishes wait for CI like tag pushes do; and each VSIX ships
+  with a SLSA build-provenance attestation, verifiable with
+  `gh attestation verify <file>.vsix --repo de-otio/mcp-doc-search`. The
+  pre-publish VSIX check also refuses any credential-shaped file (`.env*`,
+  `*.pem`, `*.key`, `.npmrc`, `id_*`, `*token*`, `*secret*`) at any depth in
+  the archive.
+
 ## [0.7.1] - 2026-09-12
 
 ### Fixed
