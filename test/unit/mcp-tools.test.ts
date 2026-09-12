@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { registerTools, _resetStatusCache } from "../../src/mcp/tools.js";
+import { registerTools, _resetStatusCache, attachStructuredContent } from "../../src/mcp/tools.js";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 
 vi.mock("../../src/core/searcher.js", () => ({
@@ -1112,6 +1112,213 @@ describe("MCP Tools", () => {
       expect(parsed.error).toContain("OpenAI auth failed");
       expect(parsed.error).not.toContain("/var/log");
       stderrSpy.mockRestore();
+    });
+  });
+});
+
+describe("tool metadata: annotations, outputSchema, structuredContent", () => {
+  const ALL_TOOLS = [
+    "search_docs",
+    "list_docs",
+    "reindex_docs",
+    "get",
+    "multi_get",
+    "set_context",
+    "list_contexts",
+    "remove_context",
+  ];
+  const READ_ONLY_TOOLS = ["search_docs", "get", "multi_get", "list_docs", "list_contexts"];
+  const WRITE_TOOLS = ["reindex_docs", "set_context", "remove_context"];
+
+  let mockServer: any;
+  let deps: any;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    _resetStatusCache();
+    // Earlier suites replace the fs mock implementations (e.g. to throw);
+    // clearAllMocks keeps those, so restore a readable file here.
+    const nodeFs = await import("node:fs");
+    vi.mocked(nodeFs.existsSync).mockReturnValue(true);
+    vi.mocked(nodeFs.readFileSync).mockReturnValue("line1\nline2\nline3");
+    mockServer = { setRequestHandler: vi.fn() };
+    deps = {
+      store: { query: vi.fn(), listFiles: vi.fn() },
+      indexer: {
+        reindex: vi.fn(),
+        getStatus: vi.fn().mockResolvedValue({
+          totalFiles: 1,
+          cachedFiles: 1,
+          changedFiles: 0,
+          newFiles: 0,
+          deletedFiles: 0,
+          chunkCount: 1,
+          lastIndexed: new Date(),
+          needsReindex: false,
+          docGlob: "doc/**/*.md",
+        }),
+        listContexts: vi.fn().mockReturnValue({}),
+        setContext: vi.fn(),
+        removeContext: vi.fn(),
+        getContextFor: vi.fn().mockReturnValue(""),
+        resolveRef: vi.fn(),
+        getWorkspaceRoot: vi.fn(() => "/workspace"),
+        keyForAbsPath: vi.fn((absPath: string) => absPath.replace(/^\/workspace\//, "")),
+        rootForAbsPath: vi.fn(() => "/workspace"),
+      },
+      embedProvider: { embed: vi.fn() },
+    };
+    registerTools(mockServer, deps);
+  });
+
+  async function listTools(): Promise<any[]> {
+    const handler = vi.mocked(mockServer.setRequestHandler).mock.calls[0][1];
+    return (await handler({})).tools;
+  }
+
+  async function callTool(name: string, args: Record<string, unknown> = {}): Promise<any> {
+    const handler = vi.mocked(mockServer.setRequestHandler).mock.calls[1][1];
+    return handler({ params: { name, arguments: args } });
+  }
+
+  it("registers list-tools before call-tool (tests index the handlers by position)", () => {
+    expect(vi.mocked(mockServer.setRequestHandler).mock.calls).toHaveLength(2);
+  });
+
+  it("every tool carries annotations and an object outputSchema", async () => {
+    const tools = await listTools();
+    expect(tools.map((t) => t.name).sort()).toEqual([...ALL_TOOLS].sort());
+    for (const tool of tools) {
+      expect(tool.annotations, tool.name).toBeDefined();
+      expect(tool.outputSchema?.type, tool.name).toBe("object");
+      expect(tool.outputSchema?.properties, tool.name).toBeDefined();
+    }
+  });
+
+  it("marks readers read-only and writers non-destructive idempotent", async () => {
+    const tools = await listTools();
+    const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+    for (const name of READ_ONLY_TOOLS) {
+      expect(byName[name].annotations, name).toEqual({ readOnlyHint: true });
+    }
+    for (const name of WRITE_TOOLS) {
+      expect(byName[name].annotations, name).toEqual({
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+      });
+    }
+  });
+
+  it("declares a result-size hint on get and multi_get only", async () => {
+    const tools = await listTools();
+    for (const tool of tools) {
+      const hint = tool._meta?.["anthropic/maxResultSizeChars"];
+      if (tool.name === "get" || tool.name === "multi_get") {
+        expect(typeof hint, tool.name).toBe("number");
+        expect(hint, tool.name).toBeGreaterThan(10240);
+      } else {
+        expect(tool._meta, tool.name).toBeUndefined();
+      }
+    }
+    const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+    expect(byName.multi_get._meta["anthropic/maxResultSizeChars"]).toBeGreaterThan(
+      byName.get._meta["anthropic/maxResultSizeChars"],
+    );
+  });
+
+  it("wraps the search_docs result array under results in structuredContent", async () => {
+    const { search } = await import("../../src/core/searcher.js");
+    const hits = [
+      { file: "a.md", heading: "A", excerpt: "x", score: 0.5, lineStart: 1, docid: "abc123" },
+    ];
+    vi.mocked(search).mockResolvedValue(hits as any);
+
+    const result = await callTool("search_docs", { query: "x" });
+
+    expect(JSON.parse(result.content[0].text)).toEqual(hits);
+    expect(result.structuredContent).toEqual({ results: hits });
+  });
+
+  it("wraps the list_docs result array under files in structuredContent", async () => {
+    const files = [{ file: "a.md", title: "A" }];
+    deps.store.listFiles.mockResolvedValue(files);
+
+    const result = await callTool("list_docs");
+
+    expect(JSON.parse(result.content[0].text)).toEqual(files);
+    expect(result.structuredContent).toEqual({ files });
+  });
+
+  it.each([
+    ["reindex_docs", { force: true }],
+    ["get", { ref: "#abc123" }],
+    ["multi_get", { refs: "a.md,#bad" }],
+    ["set_context", { path: "doc", text: "Docs" }],
+    ["list_contexts", {}],
+    ["remove_context", { path: "doc" }],
+  ])("%s: structuredContent equals the parsed text block", async (name, args) => {
+    deps.indexer.reindex.mockResolvedValue({
+      indexed: 1,
+      skipped: 0,
+      failedFiles: 0,
+      totalChunks: 2,
+      durationMs: 5,
+      pruned: 0,
+    });
+    deps.indexer.resolveRef.mockImplementation((ref: string) =>
+      ref === "#bad" ? { error: "Unknown ref" } : { file: "/workspace/a.md", docid: "abc123" },
+    );
+    deps.indexer.listContexts.mockReturnValue({ doc: "Docs" });
+    deps.indexer.removeContext.mockReturnValue(true);
+
+    const result = await callTool(name, args);
+
+    expect(result.content).toHaveLength(1);
+    expect(result.structuredContent).toEqual(JSON.parse(result.content[0].text));
+    expect(result.structuredContent).not.toHaveProperty("error");
+  });
+
+  it("mirrors error payloads into structuredContent too", async () => {
+    const result = await callTool("search_docs", { query: "   " });
+    expect(result.structuredContent).toEqual({ error: "Query is required." });
+
+    const unknown = await callTool("nope");
+    expect(unknown.structuredContent).toEqual({ error: "Unknown tool: nope" });
+  });
+
+  describe("attachStructuredContent", () => {
+    it("leaves non-JSON and multi-block results untouched", () => {
+      const plain = { content: [{ type: "text" as const, text: "not json" }] };
+      expect(attachStructuredContent("get", plain)).toBe(plain);
+
+      const two = {
+        content: [
+          { type: "text" as const, text: "{}" },
+          { type: "text" as const, text: "{}" },
+        ],
+      };
+      expect(attachStructuredContent("get", two)).toBe(two);
+    });
+
+    it("does not overwrite structured content a handler already set", () => {
+      const preset = {
+        content: [{ type: "text" as const, text: '{"a":1}' }],
+        structuredContent: { b: 2 },
+      };
+      expect(attachStructuredContent("get", preset)).toBe(preset);
+    });
+
+    it("wraps a bare array under a generic key for tools without a mapping", () => {
+      const result = attachStructuredContent("custom", {
+        content: [{ type: "text" as const, text: "[1,2]" }],
+      });
+      expect(result.structuredContent).toEqual({ items: [1, 2] });
+    });
+
+    it("ignores JSON scalars (structuredContent must be an object)", () => {
+      const scalar = { content: [{ type: "text" as const, text: "42" }] };
+      expect(attachStructuredContent("get", scalar)).toBe(scalar);
     });
   });
 });

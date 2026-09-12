@@ -112,6 +112,32 @@ limit }` when it was cut, and a file larger than 16 MiB is refused before
   re-embedded in full; `reindex` reports why as `rebuiltReason` (CLI: "Rebuilt
   the whole index: …"), and `status` prints the recorded provider, model,
   dimension and chunking settings.
+- **Node.js 22 or newer is required** (`engines.node >=22`, bundles target
+  `node22`). The stable launchers under `~/.doc-search/bin` exit 1 with a
+  one-line message on an older runtime instead of failing inside a native
+  module. Minimum VS Code is now 1.101.
+- `@modelcontextprotocol/sdk`, `glob` and `jsonc-parser` are runtime
+  `dependencies` (they were listed under `devDependencies` although the
+  server and CLI bundles ship them).
+
+### Added
+
+- **Native VS Code MCP registration.** The extension registers its MCP server
+  through `vscode.lm.registerMcpServerDefinitionProvider` (VS Code 1.101+), so
+  Copilot Chat and other in-editor MCP clients discover `Doc Search` without a
+  `.vscode/mcp.json` entry. The definition runs the stable launcher with the
+  same environment the generated `.mcp.json` carries. The setup panel's
+  Copilot tab now says so instead of asking for a hand-edited file.
+- **Tool annotations and structured output.** Every MCP tool declares
+  `annotations` (`readOnlyHint` on the readers; non-destructive, idempotent
+  on `reindex_docs`/`set_context`/`remove_context`) and an `outputSchema`,
+  and returns `structuredContent` alongside the JSON text block. `get` and
+  `multi_get` carry an `anthropic/maxResultSizeChars` hint. Clients that
+  auto-approve read-only tools or validate structured results can use them.
+- **Server identity and instructions.** `initialize` now reports the real
+  package name and version (built in from `package.json`; it was a hard-coded
+  `0.1.0`) and ships server `instructions` with the three agent-guide rules
+  (search before reading, scoped `get` by `#docid`, delegate broad sweeps).
 
 ## [0.7.1] - 2026-09-12
 

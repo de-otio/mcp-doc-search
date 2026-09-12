@@ -2,6 +2,12 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { glob } from "glob";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import type {
+  CallToolRequest,
+  CallToolResult,
+  Tool,
+  ToolAnnotations,
+} from "@modelcontextprotocol/sdk/types.js";
 import { search } from "../core/searcher.js";
 import { ContextValidationError } from "../core/indexer.js";
 import { assertRealpathWithin, PathTraversalError } from "../core/safePath.js";
@@ -184,6 +190,211 @@ function readRef(
   };
 }
 
+/* ---- Tool metadata: annotations, output schemas, result-size hints ---- */
+
+/** Tools that only read the index or files on disk. */
+const READ_ONLY: ToolAnnotations = { readOnlyHint: true };
+
+/**
+ * Tools that write index state (reindex) or the context map. None destroys
+ * user data — a reindex is rebuilt from the docs on disk and the context map
+ * is keyed — and each is safe to repeat with the same arguments.
+ */
+const IDEMPOTENT_WRITE: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+};
+
+type OutputSchema = NonNullable<Tool["outputSchema"]>;
+
+/** Present on every result shape: set instead of the success fields when the call failed. */
+const ERROR_PROP = {
+  error: {
+    type: "string",
+    description: "Failure message; no other fields are present when set.",
+  },
+} as const;
+
+/** One retrieved document (`get` result, `multi_get.docs[]` item). */
+const DOC_ITEM_SCHEMA = {
+  type: "object",
+  properties: {
+    file: {
+      type: "string",
+      description: "Workspace-relative path, or ext://<root>/... for an external root",
+    },
+    docid: { type: "string", description: "Stable 6-char hex id of the file's content" },
+    content: { type: "string" },
+    lines: {
+      type: "array",
+      description: "[from, to], 1-indexed, of the lines returned",
+      items: { type: "number" },
+      minItems: 2,
+      maxItems: 2,
+    },
+    truncated: { type: "boolean", description: "True when max_bytes cut the content" },
+  },
+  required: ["file", "docid", "content", "lines", "truncated"],
+} as const;
+
+/**
+ * Output schemas for `structuredContent`. Each mirrors the JSON in the text
+ * block; the two tools whose text block is a bare array (`search_docs`,
+ * `list_docs`) wrap it under a key because the spec requires an object.
+ */
+const OUTPUT_SCHEMAS: Record<string, OutputSchema> = {
+  search_docs: {
+    type: "object",
+    properties: {
+      results: {
+        type: "array",
+        description: "Ranked hits (the text block carries this array bare)",
+        items: {
+          type: "object",
+          properties: {
+            file: {
+              type: "string",
+              description: "Workspace-relative path, or ext://<root>/... for an external root",
+            },
+            heading: { type: "string" },
+            excerpt: { type: "string", description: "First ~600 chars of the matching chunk" },
+            score: { type: "number", description: "Relevance, higher is better" },
+            lineStart: { type: "number", description: "1-indexed line where the chunk starts" },
+            docid: {
+              type: "string",
+              description: "Stable 6-char hex id; pass as #docid to get/multi_get",
+            },
+            explanation: {
+              type: "object",
+              description: "Score breakdown, present only when explain: true",
+            },
+          },
+          required: ["file", "heading", "excerpt", "score", "lineStart", "docid"],
+        },
+      },
+      ...ERROR_PROP,
+    },
+  },
+  list_docs: {
+    type: "object",
+    properties: {
+      files: {
+        type: "array",
+        description: "Every indexed file (the text block carries this array bare)",
+        items: {
+          type: "object",
+          properties: {
+            file: { type: "string" },
+            title: { type: "string", description: "Top-level heading or file name" },
+          },
+          required: ["file", "title"],
+        },
+      },
+      ...ERROR_PROP,
+    },
+  },
+  reindex_docs: {
+    type: "object",
+    properties: {
+      status: { type: "string", enum: ["ok"] },
+      indexed: { type: "number" },
+      skipped: { type: "number" },
+      failedFiles: { type: "number" },
+      totalChunks: { type: "number" },
+      durationMs: { type: "number" },
+      pruned: { type: "number", description: "Files removed from the index" },
+      firstError: { type: "string", description: "First embedding/upsert error, if any" },
+      compacted: {
+        type: "object",
+        description: "Set when this run compacted the vector store",
+        properties: {
+          versionsRemoved: { type: "number" },
+          bytesRemoved: { type: "number" },
+          fragmentsRemoved: { type: "number" },
+        },
+      },
+      ...ERROR_PROP,
+    },
+  },
+  get: {
+    type: "object",
+    properties: { ...DOC_ITEM_SCHEMA.properties, ...ERROR_PROP },
+  },
+  multi_get: {
+    type: "object",
+    properties: {
+      docs: { type: "array", items: DOC_ITEM_SCHEMA },
+      errors: {
+        type: "array",
+        description: "Refs that could not be read; one bad ref does not fail the batch",
+        items: {
+          type: "object",
+          properties: { ref: { type: "string" }, error: { type: "string" } },
+          required: ["ref", "error"],
+        },
+      },
+      ...ERROR_PROP,
+    },
+  },
+  set_context: {
+    type: "object",
+    properties: { status: { type: "string", enum: ["ok"] }, ...ERROR_PROP },
+  },
+  list_contexts: {
+    type: "object",
+    description: "Path prefix → context text; empty when none are defined.",
+    properties: { ...ERROR_PROP },
+    additionalProperties: { type: "string" },
+  },
+  remove_context: {
+    type: "object",
+    properties: { removed: { type: "boolean" }, ...ERROR_PROP },
+  },
+};
+
+/**
+ * Result-size hint for Claude-family clients: the character budget a single
+ * result of the tool may need before the client should move it out of the
+ * context window. `get` is bounded by `max_bytes` (10 KB default, raised by
+ * the caller); `multi_get` multiplies that by the batch.
+ */
+const MAX_RESULT_SIZE_META = "anthropic/maxResultSizeChars";
+const GET_MAX_RESULT_CHARS = 100_000;
+const MULTI_GET_MAX_RESULT_CHARS = 400_000;
+
+/**
+ * Keys under which a bare-array text payload is wrapped in
+ * `structuredContent` (which the spec requires to be an object). The text
+ * block keeps the bare array for existing consumers.
+ */
+const ARRAY_WRAP_KEY: Record<string, string> = { search_docs: "results", list_docs: "files" };
+
+/**
+ * Attach `structuredContent` mirroring the tool's JSON text block, so clients
+ * that validate against `outputSchema` get the same payload without
+ * re-parsing. A result that is not a single JSON text block is returned as is.
+ */
+export function attachStructuredContent(name: string, result: CallToolResult): CallToolResult {
+  const first = result.content[0];
+  if (result.structuredContent || result.content.length !== 1 || first?.type !== "text") {
+    return result;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(first.text);
+  } catch {
+    return result;
+  }
+  if (Array.isArray(parsed)) {
+    return { ...result, structuredContent: { [ARRAY_WRAP_KEY[name] ?? "items"]: parsed } };
+  }
+  if (typeof parsed === "object" && parsed !== null) {
+    return { ...result, structuredContent: parsed as Record<string, unknown> };
+  }
+  return result;
+}
+
 export function registerTools(server: Server, deps: EngineDeps): void {
   const { store, indexer, embedProvider } = deps;
 
@@ -194,6 +405,8 @@ export function registerTools(server: Server, deps: EngineDeps): void {
       tools: [
         {
           name: "search_docs",
+          annotations: READ_ONLY,
+          outputSchema: OUTPUT_SCHEMAS.search_docs,
           description: buildSearchDesc(status),
           inputSchema: {
             type: "object",
@@ -207,6 +420,8 @@ export function registerTools(server: Server, deps: EngineDeps): void {
         },
         {
           name: "list_docs",
+          annotations: READ_ONLY,
+          outputSchema: OUTPUT_SCHEMAS.list_docs,
           description: buildListDesc(status),
           inputSchema: {
             type: "object",
@@ -216,6 +431,8 @@ export function registerTools(server: Server, deps: EngineDeps): void {
         },
         {
           name: "reindex_docs",
+          annotations: IDEMPOTENT_WRITE,
+          outputSchema: OUTPUT_SCHEMAS.reindex_docs,
           description: buildReindexDesc(status),
           inputSchema: {
             type: "object",
@@ -227,6 +444,9 @@ export function registerTools(server: Server, deps: EngineDeps): void {
         },
         {
           name: "get",
+          annotations: READ_ONLY,
+          outputSchema: OUTPUT_SCHEMAS.get,
+          _meta: { [MAX_RESULT_SIZE_META]: GET_MAX_RESULT_CHARS },
           description: [
             "Retrieve the content of a single documentation file.",
             "",
@@ -261,6 +481,9 @@ export function registerTools(server: Server, deps: EngineDeps): void {
         },
         {
           name: "multi_get",
+          annotations: READ_ONLY,
+          outputSchema: OUTPUT_SCHEMAS.multi_get,
+          _meta: { [MAX_RESULT_SIZE_META]: MULTI_GET_MAX_RESULT_CHARS },
           description: [
             "Batch-retrieve multiple documentation files.",
             "",
@@ -296,6 +519,8 @@ export function registerTools(server: Server, deps: EngineDeps): void {
         },
         {
           name: "set_context",
+          annotations: IDEMPOTENT_WRITE,
+          outputSchema: OUTPUT_SCHEMAS.set_context,
           description: [
             "Add a one-line description of what kind of docs live under a path prefix.",
             "Subsequent search results from that subtree will include the context as",
@@ -320,6 +545,8 @@ export function registerTools(server: Server, deps: EngineDeps): void {
         },
         {
           name: "list_contexts",
+          annotations: READ_ONLY,
+          outputSchema: OUTPUT_SCHEMAS.list_contexts,
           description: `List all ${contextCount} path-context mapping${contextCount === 1 ? "" : "s"} currently defined.\nEach entry is a path prefix mapped to a short description used to annotate search results.`,
           inputSchema: {
             type: "object",
@@ -329,6 +556,8 @@ export function registerTools(server: Server, deps: EngineDeps): void {
         },
         {
           name: "remove_context",
+          annotations: IDEMPOTENT_WRITE,
+          outputSchema: OUTPUT_SCHEMAS.remove_context,
           description: [
             "Remove the path-context entry for the given prefix.",
             "Returns { removed: true } if the entry existed, { removed: false } if not.",
@@ -345,7 +574,7 @@ export function registerTools(server: Server, deps: EngineDeps): void {
     };
   });
 
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const handleCallTool = async (request: CallToolRequest): Promise<CallToolResult> => {
     const { name, arguments: args } = request.params;
     const input = (args ?? {}) as Record<string, unknown>;
 
@@ -666,5 +895,9 @@ export function registerTools(server: Server, deps: EngineDeps): void {
         },
       ],
     };
-  });
+  };
+
+  server.setRequestHandler(CallToolRequestSchema, async (request) =>
+    attachStructuredContent(request.params.name, await handleCallTool(request)),
+  );
 }

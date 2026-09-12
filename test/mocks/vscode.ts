@@ -35,6 +35,18 @@ export const ViewColumn = { One: 1 };
 export const ProgressLocation = { Notification: 15 };
 export const env = { clipboard: { writeText: vi.fn() } };
 export const RelativePattern = vi.fn();
+export const lm = {
+  registerMcpServerDefinitionProvider: vi.fn(() => ({ dispose: vi.fn() })),
+};
+export class McpStdioServerDefinition {
+  constructor(
+    public readonly label: string,
+    public command: string,
+    public args: string[] = [],
+    public env: Record<string, string | number | null> = {},
+    public version?: string,
+  ) {}
+}
 export const ExtensionContext = class {
   secrets = { store: vi.fn(), get: vi.fn(), delete: vi.fn() };
   subscriptions: any[] = [];

@@ -7,6 +7,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { registerTools } from "./tools.js";
+import { SERVER_INFO, SERVER_INSTRUCTIONS } from "./serverInfo.js";
 import type { EngineDeps } from "./config.js";
 import { sanitizeForClient } from "./errors.js";
 
@@ -141,10 +142,10 @@ export async function startHttpServer(
    * The expensive deps are captured via closure and shared across requests.
    */
   function createMcpServer(): Server {
-    const server = new Server(
-      { name: "doc-search", version: "0.1.0" },
-      { capabilities: { tools: {} } },
-    );
+    const server = new Server(SERVER_INFO, {
+      capabilities: { tools: {} },
+      instructions: SERVER_INSTRUCTIONS,
+    });
     registerTools(server, deps);
     return server;
   }

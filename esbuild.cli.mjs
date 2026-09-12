@@ -4,7 +4,7 @@ await esbuild.build({
   entryPoints: ["bin/mcp-doc-search.ts"],
   bundle: true,
   platform: "node",
-  target: "node18",
+  target: "node22",
   outfile: "dist/mcp-doc-search.js",
   external: ["@lancedb/lancedb", "@huggingface/transformers"],
   alias: {
