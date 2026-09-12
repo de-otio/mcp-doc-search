@@ -85,14 +85,17 @@ Progress callbacks report `(processed, total, file, phase)` where phase is `scan
 
 ### Searcher (`searcher.ts`)
 
-Hybrid search combining vector similarity with keyword re-ranking:
+Hybrid search fusing vector similarity with a full-text index:
 
-1. **Embed** the query with `search_query:` prefix
-2. **Vector search** — fetch 3x candidates from LanceDB (cosine distance)
-3. **Keyword boost** — tokenize query (with camelCase expansion), count term matches in each chunk, add `hits * 0.03` to the score
-4. **Re-rank** — sort by final score, return top N
+1. **Embed** every query (the primary `query` plus any `queries`, at most 5) with the `search_query:` prefix, in one batch
+2. **Vector search** — per query, fetch the top 3n candidates from LanceDB (cosine distance, capped at 300)
+3. **Full-text search** — per query, fetch the top 3n BM25 matches from LanceDB's inverted index on `text` (literal, lowercased tokens; no stemming)
+4. **Fuse** — reciprocal rank fusion (`1 / (60 + rank)` summed over every list), deterministic tie-break on similarity
+5. **Return** the top N; `score` is the chunk's cosine similarity, the order is the RRF order
 
-The keyword boost prevents purely semantic matches from dominating when exact terms appear in the documentation.
+A chunk the embedding misses but the exact terms hit is recovered through the full-text list. If the table has no full-text index yet (or it is stale mid-reindex) the full-text side is skipped with a warning and ranking is vector-only.
+
+The full-text index is maintained by the indexer: it is rebuilt at the end of every `reindex()` that wrote or pruned rows (LanceDB 0.13 leaves stale postings behind after deletes, which can make a query fail), and the store rebuilds it again after compaction, which invalidates the inverted index's row mapping.
 
 ## VS Code Extension (`src/extension/`)
 
@@ -160,13 +163,13 @@ Done
 ### Searching
 
 ```
-User query
+User query (+ optional alternative phrasings)
     ↓ embedder.embed()
-Query vector
-    ↓ store.query(vector, n*3)
-Candidate chunks (over-fetched)
-    ↓ keywordBoost()
-Scored candidates
-    ↓ sort + slice(0, n)
-Top N results
+Query vectors
+    ↓ store.query(vector, n*3)        ↓ store.fullTextQuery(text, n*3)
+Vector candidates (per query)        Full-text candidates (per query)
+    ↓ rrfFuse()  — 1 / (60 + rank) summed over every list
+Fused candidates
+    ↓ slice(0, n)
+Top N results (score = cosine similarity, order = RRF)
 ```

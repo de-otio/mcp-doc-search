@@ -4,7 +4,7 @@ MCP Doc Search is a semantic documentation search system that combines a VS Code
 
 ## Key Features
 
-- **Hybrid search** — vector similarity combined with keyword re-ranking for accurate results
+- **Hybrid search** — vector similarity fused with full-text (BM25) matching, so exact identifiers are found as written
 - **Heading-aware chunking** — splits markdown on `#`/`##` boundaries, preserving document structure
 - **Local embeddings** — uses `all-MiniLM-L6-v2` (ONNX, 22MB) out of the box
 - **Incremental indexing** — only re-embeds files that have changed (mtime-based caching)
@@ -17,7 +17,7 @@ MCP Doc Search is a semantic documentation search system that combines a VS Code
 2. **Search** using natural language queries from VS Code or any MCP-compatible AI assistant
 3. **Navigate** directly to the relevant section in your docs
 
-The system chunks your markdown files at heading boundaries, generates vector embeddings for each chunk, and stores them in a local LanceDB database. When you search, your query is embedded and matched against the stored vectors, then re-ranked with keyword boosting for the best results.
+The system chunks your markdown files at heading boundaries, generates vector embeddings for each chunk, and stores them in a local LanceDB database. When you search, your query is embedded and matched against the stored vectors and, in parallel, against a full-text index of the chunk text; the two candidate lists are fused by reciprocal rank fusion.
 
 ## Components
 

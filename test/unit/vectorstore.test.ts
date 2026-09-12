@@ -26,6 +26,8 @@ describe("LanceVectorStore", () => {
       query: vi.fn(),
       countRows: vi.fn(),
       optimize: vi.fn(),
+      listIndices: vi.fn().mockResolvedValue([]),
+      createIndex: vi.fn(),
     };
 
     mockDb = {

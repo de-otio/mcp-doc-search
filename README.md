@@ -13,7 +13,7 @@ Large repos can have hundreds or thousands of markdown files of documentation. T
 - **MCP server**: `search_docs`, `list_docs`, `reindex_docs`, `get`, `multi_get`, plus per-file `set_context` / `list_contexts` / `remove_context` tools so any MCP-compatible AI assistant can find and read the right document in a single call
 - **Local embeddings**: auto-downloads `all-MiniLM-L6-v2` (ONNX, 22MB) on first use, then works fully offline — no API key required
 - **Heading-aware chunking**: splits markdown on `#`/`##` boundaries, skips code fences, prepends document title as breadcrumb context
-- **Hybrid search**: vector similarity + keyword re-ranking (+0.03 per matching term, camelCase-aware)
+- **Hybrid search**: vector similarity fused with a BM25 full-text index (reciprocal rank fusion), so exact identifiers and German terms are matched literally, not only by meaning
 
 ## Quick start
 
@@ -65,7 +65,7 @@ Their files appear in results as `ext://vendor-docs/<path>` and are fetchable th
 
 ### Understanding scores
 
-Each result includes a `score` (0–1) computed from vector similarity plus keyword re-ranking:
+Each result includes a `score` (0–1): the cosine similarity between your query and the chunk's embedding.
 
 | Score   | Meaning             |
 | ------- | ------------------- |
@@ -74,13 +74,28 @@ Each result includes a `score` (0–1) computed from vector similarity plus keyw
 | 0.2–0.5 | Somewhat relevant   |
 | 0.0–0.2 | Low relevance       |
 
+Results are **ordered by rank fusion**, not by `score` alone (see [Hybrid search](#hybrid-search)): a chunk that matches your exact terms can appear above one with a higher similarity. A low-scoring hit near the top therefore usually means "found by the literal terms, not by meaning".
+
 Pass `explain: true` to `search_docs` to get a detailed breakdown:
 
-- `vectorScore` — raw cosine similarity from embeddings
-- `keywordTermsMatched` — query terms found in the chunk
-- `keywordBonus` — boost applied (+0.03 per matching term)
-- `finalScore` — combined score (same as `score`)
+- `vectorScore` — cosine similarity from embeddings (same as `score`)
+- `vectorRank` — position in the vector candidate list, or `null` if only the full-text side found it
+- `ftsRank` — position in the full-text (BM25) candidate list, or `null` if no term matched literally
+- `rrfScore` — the fused score the ordering is sorted by
+- `keywordTermsMatched` — query terms found in the chunk text
+- `finalScore` — same as `score`
 - `rank` — position in result list (1-indexed)
+
+### Hybrid search
+
+Every search runs two candidate lists per query and fuses them with reciprocal rank fusion (RRF, k = 60):
+
+1. **Vector** — the query embedding's nearest chunks (top 3n, capped at 300)
+2. **Full-text** — a BM25 inverted index over chunk text (top 3n). Terms are lowercased and matched literally; punctuation splits tokens (`dot:workstream` matches `dot` and `workstream`), there is no stemming, so identifiers, setting keys and German compounds hit exactly as written.
+
+A chunk found by both sides rises to the top; a chunk the embedding misses but the words hit is still recovered. Phrase queries as one concept per call and include exact identifiers where you know them. To fuse several phrasings (a synonym, the German term, an identifier) in one round trip, pass `queries: ["...", "..."]` alongside `query` — at most 5 distinct queries in total.
+
+The full-text index is built and refreshed by `reindex`. An index created before 0.8 has none until its next reindex; until then search silently ranks by vector similarity only (a warning is logged).
 
 ### MCP integration
 
@@ -253,7 +268,7 @@ src/
     chunker.ts   # Markdown heading-aware chunking with fence detection
     embedder.ts  # LocalEmbedder, OllamaEmbedder, OpenAIEmbedder
     vectorstore.ts  # LanceDB wrapper (file-backed, cosine metric)
-    searcher.ts  # Hybrid search: vector + keyword re-ranking
+    searcher.ts  # Hybrid search: vector + full-text (BM25), reciprocal rank fusion
     indexer.ts   # Crawl, chunk, embed, upsert with mtime cache
   extension/     # VS Code extension shell
   mcp/           # MCP server: stdio + HTTP daemon transports

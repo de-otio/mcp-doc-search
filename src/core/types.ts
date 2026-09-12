@@ -21,12 +21,23 @@ export interface DocChunk {
 }
 
 export interface SearchExplanation {
-  /** Raw cosine similarity before keyword bonus */
+  /** Cosine similarity between the query and the chunk (same as SearchResult.score) */
   vectorScore: number;
-  /** Query terms that matched in the chunk text/heading */
+  /**
+   * 1-indexed position in the vector candidate list, or null when the chunk
+   * was recovered through the full-text side only. With several queries this
+   * is the best rank across them.
+   */
+  vectorRank: number | null;
+  /**
+   * 1-indexed position in the full-text (BM25) candidate list, or null when
+   * the chunk was not matched literally. Best rank across queries.
+   */
+  ftsRank: number | null;
+  /** Reciprocal-rank-fusion score the ranking is sorted by (sum of 1/(60 + rank)). */
+  rrfScore: number;
+  /** Query terms (see tokenizeQuery) found as substrings of the chunk text */
   keywordTermsMatched: string[];
-  /** Total keyword bonus applied */
-  keywordBonus: number;
   /** Final score (same as SearchResult.score, for completeness) */
   finalScore: number;
   /** 1-indexed position in result list */
@@ -38,7 +49,11 @@ export interface SearchResult {
   heading: string;
   /** First 600 chars of chunk text */
   excerpt: string;
-  /** vector_score + keyword_boost, rounded to 3 decimals */
+  /**
+   * Cosine similarity between query and chunk in [0, 1], rounded to 3
+   * decimals. Results are ordered by reciprocal rank fusion of the vector and
+   * full-text candidate lists, so `score` is not monotonic in rank.
+   */
   score: number;
   lineStart: number;
   /** Stable docid: first 6 chars of SHA-256 hex of the file's full content */
@@ -101,6 +116,15 @@ export interface IndexStatus {
 export type PathContext = Record<string, string>;
 
 /**
+ * LanceDB scan/full-text query builder (minimal shape for type safety)
+ */
+export interface LanceQuery {
+  fullTextSearch(query: string, options?: { columns?: string | string[] }): LanceQuery;
+  limit(n: number): LanceQuery;
+  toArray(): Promise<unknown[]>;
+}
+
+/**
  * LanceDB table interface (minimal shape for type safety)
  */
 export interface LanceTable {
@@ -112,8 +136,10 @@ export interface LanceTable {
   };
   delete(filter: string): Promise<void>;
   add(records: unknown[]): Promise<void>;
-  query(): { toArray(): Promise<unknown[]> };
+  query(): LanceQuery;
   countRows(): Promise<number>;
+  createIndex(column: string, options?: { config?: unknown; replace?: boolean }): Promise<void>;
+  listIndices(): Promise<Array<{ name: string; indexType: string; columns: string[] }>>;
   optimize(options?: { cleanupOlderThan?: Date }): Promise<{
     compaction: { fragmentsRemoved: number; fragmentsAdded: number };
     prune: { bytesRemoved: number; oldVersionsRemoved: number };

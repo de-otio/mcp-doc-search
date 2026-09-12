@@ -80,7 +80,11 @@ This composes with federation: one subagent sweep can cover every
   localhost). A **single** file failing with a context-length message is
   different and benign — since 0.5.2 the embedder truncates and retries
   such chunks automatically.
-- `search_docs` scores are 0–1 (vector similarity + keyword re-rank);
-  results below ~0.5 are usually noise. An empty result for a topic the
+- `search_docs` scores are 0–1 (cosine similarity); the _order_ fuses the
+  vector and full-text ranks, so a low score near the top means the exact
+  terms matched — check `explain` (`ftsRank`) before dismissing it. Results
+  with a low score and no literal match are usually noise. Phrase one
+  concept per call, include exact identifiers, and pass alternative
+  phrasings in `queries` rather than issuing several calls. An empty result for a topic the
   agent can see on disk means the index is stale — suggest a reindex
   rather than silently falling back to grep.

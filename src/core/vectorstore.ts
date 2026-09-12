@@ -41,7 +41,21 @@ export interface VectorRecord {
   docid: string;
 }
 
-/** Result from a vector query (before keyword re-ranking). */
+/** Result from a full-text (BM25) query. */
+export interface FtsQueryResult {
+  file: string;
+  heading: string;
+  lineStart: number;
+  text: string;
+  /** Stable docid: first 6 chars of SHA-256 hex of file content */
+  docid: string;
+  /** Stored embedding, so the searcher can report a cosine score for FTS-only hits. */
+  vector: number[];
+  /** BM25 relevance (unbounded; only its rank order is used). */
+  _score: number;
+}
+
+/** Result from a vector query (before rank fusion). */
 export interface VectorQueryResult {
   file: string;
   heading: string;
@@ -201,7 +215,13 @@ export class LanceVectorStore {
    */
   async compact(): Promise<CompactStats | null> {
     if (!this.table) return null;
+    const hadFts = await this.hasFtsIndex();
     const stats = await this.table.optimize({ cleanupOlderThan: new Date() });
+    // Compaction rewrites row addresses but LanceDB 0.13 does not remap the
+    // inverted index, so full-text hits come back pointing at the wrong rows
+    // afterwards (verified on 0.13: `needle` returned 1 of 21 rows, the wrong
+    // one). Rebuilding here keeps that invariant inside the store.
+    if (hadFts) await this.ensureFtsIndex(true);
     return {
       versionsRemoved: stats.prune.oldVersionsRemoved,
       bytesRemoved: stats.prune.bytesRemoved,
@@ -220,5 +240,93 @@ export class LanceVectorStore {
   async close(): Promise<void> {
     this.table = null;
     this.db = null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Full-text search (BM25 inverted index on `text`)
+  // ---------------------------------------------------------------------------
+
+  /** Name LanceDB assigns to the inverted index on the `text` column. */
+  static readonly FTS_INDEX_NAME = "text_idx";
+
+  /** True when the table carries a full-text index (any state, possibly stale). */
+  async hasFtsIndex(): Promise<boolean> {
+    if (!this.table) return false;
+    const indices = await this.table.listIndices();
+    return indices.some((i) => i.indexType === "FTS" && i.columns.includes("text"));
+  }
+
+  /**
+   * Build (or rebuild) the full-text index on `text`.
+   *
+   * Behaviour verified on LanceDB 0.13: rows added after the index was built
+   * are still found (the unindexed tail is scanned), but rows deleted since
+   * the build leave stale postings behind — a query for a term whose only
+   * posting was deleted panics inside Lance and the query rejects. Every
+   * reindex deletes a file's old chunks before re-adding them, so the index
+   * must be rebuilt after any run that wrote or pruned rows. Rebuilding also
+   * keeps `optimize()` working: with unindexed rows carrying new tokens it
+   * throws `token ... not found`.
+   *
+   * @param rebuild - when false, only create the index if none exists yet
+   *   (first run after upgrading an existing index); when true, always
+   *   replace it.
+   * @returns true when an index was (re)built.
+   */
+  async ensureFtsIndex(rebuild: boolean): Promise<boolean> {
+    if (!this.table) return false;
+    if (!rebuild && (await this.hasFtsIndex())) return false;
+    const lancedb = await import("@lancedb/lancedb");
+    // Positions only serve phrase queries, which the searcher never issues;
+    // dropping them makes the index smaller and faster to rebuild on save.
+    await this.table.createIndex("text", {
+      config: lancedb.Index.fts({ withPosition: false }),
+      replace: true,
+    });
+    return true;
+  }
+
+  /**
+   * Full-text (BM25) query over chunk text, best match first.
+   *
+   * Terms are matched literally after lowercasing; punctuation splits tokens
+   * (`dot:workstream` matches `dot` and `workstream`), there is no stemming
+   * and no stopword removal. An empty query yields no rows. Rejects when the
+   * table has no full-text index yet or the index is stale after deletes —
+   * callers fall back to vector-only ranking.
+   */
+  async fullTextQuery(query: string, n: number): Promise<FtsQueryResult[]> {
+    if (!this.table) return [];
+    if (!query.trim() || n <= 0) return [];
+
+    // No column projection: every stored column is needed here anyway, and a
+    // table written before the `docid` column existed makes an explicit
+    // select() fail with "Column docid does not exist".
+    const rows = await this.table
+      .query()
+      .fullTextSearch(query, { columns: "text" })
+      .limit(n)
+      .toArray();
+
+    return rows.map((row) => {
+      const r = row as {
+        file: string;
+        heading: string;
+        lineStart: number;
+        text: string;
+        docid?: string;
+        vector?: ArrayLike<number>;
+        _score?: number;
+      };
+      return {
+        file: r.file,
+        heading: r.heading,
+        lineStart: r.lineStart,
+        text: r.text,
+        docid: r.docid ?? "",
+        vector: r.vector ? Array.from(r.vector) : [],
+        _score: r._score ?? 0,
+      };
+    });
   }
 }
