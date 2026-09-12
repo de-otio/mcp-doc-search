@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **The MCP server and CLI no longer trust the workspace's
+  `.vscode/settings.json` for keys that reach outside the workspace.**
+  `docSearch.extraRoots`, `docSearch.embedProvider`, `docSearch.ollamaUrl` and
+  `docSearch.ollamaModel` are read from the environment only
+  (`DOC_SEARCH_EXTRA_ROOTS`, `USE_OPENAI` / `OLLAMA_URL`, `OLLAMA_MODEL`). A
+  cloned repository could previously grant itself read access to any directory
+  (`extraRoots` pointing at `~`) or redirect every chunk and query to a remote
+  host (`ollamaUrl`). Settings.json is consulted for those keys only with
+  `DOC_SEARCH_TRUST_WORKSPACE_SETTINGS=1`, with a stderr notice either way;
+  even then an Ollama URL from settings.json must be loopback. The environment
+  now wins over settings.json for every key (the Ollama URL and model were
+  checked in the wrong order). Workspace-contained keys (`docGlob`,
+  `headingDepth`, `maxChunkChars`, `indexLocation`, `indexDir`) still work
+  from settings.json.
+- **Generated `.mcp.json` is portable and carries the settings the server
+  needs.** `Doc Search: Generate .mcp.json` now writes
+  `${HOME}/.doc-search/bin/mcp-server.js` and
+  `DOC_SEARCH_WORKSPACE: "${CLAUDE_PROJECT_DIR}"` (Claude Code expands both),
+  plus `DOC_SEARCH_GLOB`, `DOC_SEARCH_EXTRA_ROOTS` and the provider variables
+  built from your effective VS Code configuration — so federation keeps
+  working under the new trust model. The OpenAI key is written as the
+  reference `${OPENAI_API_KEY}`, never as the literal; the file is created
+  with mode 0600 (existing files are tightened); and the command warns when
+  `.mcp.json` is already tracked by git. The setup panel's CLI snippet
+  single-quotes env values so a shell cannot splice the key in. The
+  activation-time repair recognises the `${HOME}` launcher form as current.
+  The setup panel shows absolute-path variants for clients that do not expand
+  `${VAR}` references. Regenerate `.mcp.json` once after upgrading if you use
+  external roots or a non-local provider through MCP.
+
 ## [0.7.1] - 2026-09-12
 
 ### Fixed

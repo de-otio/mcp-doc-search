@@ -2,8 +2,18 @@ import * as vscode from "vscode";
 import { getNonce } from "./utils.js";
 
 interface McpSetupDeps {
+  /** Absolute launcher path — for clients that do not expand `${HOME}`. */
   mcpServerPath: string;
+  /** Env with an absolute workspace path — for clients that do not expand `${CLAUDE_PROJECT_DIR}`. */
   env: Record<string, string>;
+  /**
+   * The portable form as written to `.mcp.json` (Claude Code expands the
+   * `${HOME}` / `${CLAUDE_PROJECT_DIR}` references at launch). Defaults to
+   * the absolute form.
+   */
+  portable?: { mcpServerPath: string; env: Record<string, string> };
+  /** True when `.mcp.json` is tracked by git in this workspace; the panel warns. */
+  mcpJsonTracked?: boolean;
 }
 
 export class McpSetupPanel {
@@ -60,22 +70,44 @@ export class McpSetupPanel {
   private getHtml(deps: McpSetupDeps): string {
     const nonce = getNonce();
     const { mcpServerPath, env } = deps;
+    const portable = deps.portable ?? { mcpServerPath, env };
+    const workspaceRoot = env.DOC_SEARCH_WORKSPACE ?? "";
+    const usesOpenAI = env.USE_OPENAI === "1";
 
-    // Build the various config snippets
+    // Build the various config snippets. The Claude Code tabs show the
+    // portable form that was written to .mcp.json; the other clients get
+    // absolute paths because they do not expand ${HOME} / ${CLAUDE_PROJECT_DIR}.
     const claudeCodeJson = JSON.stringify(
       {
         mcpServers: {
-          "doc-search": { command: "node", args: [mcpServerPath], env },
+          "doc-search": {
+            command: "node",
+            args: [portable.mcpServerPath],
+            env: portable.env,
+          },
         },
       },
       null,
       2,
     );
 
+    // Single-quoted so the shell passes any ${VAR} reference through
+    // literally for Claude Code to expand at launch — with double quotes the
+    // shell would splice the real OpenAI key into the stored config.
     const envFlags = Object.entries(env)
-      .map(([k, v]) => `-e ${k}="${v}"`)
+      .map(([k, v]) => `-e '${k}=${v.replace(/'/g, "'\\''")}'`)
       .join(" \\\n  ");
     const claudeCliCmd = `claude mcp add doc-search \\\n  -s project \\\n  ${envFlags} \\\n  -- node "${mcpServerPath}"`;
+
+    const trackedNote = deps.mcpJsonTracked
+      ? `<div class="note">⚠️ <code>.mcp.json</code> is <strong>tracked by git</strong> in this workspace, so the generated config will be committed. Run <code>git rm --cached .mcp.json</code> to keep it local.</div>`
+      : "";
+    const openAiNote = usesOpenAI
+      ? `<div class="note">The OpenAI key is referenced as <code>${escapeHtml(env.OPENAI_API_KEY ?? "")}</code> and never written into the file. Export <code>OPENAI_API_KEY</code> in the shell that starts Claude Code (for example in <code>~/.zshrc</code>); Claude Code substitutes it when it launches the server.</div>`
+      : "";
+    const otherClientKeyNote = usesOpenAI
+      ? `<div class="note">The snippet references the OpenAI key as <code>${escapeHtml(env.OPENAI_API_KEY ?? "")}</code>. If this client does not expand environment references in <code>env</code> values, export <code>OPENAI_API_KEY</code> in the shell that starts the editor instead of pasting the key into the file.</div>`
+      : "";
 
     const continueYaml = `name: Doc Search MCP\nversion: 0.0.1\nschema: v1\nmcpServers:\n  - name: Doc Search\n    type: stdio\n    command: node\n    args:\n      - "${mcpServerPath}"\n    env:\n${Object.entries(
       env,
@@ -264,8 +296,10 @@ export class McpSetupPanel {
     <p>Claude will call the <code>search_docs</code> tool and return results from your documentation.</p>
 
     <div class="note">
-      ⚠️ The generated <code>.mcp.json</code> file contains absolute paths specific to your machine and has been added to <code>.gitignore</code>. Do not commit it to version control.
+      The generated <code>.mcp.json</code> is portable: the server path and workspace are written as <code>${escapeHtml(portable.mcpServerPath)}</code> and <code>${escapeHtml(portable.env.DOC_SEARCH_WORKSPACE ?? "")}</code>, which Claude Code expands at launch, and your external roots and embedding provider travel in its <code>env</code> block (the server no longer reads them from <code>.vscode/settings.json</code>). The file is written with mode <code>0600</code> and added to <code>.gitignore</code>.
     </div>
+    ${openAiNote}
+    ${trackedNote}
 
     <h3>Generated .mcp.json</h3>
     <div class="code-block"><button class="copy-btn" data-copy="${escapeAttr(claudeCodeJson)}">Copy</button>${escapeHtml(claudeCodeJson)}</div>
@@ -277,14 +311,15 @@ export class McpSetupPanel {
     <p>The CLI also reads <code>.mcp.json</code> from the workspace root automatically. Since the file has been generated, you can simply run <code>claude</code> from this workspace.</p>
 
     <h3><span class="step-num">1</span> Start Claude Code</h3>
-    <div class="code-block"><button class="copy-btn" data-copy="cd ${escapeAttr(env.DOC_SEARCH_WORKSPACE)}\nclaude">Copy</button>cd ${escapeHtml(env.DOC_SEARCH_WORKSPACE)}
+    <div class="code-block"><button class="copy-btn" data-copy="cd ${escapeAttr(workspaceRoot)}\nclaude">Copy</button>cd ${escapeHtml(workspaceRoot)}
 claude</div>
 
     <h3><span class="step-num">2</span> Verify</h3>
     <p>Ask Claude to search your docs. It will find and use the <code>search_docs</code> tool automatically.</p>
+    ${openAiNote}
 
     <h3>Alternative: add via CLI command</h3>
-    <p>If you prefer to add the server explicitly (or want it in user scope rather than project scope):</p>
+    <p>If you prefer to add the server explicitly (or want it in user scope rather than project scope). Values are single-quoted so the shell passes any <code>\${VAR}</code> reference through for Claude Code to expand:</p>
     <div class="code-block"><button class="copy-btn" data-copy="${escapeAttr(claudeCliCmd)}">Copy</button>${escapeHtml(claudeCliCmd)}</div>
 
     <p>To verify it was added:</p>
@@ -329,6 +364,7 @@ claude</div>
     <div class="note">
       Continue uses YAML format with a <code>mcpServers</code> array (not an object). Each server needs <code>type: stdio</code> explicitly.
     </div>
+    ${otherClientKeyNote}
   </div>
 
   <!-- Kilo Code -->
@@ -349,6 +385,7 @@ claude</div>
     <div class="note">
       You can also configure globally via <strong>Edit Global MCP</strong> in Kilo Code settings, which writes to <code>mcp_settings.json</code>.
     </div>
+    ${otherClientKeyNote}
   </div>
 
   <script nonce="${nonce}">

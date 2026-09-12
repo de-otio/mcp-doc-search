@@ -42,7 +42,7 @@ Additional directories **outside the workspace** to index alongside the workspac
 - External roots are scanned during reindex (command or `reindex_docs` tool); the save-time file watcher only covers the workspace, so refresh an external root by reindexing after you `git pull` it.
 - A root whose directory is missing (unmounted disk, not yet cloned) is skipped without pruning its existing index entries; removing the root from the setting prunes them on the next reindex.
 
-**Security note:** every configured root grants doc-search MCP/CLI clients read access to that directory subtree. The MCP server reads this setting from `.vscode/settings.json`, which is workspace-controlled — review it when opening untrusted workspaces. Refs into a root are containment-checked against the root's real path; `..` traversal out of a root is rejected.
+**Security note:** every configured root grants doc-search MCP/CLI clients read access to that directory subtree. The MCP server and CLI therefore take this setting from the `DOC_SEARCH_EXTRA_ROOTS` environment variable only — the workspace's `.vscode/settings.json` is not consulted unless you opt in (see [Trust model](#trust-model)). The **Generate .mcp.json** command writes your effective VS Code setting into the `env` block for you. Refs into a root are containment-checked against the root's real path; `..` traversal out of a root is rejected.
 
 ### docSearch.indexLocation
 
@@ -163,22 +163,60 @@ When enabled, the extension automatically reindexes files when they are saved. O
 | Open Walkthrough      | `docSearch.openWalkthrough` | Step-by-step onboarding guide                      |
 | Generate .mcp.json    | `docSearch.generateMcpJson` | Create MCP server config (`.mcp.json`)             |
 
+## Trust model
+
+The extension runs inside VS Code, which refuses to run it at all in a
+Restricted Mode (untrusted) workspace. The standalone MCP server and CLI have
+no such gate, and a cloned repository is attacker-controlled: anyone who can
+commit to it can commit a `.vscode/settings.json`. Two of the settings above
+can reach outside the workspace — `docSearch.extraRoots` grants read access to
+arbitrary directories, and `docSearch.embedProvider` with `docSearch.ollamaUrl`
+would send every chunk and every query to a host of the repo's choosing. So the
+MCP server and CLI apply these rules:
+
+- **Trust-sensitive keys come from the environment only.** `extraRoots`, the
+  embedding provider, the Ollama URL and the Ollama model are read from
+  `DOC_SEARCH_EXTRA_ROOTS`, `USE_OPENAI` / `OLLAMA_URL` and `OLLAMA_MODEL` —
+  i.e. from your own `.mcp.json` or shell. The same keys in
+  `.vscode/settings.json` are ignored, with a one-line stderr notice naming
+  them, unless `DOC_SEARCH_TRUST_WORKSPACE_SETTINGS=1` is set. Set that only
+  for workspaces whose settings you wrote yourself; the server then prints a
+  notice that it is trusting the file.
+- **The environment always wins.** For every key, an environment variable
+  overrides the settings.json value, whether or not the opt-in is set. (Earlier
+  versions checked settings.json first for the Ollama URL and model.)
+- **The Ollama URL from settings.json must be loopback.** Even after the
+  opt-in, a `docSearch.ollamaUrl` whose host is not `localhost`, `127.x.x.x`
+  or `::1` is replaced by the default with a stderr warning. A remote Ollama
+  host is supported by setting `OLLAMA_URL` in the environment.
+- **Workspace-contained keys still come from settings.json.** `docGlob`,
+  `headingDepth`, `maxChunkChars`, `indexLocation` and `indexDir` cannot escape
+  the workspace (the glob and index directory are validated separately) and
+  keep working from `.vscode/settings.json` as before. The OpenAI key was
+  already never read from that file.
+
+Because of the first rule, the **Generate .mcp.json** command writes your
+effective VS Code configuration into the `env` block of `.mcp.json` — external
+roots included — so federation keeps working without the opt-in. Regenerate
+the file after changing `extraRoots` or the provider.
+
 ## MCP Server Environment Variables
 
 When running the MCP server standalone, these environment variables configure behavior:
 
-| Variable                    | Default             | Description                                                                                            |
-| --------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------ |
-| `DOC_SEARCH_WORKSPACE`      | (required)          | Workspace root path                                                                                    |
-| `DOC_SEARCH_GLOB`           | `doc/**/*.md`       | File glob pattern                                                                                      |
-| `DOC_SEARCH_EXTRA_ROOTS`    | (empty)             | JSON array of external roots (same shape as `docSearch.extraRoots`); overrides the settings.json value |
-| `DOC_SEARCH_HOME`           | `~/.doc-search`     | Base directory for global index (requires absolute path)                                               |
-| `DOC_SEARCH_INDEX_LOCATION` | `global`            | Index location mode: `global` or `workspace` (deprecated)                                              |
-| `DOC_SEARCH_INDEX_DIR`      | `.doc-search-index` | Deprecated: workspace-mode index directory (relative to workspace root)                                |
-| `USE_OPENAI`                | `0`                 | Set to `1` to use OpenAI embeddings                                                                    |
-| `OPENAI_API_KEY`            | (empty)             | OpenAI API key                                                                                         |
-| `OLLAMA_URL`                | (empty)             | Ollama server URL (enables Ollama provider)                                                            |
-| `OLLAMA_MODEL`              | `nomic-embed-text`  | Ollama model name                                                                                      |
+| Variable                              | Default             | Description                                                                                                   |
+| ------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `DOC_SEARCH_WORKSPACE`                | (required)          | Workspace root path (`${CLAUDE_PROJECT_DIR}` in a generated `.mcp.json`; Claude Code expands it)              |
+| `DOC_SEARCH_GLOB`                     | `doc/**/*.md`       | File glob pattern                                                                                             |
+| `DOC_SEARCH_EXTRA_ROOTS`              | (empty)             | JSON array of external roots (same shape as `docSearch.extraRoots`); the only source unless the opt-in is set |
+| `DOC_SEARCH_TRUST_WORKSPACE_SETTINGS` | (unset)             | Set to `1` to also read `extraRoots`, the provider, Ollama URL and model from `.vscode/settings.json`         |
+| `DOC_SEARCH_HOME`                     | `~/.doc-search`     | Base directory for global index (requires absolute path)                                                      |
+| `DOC_SEARCH_INDEX_LOCATION`           | `global`            | Index location mode: `global` or `workspace` (deprecated)                                                     |
+| `DOC_SEARCH_INDEX_DIR`                | `.doc-search-index` | Deprecated: workspace-mode index directory (relative to workspace root)                                       |
+| `USE_OPENAI`                          | `0`                 | Set to `1` to use OpenAI embeddings                                                                           |
+| `OPENAI_API_KEY`                      | (empty)             | OpenAI API key (a generated `.mcp.json` references it as `${OPENAI_API_KEY}`; export it in your shell)        |
+| `OLLAMA_URL`                          | (empty)             | Ollama server URL (enables Ollama provider; any host is accepted from the environment)                        |
+| `OLLAMA_MODEL`                        | `nomic-embed-text`  | Ollama model name                                                                                             |
 
 ## Troubleshooting
 

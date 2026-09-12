@@ -55,7 +55,7 @@ Open VS Code settings and set:
 ]
 ```
 
-Their files appear in results as `ext://vendor-docs/<path>` and are fetchable through `get`/`multi_get` like any other ref. External roots are re-scanned on reindex (the save-time watcher covers only the workspace), and can be edited in the settings panel ("Doc Search: Open Settings" → "External folders") or directly in settings.json. Note that a configured root grants doc-search clients read access to that subtree — review the setting in untrusted workspaces. Details in [doc/configuration.md](doc/configuration.md).
+Their files appear in results as `ext://vendor-docs/<path>` and are fetchable through `get`/`multi_get` like any other ref. External roots are re-scanned on reindex (the save-time watcher covers only the workspace), and can be edited in the settings panel ("Doc Search: Open Settings" → "External folders") or directly in settings.json. Note that a configured root grants doc-search clients read access to that subtree — so the MCP server and CLI take it from the `DOC_SEARCH_EXTRA_ROOTS` environment variable only, never from a cloned repo's `.vscode/settings.json` (the generated `.mcp.json` carries your setting in its `env` block). Details and the opt-in in [doc/configuration.md](doc/configuration.md#trust-model).
 
 ### Use it
 
@@ -84,7 +84,7 @@ Pass `explain: true` to `search_docs` to get a detailed breakdown:
 
 ### MCP integration
 
-After running "Generate .mcp.json", connect any MCP-compatible client (Claude Code, Cursor, etc.). The generated config points at the **stable launcher** `~/.doc-search/bin/mcp-server.js` — a forwarder the extension refreshes on every activation — so it keeps working across extension upgrades instead of embedding a versioned install path. The MCP tools appear automatically:
+After running "Generate .mcp.json", connect any MCP-compatible client (Claude Code, Cursor, etc.). The generated config is portable — it points at the **stable launcher** as `${HOME}/.doc-search/bin/mcp-server.js` (a forwarder the extension refreshes on every activation, so it survives upgrades) with `DOC_SEARCH_WORKSPACE` set to `${CLAUDE_PROJECT_DIR}`, and carries your external roots and embedding provider in its `env` block, which is the only place the server reads them from. It is written with mode 0600 and gitignored. The MCP tools appear automatically:
 
 ```
 search_docs("authentication flow")               → semantic search
@@ -110,7 +110,7 @@ If the client is an AI coding agent, see the [Agent Guide](doc/agent-guide.md) f
 | `ollama`          | Better (768-dim) | `brew install ollama && ollama pull nomic-embed-text` | Free            |
 | `openai`          | Best (1536-dim)  | Enter the key in the Doc Search Settings panel        | ~$0.02/M tokens |
 
-The OpenAI API key is stored in VS Code's SecretStorage (the OS keychain) — never in `settings.json`. For the standalone MCP server and CLI, set the `OPENAI_API_KEY` environment variable in your `.mcp.json` `env` block or shell; the generated `.mcp.json` (via **Doc Search: Generate .mcp.json**) copies the key from SecretStorage into that block for you.
+The OpenAI API key is stored in VS Code's SecretStorage (the OS keychain) — never in `settings.json`. For the standalone MCP server and CLI, export `OPENAI_API_KEY` in your shell; the generated `.mcp.json` (via **Doc Search: Generate .mcp.json**) references it as `"${OPENAI_API_KEY}"`, which Claude Code expands at launch, and never contains the key itself.
 
 Doc Search probes the provider before a large reindex and stops with a specific
 error — server unreachable, model not pulled, bad key — rather than failing file
@@ -159,7 +159,7 @@ mcp-doc-search context remove doc/api.md
 
 **Flags:** `--json` (machine-readable output), `--files` (paths only, for `search`/`multi-get`), `--explain` (score breakdown for `search`).
 
-**Environment:** same as the MCP server — `DOC_SEARCH_WORKSPACE`, `DOC_SEARCH_GLOB`, `DOC_SEARCH_HOME`, `DOC_SEARCH_INDEX_LOCATION`, `DOC_SEARCH_INDEX_DIR`, `USE_OPENAI=1`, `OLLAMA_URL`.
+**Environment:** same as the MCP server — `DOC_SEARCH_WORKSPACE`, `DOC_SEARCH_GLOB`, `DOC_SEARCH_EXTRA_ROOTS`, `DOC_SEARCH_HOME`, `DOC_SEARCH_INDEX_LOCATION`, `DOC_SEARCH_INDEX_DIR`, `USE_OPENAI=1`, `OLLAMA_URL`, `OLLAMA_MODEL`. External roots and the provider are read from the environment only (see [Trust model](doc/configuration.md#trust-model)).
 
 **Exit codes:** 0 = success, 1 = user error (bad args / missing file), 2 = engine error.
 

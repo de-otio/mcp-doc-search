@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { execFileSync } from "node:child_process";
 
 /**
  * A doc-search server path is recognized as one we own (and may rewrite) only
@@ -9,6 +10,21 @@ import * as path from "node:path";
  * deliberate custom command alone.
  */
 const EXTENSION_MARKER = "mcp-doc-search";
+
+/**
+ * True for the portable launcher form the generator writes —
+ * `${HOME}/.doc-search/bin/mcp-server.js` or any other `${VAR}`-rooted
+ * `mcp-server.js` path. Such a path is expanded by the MCP client at launch
+ * and is current by construction, so the repair must leave it alone. Pure.
+ */
+export function isPortableLauncherRef(arg: unknown): boolean {
+  if (typeof arg !== "string") return false;
+  if (!/^\$\{[A-Za-z_][A-Za-z0-9_]*\}[\\/]/.test(arg)) return false;
+  // Both separators are split explicitly rather than via path.basename,
+  // whose behaviour depends on the host platform.
+  const segments = arg.split(/[\\/]/);
+  return segments[segments.length - 1] === "mcp-server.js";
+}
 
 /**
  * Compute a repaired `.mcp.json` when its doc-search MCP server points at a
@@ -48,6 +64,9 @@ export function repairMcpServerPath(
   const args = (entry as Record<string, unknown>).args;
   if (!Array.isArray(args)) return undefined;
 
+  // A portable file is already current: the client expands the reference.
+  if (args.some(isPortableLauncherRef)) return undefined;
+
   const idx = args.findIndex(
     (a) =>
       typeof a === "string" && path.basename(a) === "mcp-server.js" && a.includes(EXTENSION_MARKER),
@@ -75,6 +94,25 @@ export function repairMcpJson(workspaceRoot: string, expectedServerPath: string)
   if (repaired === undefined) return false;
   try {
     fs.writeFileSync(mcpJsonPath, repaired, "utf8");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * True iff `relPath` is tracked by git in the repository containing
+ * `workspaceRoot`. A generated `.mcp.json` that is already committed would
+ * publish whatever the generator writes into it, so the generator warns.
+ * Best-effort: no git, no repository, or an untracked file all yield false.
+ * Never throws.
+ */
+export function isGitTracked(workspaceRoot: string, relPath: string): boolean {
+  try {
+    execFileSync("git", ["-C", workspaceRoot, "ls-files", "--error-unmatch", "--", relPath], {
+      stdio: "ignore",
+      timeout: 5_000,
+    });
     return true;
   } catch {
     return false;
