@@ -66,20 +66,31 @@ Factory function `createEmbedProvider(config)` instantiates the correct provider
 Wraps `@lancedb/lancedb` with a file-backed database:
 
 - **Cosine distance** metric for similarity
-- **Operations:** `upsert`, `query`, `deleteByFile`, `listFiles`, `count`
-- **Schema:** `{id, text, file, heading, lineStart, vector}`
+- **Operations:** `upsert`, `query`, `deleteByFile`, `dropTable`, `listFiles`, `count`
+- **Schema:** `{id, text, file, fileHash, heading, lineStart, vector, docid}` —
+  `fileHash` is the SHA-256 of `file`; `deleteByFile` filters on it so index
+  keys of any shape (`ext://…`, spaces, non-ASCII) can be deleted without
+  escaping. A failed delete is logged and rethrown, never swallowed.
 - No server process — reads/writes directly to disk
 
 ### Indexer (`indexer.ts`)
 
 Orchestrates the full indexing pipeline:
 
-1. **Crawl** — glob for matching files
-2. **mtime check** — skip files unchanged since last index (reads `mtime_cache.json`)
-3. **Chunk** — split each file via the chunker
-4. **Embed** — batch embed chunk texts
-5. **Delete + Upsert** — remove old chunks for the file, insert new ones
-6. **Cache** — write updated mtimes
+1. **Lock** — take `<indexDir>/reindex.lock` (`O_EXCL`, pid + start time); a
+   live holder makes the run throw `ReindexInProgressError`, a dead one is
+   replaced. Released in `finally`, after compaction.
+2. **Crawl** — glob for matching files
+3. **Metadata check** — compare `index-meta.json` (schema version, provider,
+   model, vector dimension, `maxChunkChars`, `headingDepth`) with the live
+   config; on any difference, or on a non-empty index with no metadata, drop
+   the table and the mtime cache and re-embed everything (`rebuiltReason`)
+4. **mtime check** — skip files unchanged since last index (reads `mtime_cache.json`)
+5. **Chunk** — split each file via the chunker
+6. **Embed** — batch embed chunk texts
+7. **Delete + Upsert** — remove old chunks for the file, insert new ones
+8. **Cache** — write updated mtimes (temp file + rename, like every JSON file
+   in the index directory)
 
 Progress callbacks report `(processed, total, file, phase)` where phase is `scanning`, `loading`, or `indexing`.
 
@@ -153,7 +164,7 @@ DocChunk[]
 DocChunk[] + vectors
     ↓ store.deleteByFile() + store.upsert()
 LanceDB table
-    ↓ write mtime_cache.json
+    ↓ write mtime_cache.json (+ index-meta.json on a fresh or rebuilt index)
 Done
 ```
 

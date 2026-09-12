@@ -147,7 +147,7 @@ mcp-doc-search get doc/api.md --from-line 20 --max-lines 50
 mcp-doc-search multi-get "doc/**/*.md" --files         # list matched paths
 mcp-doc-search multi-get "doc/a.md,doc/b.md" --json
 
-# Index health
+# Index health (file counts plus the recorded embedding model and chunking settings)
 mcp-doc-search status
 mcp-doc-search status --json
 
