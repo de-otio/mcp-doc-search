@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-09-12
+
 ### Fixed
 
 - **Index directories no longer grow without bound.** LanceDB keeps a table
@@ -17,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (sub-second in steady state). The CLI reports what was reclaimed, and the
   MCP `reindex_docs` result carries it as `compacted`. Existing bloated
   indexes are cleaned up on their next reindex.
+
+### Security
+
+- Bumped the bundled `sharp` to 0.35.4 (GHSA-rgj7-g3m4-5g8c, libheif). The
+  extension never processes images, but `sharp` ships inside the VSIX as a
+  transitive dependency of the local embedder.
 
 ## [0.7.0] - 2026-08-28
 
