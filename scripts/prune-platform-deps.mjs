@@ -35,21 +35,31 @@ function rmDir(p, label) {
   }
 }
 
-// onnxruntime-node ships all platform binaries in one package.
+// onnxruntime-node ships all platform binaries in one package under
+// bin/napi-v<N>/<os>/<arch>. The N moves between releases (v3 up to 1.21,
+// v6 from 1.24) — a hardcoded name silently prunes nothing and the VSIX
+// balloons past the size cap, so iterate whatever napi-* dirs exist.
 // Remove other OS dirs, then remove other arch dirs within the target OS.
-const onnxDir = "node_modules/onnxruntime-node/bin/napi-v3";
-if (existsSync(onnxDir)) {
+const onnxBin = "node_modules/onnxruntime-node/bin";
+const napiDirs = existsSync(onnxBin)
+  ? readdirSync(onnxBin).filter((d) => d.startsWith("napi-"))
+  : [];
+if (napiDirs.length === 0) {
+  console.error(`No ${onnxBin}/napi-* directory found; nothing pruned for onnxruntime-node`);
+  process.exit(1);
+}
+for (const napi of napiDirs) {
+  const onnxDir = join(onnxBin, napi);
   for (const dir of readdirSync(onnxDir)) {
     if (dir !== platform) {
-      rmDir(join(onnxDir, dir), `onnxruntime-node/bin/napi-v3/${dir}`);
+      rmDir(join(onnxDir, dir), `onnxruntime-node/bin/${napi}/${dir}`);
     }
   }
-  // Also remove non-target architectures within the platform dir
   const platformDir = join(onnxDir, platform);
   if (existsSync(platformDir)) {
     for (const archDir of readdirSync(platformDir)) {
       if (archDir !== arch) {
-        rmDir(join(platformDir, archDir), `onnxruntime-node/bin/napi-v3/${platform}/${archDir}`);
+        rmDir(join(platformDir, archDir), `onnxruntime-node/bin/${napi}/${platform}/${archDir}`);
       }
     }
   }
