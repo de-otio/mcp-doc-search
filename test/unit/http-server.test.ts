@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { request as httpRequest } from "node:http";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -164,6 +165,144 @@ describe("POST /mcp body size cap", () => {
     } catch (err) {
       // Connection cut mid-upload — the cap was enforced before we finished.
       expect(String(err)).toMatch(/EPIPE|ECONNRESET|terminated|fetch failed|socket/i);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sec 2.2: Host / Origin validation (DNS-rebinding protection)
+// ---------------------------------------------------------------------------
+
+describe("Host / Origin validation", () => {
+  let handle: ServerHandle;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    const { startHttpServer } = await import("../../src/mcp/http.js");
+    const deps = makeStubDeps();
+    handle = await startHttpServer(deps, 0, 60_000);
+  });
+
+  afterEach(async () => {
+    await handle?.close();
+  });
+
+  const initBody = JSON.stringify({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "test-client", version: "1.0.0" },
+    },
+  });
+
+  const baseHeaders = {
+    "Content-Type": "application/json",
+    Accept: "application/json, text/event-stream",
+  };
+
+  /**
+   * Raw request over node:http. `fetch` (undici) silently drops a caller-set
+   * `Host` header, so it cannot impersonate a rebinding page; http.request
+   * sends exactly the headers given.
+   */
+  function rawRequest(opts: {
+    path: string;
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+  }): Promise<{ status: number; body: string }> {
+    return new Promise((resolve, reject) => {
+      const req = httpRequest(
+        {
+          host: "127.0.0.1",
+          port: handle.port,
+          path: opts.path,
+          method: opts.method ?? "GET",
+          headers: opts.headers,
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (c: Buffer) => chunks.push(c));
+          res.on("end", () =>
+            resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }),
+          );
+        },
+      );
+      req.on("error", reject);
+      req.end(opts.body);
+    });
+  }
+
+  it("rejects a foreign Host header with 403 (DNS rebinding)", async () => {
+    // A rebinding page resolves attacker.example to 127.0.0.1; the browser
+    // still sends the attacker's name as Host.
+    const res = await rawRequest({
+      path: "/mcp",
+      method: "POST",
+      headers: { ...baseHeaders, Host: `attacker.example:${handle.port}` },
+      body: initBody,
+    });
+    expect(res.status).toBe(403);
+    expect(res.body).toMatch(/host/i);
+  });
+
+  it("rejects a loopback Host whose port does not match the bound port", async () => {
+    const res = await rawRequest({
+      path: "/mcp",
+      method: "POST",
+      headers: { ...baseHeaders, Host: `127.0.0.1:${handle.port + 1}` },
+      body: initBody,
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("rejects a foreign Host on /health too — the gate runs before routing", async () => {
+    const res = await rawRequest({
+      path: "/health",
+      headers: { Host: "attacker.example" },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("rejects any request carrying an Origin header with 403", async () => {
+    // Even a same-host Origin is refused: CLI/IDE MCP clients never send one,
+    // so its presence means a browser context is calling.
+    const res = await rawRequest({
+      path: "/mcp",
+      method: "POST",
+      headers: {
+        ...baseHeaders,
+        Host: `127.0.0.1:${handle.port}`,
+        Origin: `http://127.0.0.1:${handle.port}`,
+      },
+      body: initBody,
+    });
+    expect(res.status).toBe(403);
+    expect(JSON.parse(res.body).error).toMatch(/cross-origin/i);
+  });
+
+  it("rejects an Origin sent by fetch as well", async () => {
+    const res = await fetch(`http://127.0.0.1:${handle.port}/health`, {
+      headers: { Origin: "http://evil.example" },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("leaves a normal loopback request unchanged (127.0.0.1 and localhost)", async () => {
+    for (const host of ["127.0.0.1", "localhost"]) {
+      const res = await rawRequest({
+        path: "/mcp",
+        method: "POST",
+        headers: { ...baseHeaders, Host: `${host}:${handle.port}` },
+        body: initBody,
+      });
+      expect(res.status).toBe(200);
+      const body = JSON.parse(res.body) as { jsonrpc: string; id: number };
+      expect(body.jsonrpc).toBe("2.0");
+      expect(body.id).toBe(1);
     }
   });
 });

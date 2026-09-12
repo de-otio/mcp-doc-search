@@ -9,6 +9,16 @@ vi.mock("../../src/core/searcher.js", () => ({
 vi.mock("node:fs", () => ({
   existsSync: vi.fn(() => true),
   readFileSync: vi.fn(() => "line1\nline2\nline3\nline4\nline5"),
+  // readRef's pre-read checks: size cap (statSync) and symlink containment
+  // (realpathSync.native on both root and leaf; lstatSync in the crawl).
+  statSync: vi.fn(() => ({ size: 100 })),
+  lstatSync: vi.fn(() => ({ isSymbolicLink: () => false })),
+  realpathSync: Object.assign(
+    vi.fn((p: string) => p),
+    { native: vi.fn((p: string) => p) },
+  ),
+  mkdirSync: vi.fn(),
+  writeFileSync: vi.fn(),
 }));
 
 vi.mock("glob", () => ({
@@ -51,6 +61,7 @@ describe("MCP Tools", () => {
       getContextFor: vi.fn().mockReturnValue(""),
       resolveRef: vi.fn(),
       getWorkspaceRoot: vi.fn(() => "/workspace"),
+      rootForAbsPath: vi.fn(() => "/workspace"),
       keyForAbsPath: vi.fn((absPath: string) =>
         absPath.startsWith("/workspace/") ? absPath.slice("/workspace/".length) : absPath,
       ),
@@ -487,6 +498,225 @@ describe("MCP Tools", () => {
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.truncated).toBe(true);
       expect(parsed.content.length).toBeLessThanOrEqual(10);
+    });
+
+    // -----------------------------------------------------------------------
+    // Sec 2.3: response caps and symlink containment in get / multi_get
+    // -----------------------------------------------------------------------
+
+    it("get: clamps max_bytes above the 1 MiB ceiling", async () => {
+      const { readFileSync } = await import("node:fs");
+      const { MAX_BYTES_CEILING } = await import("../../src/mcp/tools.js");
+      // 1 MiB + 1 byte of content; the caller asks for far more than that.
+      vi.mocked(readFileSync).mockReturnValue("a".repeat(MAX_BYTES_CEILING + 1));
+      mockIndexer.resolveRef.mockReturnValue({ file: "/workspace/doc/big.md", docid: "b16b16" });
+
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
+      const result = await callToolHandler({
+        params: { name: "get", arguments: { ref: "doc/big.md", max_bytes: 1e12 } },
+      });
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.truncated).toBe(true);
+      expect(Buffer.byteLength(parsed.content, "utf8")).toBe(MAX_BYTES_CEILING);
+    });
+
+    it("get: clamps max_lines above the 5000-line ceiling (and defaults to it)", async () => {
+      const { readFileSync } = await import("node:fs");
+      const { MAX_LINES_CEILING } = await import("../../src/mcp/tools.js");
+      const lines = Array.from({ length: MAX_LINES_CEILING + 10 }, (_, i) => `l${i + 1}`);
+      vi.mocked(readFileSync).mockReturnValue(lines.join("\n"));
+      mockIndexer.resolveRef.mockReturnValue({
+        file: "/workspace/doc/long.md",
+        docid: "10d6e5",
+      });
+
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
+      for (const args of [
+        { ref: "doc/long.md", max_lines: 1e9, max_bytes: 1e6 },
+        { ref: "doc/long.md", max_bytes: 1e6 },
+      ]) {
+        const result = await callToolHandler({ params: { name: "get", arguments: args } });
+        const parsed = JSON.parse(result.content[0].text);
+        expect(parsed.lines).toEqual([1, MAX_LINES_CEILING]);
+        expect(parsed.content.split("\n")).toHaveLength(MAX_LINES_CEILING);
+      }
+    });
+
+    it("get: refuses a file larger than the read ceiling before reading it", async () => {
+      const { readFileSync, statSync } = await import("node:fs");
+      const { MAX_FILE_BYTES } = await import("../../src/mcp/tools.js");
+      vi.mocked(statSync).mockReturnValueOnce({ size: MAX_FILE_BYTES + 1 } as any);
+      vi.mocked(readFileSync).mockClear();
+      mockIndexer.resolveRef.mockReturnValue({
+        file: "/workspace/doc/huge.md",
+        docid: "0000ff",
+      });
+
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
+      const result = await callToolHandler({
+        params: { name: "get", arguments: { ref: "doc/huge.md" } },
+      });
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.error).toMatch(/too large/i);
+      expect(parsed.error).not.toContain("/workspace");
+      expect(vi.mocked(readFileSync)).not.toHaveBeenCalled();
+    });
+
+    it("get: refuses a ref whose real path leaves the workspace via a symlink", async () => {
+      const { readFileSync, realpathSync } = await import("node:fs");
+      vi.mocked(readFileSync).mockClear();
+      // Root canonicalizes to itself; the leaf canonicalizes to a path outside.
+      vi.mocked(realpathSync.native).mockImplementation(((p: string) =>
+        p === "/workspace/doc/link.md" ? "/home/victim/.ssh/id_ed25519" : p) as any);
+      mockIndexer.resolveRef.mockReturnValue({
+        file: "/workspace/doc/link.md",
+        docid: "11a11a",
+      });
+
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
+      const result = await callToolHandler({
+        params: { name: "get", arguments: { ref: "doc/link.md" } },
+      });
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.error).toMatch(/symlink/i);
+      expect(parsed.error).not.toContain("/home/victim");
+      expect(parsed.error).not.toContain("/workspace");
+      expect(vi.mocked(readFileSync)).not.toHaveBeenCalled();
+      vi.mocked(realpathSync.native).mockImplementation(((p: string) => p) as any);
+    });
+
+    it("multi_get: caps a glob at 500 matches and reports the truncation", async () => {
+      const { glob } = await import("glob");
+      const { readFileSync } = await import("node:fs");
+      const { MAX_GLOB_MATCHES } = await import("../../src/mcp/tools.js");
+      const total = MAX_GLOB_MATCHES + 7;
+      const matches = Array.from(
+        { length: total },
+        (_, i) => `doc/${String(i).padStart(4, "0")}.md`,
+      );
+      vi.mocked(glob).mockResolvedValue(matches);
+      vi.mocked(readFileSync).mockReturnValue("x");
+      mockIndexer.resolveRef.mockImplementation((ref: string) => ({
+        file: `/workspace/${ref}`,
+        docid: "abcdef",
+      }));
+
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
+      const result = await callToolHandler({
+        params: { name: "multi_get", arguments: { refs: "doc/**/*.md" } },
+      });
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.docs).toHaveLength(MAX_GLOB_MATCHES);
+      expect(parsed.docs[0].file).toBe("doc/0000.md");
+      expect(parsed.globTruncated).toEqual({ matched: total, limit: MAX_GLOB_MATCHES });
+      // The glob is asked not to follow symlinked directories.
+      expect(vi.mocked(glob).mock.calls[0]?.[1]).toMatchObject({ follow: false, nodir: true });
+    });
+
+    it("multi_get: omits the truncation marker when a glob fits the cap", async () => {
+      const { glob } = await import("glob");
+      const { readFileSync } = await import("node:fs");
+      vi.mocked(glob).mockResolvedValue(["doc/a.md"]);
+      vi.mocked(readFileSync).mockReturnValue("x");
+      mockIndexer.resolveRef.mockReturnValue({ file: "/workspace/doc/a.md", docid: "abcdef" });
+
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
+      const result = await callToolHandler({
+        params: { name: "multi_get", arguments: { refs: "doc/*.md" } },
+      });
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.docs).toHaveLength(1);
+      expect(parsed).not.toHaveProperty("globTruncated");
+    });
+
+    it("set_context: surfaces a ContextValidationError as a typed, path-free error", async () => {
+      const { ContextValidationError } = await import("../../src/core/indexer.js");
+      mockIndexer.setContext.mockImplementation(() => {
+        throw new ContextValidationError("Context text exceeds 200 characters (got 201)");
+      });
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
+      const result = await callToolHandler({
+        params: { name: "set_context", arguments: { path: "doc", text: "x".repeat(201) } },
+      });
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.error).toBe("Context text exceeds 200 characters (got 201)");
+      // A validation refusal is not an operator-facing error: nothing logged.
+      expect(stderr).not.toHaveBeenCalled();
+      stderr.mockRestore();
+    });
+
+    it("set_context: echoes the stored (sanitized) text and updatedAt", async () => {
+      mockIndexer.setContext.mockReturnValue({
+        text: "Roadmap (v2)",
+        updatedAt: "2026-09-12T10:00:00.000Z",
+      });
+
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+
+      const callToolHandler = vi.mocked(mockServer.setRequestHandler).mock.calls[1]?.[1];
+      const result = await callToolHandler({
+        params: { name: "set_context", arguments: { path: "doc", text: "Roadmap [v2]" } },
+      });
+
+      expect(JSON.parse(result.content[0].text)).toEqual({
+        status: "ok",
+        text: "Roadmap (v2)",
+        updatedAt: "2026-09-12T10:00:00.000Z",
+      });
     });
 
     it("get: returns error for nonexistent ref", async () => {

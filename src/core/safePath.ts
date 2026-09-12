@@ -7,11 +7,15 @@
  * POSIX, and prefix attacks (`workspace-evil` vs `workspace`) all need to
  * be rejected here, not at each call site.
  *
- * Symlinks: this helper validates the resolved path; if the caller later
- * passes that path to fs functions, the OS will follow symlinks normally.
- * Callers that need symlink-aware containment should use realpath separately.
+ * Symlinks: `resolveSafePath` / `resolveWithinBase` validate the resolved
+ * path string only; if the caller later passes that path to fs functions, the
+ * OS will follow symlinks normally. Callers that read file content must
+ * additionally run the filesystem-aware check (`assertRealpathWithin`), and
+ * crawlers must drop symlinked entries (`isSymlinkOrEscapes`) — a committed
+ * `doc/link -> ~/.ssh` passes string containment.
  */
 
+import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 
 /** Thrown when a ref escapes (or attempts to escape) the workspace root. */
@@ -104,6 +108,79 @@ export function resolveWithinBase(baseDir: string, ref: string): string {
   }
 
   return resolved;
+}
+
+/**
+ * Canonical (symlink-free) absolute form of a root directory, via
+ * `realpathSync.native`. Throws if the directory does not exist.
+ *
+ * Roots themselves are routinely symlinked (`/tmp -> /private/tmp` on macOS,
+ * `~/repos -> /Volumes/...`), so every real-path containment check must
+ * compare against the canonical root, never the configured string.
+ */
+export function canonicalRoot(dir: string): string {
+  return realpathSync.native(path.resolve(dir));
+}
+
+/**
+ * True when the canonical form of `absPath` is `realRoot` or lives under it.
+ * `realRoot` must already be canonical (see `canonicalRoot`). Returns false
+ * when `absPath` cannot be canonicalized (missing, dangling link, EACCES):
+ * a path we cannot see through is treated as outside.
+ */
+export function isUnderRealRoot(realRoot: string, absPath: string): boolean {
+  let real: string;
+  try {
+    real = realpathSync.native(absPath);
+  } catch {
+    return false;
+  }
+  const rootWithSep = realRoot.endsWith(path.sep) ? realRoot : realRoot + path.sep;
+  return real === realRoot || real.startsWith(rootWithSep);
+}
+
+/**
+ * Filesystem-aware containment for a path that already passed string
+ * containment. Canonicalizes both `rootDir` and `absPath` and asserts the
+ * canonical leaf is still under the canonical root — so a file symlink, or a
+ * symlinked parent directory, pointing outside the root is rejected.
+ *
+ * Returns the canonical path (pass this, not `absPath`, to the read).
+ * Throws `PathTraversalError`; the message never includes either path.
+ */
+export function assertRealpathWithin(rootDir: string, absPath: string): string {
+  let realRoot: string;
+  try {
+    realRoot = canonicalRoot(rootDir);
+  } catch {
+    throw new PathTraversalError(absPath, "root directory is not available");
+  }
+  let real: string;
+  try {
+    real = realpathSync.native(absPath);
+  } catch {
+    throw new PathTraversalError(absPath, "path could not be resolved");
+  }
+  const rootWithSep = realRoot.endsWith(path.sep) ? realRoot : realRoot + path.sep;
+  if (real !== realRoot && !real.startsWith(rootWithSep)) {
+    throw new PathTraversalError(absPath, "path resolves outside the root via a symlink");
+  }
+  return real;
+}
+
+/**
+ * Crawl filter: true when `absPath` must be dropped from a file listing —
+ * it is itself a symlink (of any target; a link to an in-root file is only a
+ * duplicate), or a parent segment is a symlink that leads outside `realRoot`.
+ * Any lstat/realpath failure counts as "drop" (fail closed).
+ */
+export function isSymlinkOrEscapes(realRoot: string, absPath: string): boolean {
+  try {
+    if (lstatSync(absPath).isSymbolicLink()) return true;
+  } catch {
+    return true;
+  }
+  return !isUnderRealRoot(realRoot, absPath);
 }
 
 /**

@@ -1,8 +1,10 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { glob } from "glob";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { search } from "../core/searcher.js";
+import { ContextValidationError } from "../core/indexer.js";
+import { assertRealpathWithin, PathTraversalError } from "../core/safePath.js";
 import type { EngineDeps } from "./config.js";
 import type { IndexStatus } from "../core/types.js";
 import { sanitizeForClient } from "./errors.js";
@@ -99,6 +101,34 @@ function buildReindexDesc(status: IndexStatus | null): string {
 
 const DEFAULT_MAX_BYTES = 10240;
 
+/**
+ * Response caps (sec 2.3). A caller cannot lift these: `max_bytes` and
+ * `max_lines` are clamped to the ceilings, a `multi_get` glob returns at most
+ * `MAX_GLOB_MATCHES` files (and says so), and a file larger than
+ * `MAX_FILE_BYTES` is refused before it is read into memory.
+ */
+export const MAX_BYTES_CEILING = 1024 * 1024;
+export const MAX_LINES_CEILING = 5000;
+export const MAX_GLOB_MATCHES = 500;
+export const MAX_FILE_BYTES = 16 * 1024 * 1024;
+
+/** Thrown by `readRef` when the on-disk file exceeds `MAX_FILE_BYTES`. */
+class FileTooLargeError extends Error {
+  constructor(sizeBytes: number) {
+    super(
+      `File too large to read (${Math.ceil(sizeBytes / (1024 * 1024))} MiB; limit ${MAX_FILE_BYTES / (1024 * 1024)} MiB)`,
+    );
+    this.name = "FileTooLargeError";
+  }
+}
+
+/** Clamp a caller-supplied positive integer option into [1, ceiling]. */
+function clampOption(raw: unknown, fallback: number, ceiling: number): number {
+  const n = raw !== undefined ? Number(raw) : fallback;
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(1, Math.min(ceiling, Math.floor(n)));
+}
+
 /** Determine if a string looks like a glob pattern. */
 function isGlobPattern(s: string): boolean {
   return s.includes("*") || s.includes("?") || s.includes("[");
@@ -108,19 +138,30 @@ function isGlobPattern(s: string): boolean {
  * Read file content, optionally starting from a 1-indexed line,
  * with max_lines and max_bytes limits.
  * Returns { content, lines: [from, to], truncated }.
+ *
+ * `rootDir` is the workspace or external root that `absPath` was resolved
+ * against; the read is refused (`PathTraversalError`) when the file's real
+ * path leaves it through a symlink, and (`FileTooLargeError`) when the file
+ * exceeds `MAX_FILE_BYTES` — checked with `statSync` before any read.
  */
 function readRef(
   absPath: string,
+  rootDir: string,
   fromLine: number,
-  maxLines: number | undefined,
+  maxLines: number,
   maxBytes: number,
 ): { content: string; lines: [number, number]; truncated: boolean } {
-  const rawContent = readFileSync(absPath, "utf8");
+  const realPath = assertRealpathWithin(rootDir, absPath);
+  const size = statSync(realPath).size;
+  if (size > MAX_FILE_BYTES) {
+    throw new FileTooLargeError(size);
+  }
+  const rawContent = readFileSync(realPath, "utf8");
   const allLines = rawContent.split("\n");
   const totalLines = allLines.length;
 
   const startIdx = Math.max(0, fromLine - 1);
-  const endIdx = maxLines !== undefined ? Math.min(startIdx + maxLines, totalLines) : totalLines;
+  const endIdx = Math.min(startIdx + maxLines, totalLines);
 
   const slice = allLines.slice(startIdx, endIdx).join("\n");
   let content = slice;
@@ -382,10 +423,8 @@ export function registerTools(server: Server, deps: EngineDeps): void {
           };
         }
         const fromLine = input.from_line !== undefined ? Math.max(1, Number(input.from_line)) : 1;
-        const maxLines =
-          input.max_lines !== undefined ? Math.max(1, Number(input.max_lines)) : undefined;
-        const maxBytes =
-          input.max_bytes !== undefined ? Math.max(1, Number(input.max_bytes)) : DEFAULT_MAX_BYTES;
+        const maxLines = clampOption(input.max_lines, MAX_LINES_CEILING, MAX_LINES_CEILING);
+        const maxBytes = clampOption(input.max_bytes, DEFAULT_MAX_BYTES, MAX_BYTES_CEILING);
 
         const resolved = indexer.resolveRef(ref);
         if ("error" in resolved) {
@@ -405,7 +444,19 @@ export function registerTools(server: Server, deps: EngineDeps): void {
           };
         }
 
-        const { content, lines, truncated } = readRef(absPath, fromLine, maxLines, maxBytes);
+        let read: ReturnType<typeof readRef>;
+        try {
+          read = readRef(absPath, indexer.rootForAbsPath(absPath), fromLine, maxLines, maxBytes);
+        } catch (readErr) {
+          // Typed refusals carry a path-free message by construction.
+          if (readErr instanceof PathTraversalError || readErr instanceof FileTooLargeError) {
+            return {
+              content: [{ type: "text", text: JSON.stringify({ error: readErr.message }) }],
+            };
+          }
+          throw readErr;
+        }
+        const { content, lines, truncated } = read;
 
         return {
           content: [
@@ -428,12 +479,13 @@ export function registerTools(server: Server, deps: EngineDeps): void {
       try {
         const refsRaw = input.refs;
         const fromLine = input.from_line !== undefined ? Math.max(1, Number(input.from_line)) : 1;
-        const maxLines =
-          input.max_lines !== undefined ? Math.max(1, Number(input.max_lines)) : undefined;
-        const maxBytes =
-          input.max_bytes !== undefined ? Math.max(1, Number(input.max_bytes)) : DEFAULT_MAX_BYTES;
+        const maxLines = clampOption(input.max_lines, MAX_LINES_CEILING, MAX_LINES_CEILING);
+        const maxBytes = clampOption(input.max_bytes, DEFAULT_MAX_BYTES, MAX_BYTES_CEILING);
 
         let refList: string[] = [];
+        // Set when a glob matched more files than the batch cap: the batch
+        // is the first `limit` matches in sorted order and the caller is told.
+        let globTruncated: { matched: number; limit: number } | undefined;
 
         if (Array.isArray(refsRaw)) {
           refList = refsRaw.map((r) => String(r).trim()).filter(Boolean);
@@ -444,9 +496,16 @@ export function registerTools(server: Server, deps: EngineDeps): void {
             const matched = await glob(refsStr, {
               cwd: workspaceRoot,
               ignore: ["**/node_modules/**"],
+              nodir: true,
+              follow: false,
             });
             matched.sort();
-            refList = matched;
+            if (matched.length > MAX_GLOB_MATCHES) {
+              globTruncated = { matched: matched.length, limit: MAX_GLOB_MATCHES };
+              refList = matched.slice(0, MAX_GLOB_MATCHES);
+            } else {
+              refList = matched;
+            }
           } else {
             refList = refsStr
               .split(",")
@@ -480,15 +539,32 @@ export function registerTools(server: Server, deps: EngineDeps): void {
           }
 
           try {
-            const { content, lines, truncated } = readRef(absPath, fromLine, maxLines, maxBytes);
+            const { content, lines, truncated } = readRef(
+              absPath,
+              indexer.rootForAbsPath(absPath),
+              fromLine,
+              maxLines,
+              maxBytes,
+            );
             docs.push({ file: relFile, docid, content, lines, truncated });
           } catch (fileErr) {
-            errors.push({ ref, error: sanitizeForClient(fileErr, `multi_get:${ref}`) });
+            if (fileErr instanceof PathTraversalError || fileErr instanceof FileTooLargeError) {
+              errors.push({ ref, error: fileErr.message });
+            } else {
+              errors.push({ ref, error: sanitizeForClient(fileErr, `multi_get:${ref}`) });
+            }
           }
         }
 
         return {
-          content: [{ type: "text", text: JSON.stringify({ docs, errors }) }],
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                globTruncated ? { docs, errors, globTruncated } : { docs, errors },
+              ),
+            },
+          ],
         };
       } catch (err) {
         return {
@@ -508,11 +584,27 @@ export function registerTools(server: Server, deps: EngineDeps): void {
             content: [{ type: "text", text: JSON.stringify({ error: "path is required." }) }],
           };
         }
-        indexer.setContext(prefix, text);
+        const entry = indexer.setContext(prefix, text);
         return {
-          content: [{ type: "text", text: JSON.stringify({ status: "ok" }) }],
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                entry
+                  ? { status: "ok", text: entry.text, updatedAt: entry.updatedAt }
+                  : { status: "ok" },
+              ),
+            },
+          ],
         };
       } catch (err) {
+        // Cap / format violations are the caller's to fix; the message names
+        // the rule and never a filesystem path.
+        if (err instanceof ContextValidationError) {
+          return {
+            content: [{ type: "text", text: JSON.stringify({ error: err.message }) }],
+          };
+        }
         return {
           content: [
             {

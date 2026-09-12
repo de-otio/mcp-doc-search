@@ -223,6 +223,10 @@ Edit your `.mcp.json` (or `~/.claude.json`) to use the `http` transport:
 
 After 5 minutes of inactivity, the daemon automatically releases the embed pipeline from memory. The next request transparently reloads it (~1 s penalty), then stays fast again.
 
+### Loopback only, no browser access
+
+The daemon binds `127.0.0.1` and answers only requests whose `Host` header is `127.0.0.1:<port>` or `localhost:<port>`; anything else, and any request that carries an `Origin` header, gets `403` before it reaches the MCP transport. That closes DNS-rebinding and cross-origin calls from a web page on the same machine. CLI and IDE MCP clients (Claude Code, VS Code, `curl`) send neither header, so they are unaffected. There is no authentication beyond that: any local process running as you can reach the daemon, just as it can read the workspace directly (see [SECURITY.md](SECURITY.md)).
+
 ## Development
 
 ```bash
