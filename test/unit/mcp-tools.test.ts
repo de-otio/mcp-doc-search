@@ -9,9 +9,12 @@ vi.mock("../../src/core/searcher.js", () => ({
 vi.mock("node:fs", () => ({
   existsSync: vi.fn(() => true),
   readFileSync: vi.fn(() => "line1\nline2\nline3\nline4\nline5"),
-  // readRef's pre-read checks: size cap (statSync) and symlink containment
-  // (realpathSync.native on both root and leaf; lstatSync in the crawl).
-  statSync: vi.fn(() => ({ size: 100 })),
+  // readRef opens a descriptor, checks the size cap with fstatSync on it and
+  // reads from the same descriptor; symlink containment uses
+  // realpathSync.native on both root and leaf (lstatSync in the crawl).
+  openSync: vi.fn(() => 42),
+  fstatSync: vi.fn(() => ({ size: 100 })),
+  closeSync: vi.fn(),
   lstatSync: vi.fn(() => ({ isSymbolicLink: () => false })),
   realpathSync: Object.assign(
     vi.fn((p: string) => p),
@@ -608,9 +611,9 @@ describe("MCP Tools", () => {
     });
 
     it("get: refuses a file larger than the read ceiling before reading it", async () => {
-      const { readFileSync, statSync } = await import("node:fs");
+      const { readFileSync, fstatSync } = await import("node:fs");
       const { MAX_FILE_BYTES } = await import("../../src/mcp/tools.js");
-      vi.mocked(statSync).mockReturnValueOnce({ size: MAX_FILE_BYTES + 1 } as any);
+      vi.mocked(fstatSync).mockReturnValueOnce({ size: MAX_FILE_BYTES + 1 } as any);
       vi.mocked(readFileSync).mockClear();
       mockIndexer.resolveRef.mockReturnValue({
         file: "/workspace/doc/huge.md",

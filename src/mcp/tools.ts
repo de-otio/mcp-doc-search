@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, openSync, readFileSync } from "node:fs";
 import { glob } from "glob";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -151,7 +151,9 @@ function isGlobPattern(s: string): boolean {
  * `rootDir` is the workspace or external root that `absPath` was resolved
  * against; the read is refused (`PathTraversalError`) when the file's real
  * path leaves it through a symlink, and (`FileTooLargeError`) when the file
- * exceeds `MAX_FILE_BYTES` — checked with `statSync` before any read.
+ * exceeds `MAX_FILE_BYTES`. The size is taken with `fstat` on the descriptor
+ * that is then read, so the check and the read see the same file (no
+ * check-then-open race on a path an attacker can swap underneath).
  */
 function readRef(
   absPath: string,
@@ -161,11 +163,17 @@ function readRef(
   maxBytes: number,
 ): { content: string; lines: [number, number]; truncated: boolean } {
   const realPath = assertRealpathWithin(rootDir, absPath);
-  const size = statSync(realPath).size;
-  if (size > MAX_FILE_BYTES) {
-    throw new FileTooLargeError(size);
+  const fd = openSync(realPath, "r");
+  let rawContent: string;
+  try {
+    const size = fstatSync(fd).size;
+    if (size > MAX_FILE_BYTES) {
+      throw new FileTooLargeError(size);
+    }
+    rawContent = readFileSync(fd, "utf8");
+  } finally {
+    closeSync(fd);
   }
-  const rawContent = readFileSync(realPath, "utf8");
   const allLines = rawContent.split("\n");
   const totalLines = allLines.length;
 

@@ -237,13 +237,13 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
       const absoluteEnv = buildMcpServerEnv(currentConfig, workspaceRoot);
       const portableServerPath = portableLauncherPath(mcpServerPath);
 
+      // Read without a prior existence check (check-then-read race): an
+      // absent or malformed file simply means we start fresh.
       let mcpConfig: Record<string, unknown> = {};
-      if (fs.existsSync(mcpJsonPath)) {
-        try {
-          mcpConfig = JSON.parse(fs.readFileSync(mcpJsonPath, "utf8"));
-        } catch {
-          // If the file is malformed, start fresh
-        }
+      try {
+        mcpConfig = JSON.parse(fs.readFileSync(mcpJsonPath, "utf8"));
+      } catch {
+        // Absent or malformed — start fresh.
       }
 
       const mcpServers = (mcpConfig.mcpServers as Record<string, unknown>) ?? {};
