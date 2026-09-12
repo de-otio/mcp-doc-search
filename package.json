@@ -31,8 +31,8 @@
     "theme": "dark"
   },
   "engines": {
-    "vscode": "^1.85.0",
-    "node": ">=18.0.0"
+    "vscode": "^1.101.0",
+    "node": ">=22"
   },
   "categories": [
     "Other"
@@ -70,6 +70,12 @@
       {
         "command": "docSearch.openIndexStatus",
         "title": "Doc Search: Index Status"
+      }
+    ],
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "docSearch.mcpServers",
+        "label": "Doc Search"
       }
     ],
     "viewsContainers": {
@@ -272,19 +278,19 @@
   },
   "dependencies": {
     "@huggingface/transformers": "^3.4.0",
-    "@lancedb/lancedb": "^0.13.0"
+    "@lancedb/lancedb": "^0.13.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "glob": "^13.0.6",
+    "jsonc-parser": "^3.3.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@modelcontextprotocol/sdk": "^1.30.0",
     "@types/node": "^26.5.0",
-    "@types/vscode": "^1.85.0",
+    "@types/vscode": "^1.101.0",
     "@vitest/coverage-v8": "^5.0.0",
     "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.28.2",
     "eslint-plugin-security": "^4.0.1",
-    "glob": "^13.0.6",
-    "jsonc-parser": "^3.3.1",
     "prettier": "^3.9.6",
     "typescript": "^5.6.3",
     "typescript-eslint": "^8.70.0",

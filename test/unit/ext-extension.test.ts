@@ -77,6 +77,23 @@ describe("Extension", () => {
       expect(vi.mocked(writeStableLaunchers)).toHaveBeenCalledWith("/mock/extension");
     });
 
+    it("registers the native MCP server definition provider for the stable launcher", async () => {
+      await activate(mockContext);
+
+      expect(vi.mocked(vscode.lm.registerMcpServerDefinitionProvider)).toHaveBeenCalledWith(
+        "docSearch.mcpServers",
+        expect.objectContaining({ provideMcpServerDefinitions: expect.any(Function) }),
+      );
+      // The registration is owned by the extension lifetime.
+      expect(mockContext.subscriptions).toContainEqual(
+        expect.objectContaining({ dispose: expect.any(Function) }),
+      );
+      const provider = vi.mocked(vscode.lm.registerMcpServerDefinitionProvider).mock.calls[0][1];
+      const [def] = (await provider.provideMcpServerDefinitions({} as any)) as any[];
+      expect(def.args).toEqual(["/mock-home/.doc-search/bin/mcp-server.js"]);
+      expect(def.env).toEqual({ DOC_SEARCH_WORKSPACE: "/workspace" });
+    });
+
     it("should return early if no workspace folders", async () => {
       (vscode.workspace as any).workspaceFolders = undefined;
 

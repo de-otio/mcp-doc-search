@@ -93,21 +93,6 @@ export class McpSetupPanel {
       2,
     );
 
-    const vscodeNativeJson = JSON.stringify(
-      {
-        servers: {
-          "doc-search": {
-            type: "stdio",
-            command: "node",
-            args: [mcpServerPath],
-            env,
-          },
-        },
-      },
-      null,
-      2,
-    );
-
     return /*html*/ `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -291,23 +276,19 @@ claude</div>
     <div class="code-block"><button class="copy-btn" data-copy="claude mcp list">Copy</button>claude mcp list</div>
   </div>
 
-  <!-- VS Code Native MCP (Copilot) -->
+  <!-- VS Code native MCP (Copilot Chat and other in-editor clients) -->
   <div id="vscode-native" class="tab-content">
     <h2>VS Code Native MCP (GitHub Copilot)</h2>
-    <p>VS Code has built-in MCP support for GitHub Copilot. It uses a different config file: <code>.vscode/mcp.json</code>.</p>
+    <p><strong>Registered automatically.</strong> The Doc Search extension publishes its MCP server to VS Code's built-in MCP support (VS Code 1.101 or newer), so Copilot Chat and any other in-editor MCP client see it without a <code>.vscode/mcp.json</code> entry.</p>
 
-    <h3><span class="step-num">1</span> Create <code>.vscode/mcp.json</code></h3>
-    <p>Create the file <code>.vscode/mcp.json</code> in your workspace with this content:</p>
-    <div class="code-block"><button class="copy-btn" data-copy="${escapeAttr(vscodeNativeJson)}">Copy</button>${escapeHtml(vscodeNativeJson)}</div>
+    <h3><span class="step-num">1</span> Check the server</h3>
+    <p>Open the command palette (<code>Cmd+Shift+P</code>) and run <strong>MCP: List Servers</strong>. <strong>Doc Search</strong> is listed under the extension's provider; click <strong>Start</strong> if it isn't already running.</p>
 
-    <h3><span class="step-num">2</span> Start the server</h3>
-    <p>Open the command palette (<code>Cmd+Shift+P</code>) and run <strong>MCP: List Servers</strong>. You should see <strong>doc-search</strong> listed. Click <strong>Start</strong> if it isn't already running.</p>
-
-    <h3><span class="step-num">3</span> Use in Copilot Chat</h3>
-    <p>Open Copilot Chat in <strong>Agent mode</strong> and ask it to search your docs. Copilot will call the MCP tools.</p>
+    <h3><span class="step-num">2</span> Use in Copilot Chat</h3>
+    <p>Open Copilot Chat in <strong>Agent mode</strong> and ask it to search your docs. Copilot will call the <code>search_docs</code> tool.</p>
 
     <div class="note">
-      VS Code native MCP uses <code>.vscode/mcp.json</code> with a <code>"servers"</code> key (not <code>"mcpServers"</code>). This is a different format from <code>.mcp.json</code>.
+      The registered server runs the stable launcher with the same environment as the generated <code>.mcp.json</code>, so it follows extension upgrades and your Doc Search settings on its own. If you had added a manual <code>doc-search</code> entry to <code>.vscode/mcp.json</code> for an older version, remove it to avoid a duplicate.
     </div>
   </div>
 

@@ -16,6 +16,7 @@ import {
 } from "../core/indexLocation.js";
 import { repairMcpJson } from "./mcpJson.js";
 import { writeStableLaunchers } from "./stableBin.js";
+import { registerMcpServerDefinitionProvider } from "./mcpProvider.js";
 import * as path from "node:path";
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -62,6 +63,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       "Doc Search: updated .mcp.json to the stable server path (~/.doc-search/bin). Reload the window for MCP clients to pick it up.",
     );
   }
+  // Publish the server to the editor's native MCP registry (VS Code 1.101+)
+  // so in-editor clients need no config file. No-op where the API is absent.
+  const mcpProvider = registerMcpServerDefinitionProvider(context, {
+    workspaceRoot,
+    mcpServerPath: expectedMcpServer,
+  });
+  if (mcpProvider) context.subscriptions.push(mcpProvider);
   const store = new LanceVectorStore(indexDir);
   const embedProvider = createEmbedProvider(config);
   const { roots: extraRoots, warnings: extraRootWarnings } = parseExtraRoots(config.extraRoots);

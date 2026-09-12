@@ -4,7 +4,7 @@ await esbuild.build({
   entryPoints: ["src/extension/extension.ts"],
   bundle: true,
   platform: "node",
-  target: "node18",
+  target: "node22",
   outfile: "dist/extension.js",
   external: ["vscode", "@lancedb/lancedb", "@huggingface/transformers"],
   format: "cjs",

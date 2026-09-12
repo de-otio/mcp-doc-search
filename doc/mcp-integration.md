@@ -2,6 +2,11 @@
 
 MCP Doc Search exposes a [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that lets any MCP-compatible AI assistant search, list, and reindex your documentation directly. This works with Claude Code, Cursor, and any other client that supports MCP.
 
+**Requirements:** Node.js 22 or newer on the machine that runs the server
+(the stable launcher exits with a one-line error on anything older). Inside
+VS Code 1.101+ the server is registered automatically — see
+[VS Code native MCP](#vs-code-native-mcp-copilot-chat-and-other-in-editor-clients).
+
 ## Setup
 
 ### Step 1: Generate the configuration file
@@ -47,6 +52,18 @@ claude mcp list   # verify doc-search appears
 ```
 
 **Other clients:** refer to your client's documentation for how to load an `.mcp.json` or configure a stdio MCP server.
+
+### VS Code native MCP (Copilot Chat and other in-editor clients)
+
+Nothing to configure. The extension registers the server with VS Code's
+built-in MCP support (`vscode.lm.registerMcpServerDefinitionProvider`,
+VS Code 1.101+), so **MCP: List Servers** shows **Doc Search** under the
+extension's provider and Copilot Chat agent mode can call its tools. The
+registered definition runs the stable launcher with the editor's own Node.js
+and the same environment the generated `.mcp.json` carries, and it is
+refreshed whenever the extension activates — no `.vscode/mcp.json` entry is
+needed (remove a hand-added `doc-search` entry from older versions to avoid
+a duplicate).
 
 ### Step 3: Verify it works
 
@@ -132,7 +149,31 @@ claude mcp add doc-search \
 
 ## MCP Tools
 
-Once connected, the assistant can call three tools:
+Once connected, the assistant can call the tools below. On `initialize` the
+server reports its real package version and ships `instructions` with the
+three [agent-guide](agent-guide.md) rules (search before reading, scoped
+`get` by `#docid`, delegate broad sweeps to a subagent), which MCP clients
+may surface to their model.
+
+### Annotations and structured output
+
+Every tool declares MCP [tool annotations](https://modelcontextprotocol.io/specification/2025-06-18/server/tools#tool-annotations)
+and an `outputSchema`:
+
+| Tools                                                           | Annotations                                                             |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `search_docs`, `get`, `multi_get`, `list_docs`, `list_contexts` | `readOnlyHint: true`                                                    |
+| `reindex_docs`, `set_context`, `remove_context`                 | `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: true` |
+
+Clients that honour annotations (VS Code Copilot, Codex) can auto-approve the
+read-only tools; Claude Code still asks per tool. Each result carries
+`structuredContent` mirroring the JSON in its text block, validated by the
+SDK client against the tool's `outputSchema`. Two text blocks are bare
+arrays and are therefore wrapped in the structured form: `search_docs` →
+`{ results: [...] }`, `list_docs` → `{ files: [...] }`. Every schema also
+admits `{ error: string }`, the shape of a failed call. `get` and
+`multi_get` additionally publish `_meta["anthropic/maxResultSizeChars"]`,
+a hint to Claude-family clients about how large a single result may get.
 
 ### search_docs
 

@@ -4,7 +4,7 @@ Thanks for your interest in contributing!
 
 ## Getting started
 
-**Requirements:** Node.js 18+ (Node 20+ recommended for the build matrix)
+**Requirements:** Node.js 22+ (the build matrix and CI run Node 24)
 
 ```sh
 git clone https://github.com/de-otio/mcp-doc-search

@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { registerTools } from "./tools.js";
+import { SERVER_INFO, SERVER_INSTRUCTIONS } from "./serverInfo.js";
 import { createEngineFromEnv } from "./config.js";
 import { startHttpServer } from "./http.js";
 import { DaemonAlreadyRunningError, stopDaemon, writePidFile } from "./daemon.js";
@@ -83,10 +84,10 @@ async function main() {
     process.on("SIGINT", shutdown);
   } else {
     // Default: stdio transport
-    const server = new Server(
-      { name: "doc-search", version: "0.1.0" },
-      { capabilities: { tools: {} } },
-    );
+    const server = new Server(SERVER_INFO, {
+      capabilities: { tools: {} },
+      instructions: SERVER_INSTRUCTIONS,
+    });
     registerTools(server, deps);
     const transport = new StdioServerTransport();
     await server.connect(transport);

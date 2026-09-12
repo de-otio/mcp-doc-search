@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Node.js 18+
+- Node.js 22+ (`engines.node`; the stable launcher refuses older runtimes)
 - npm
 - VS Code (for extension development)
 

@@ -3,7 +3,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createRequire } from "node:module";
+import { spawnSync } from "node:child_process";
 import {
+  MIN_NODE_MAJOR,
   stableBinDir,
   launcherSource,
   writeStableLaunchers,
@@ -106,5 +108,60 @@ describe("stableBin", () => {
       fs.writeFileSync(home, "not a directory");
       expect(writeStableLaunchers(extensionDir, env)).toBeUndefined();
     });
+  });
+});
+
+describe("launcher Node.js floor", () => {
+  let tmpDir: string;
+  let launcherPath: string;
+
+  beforeEach(() => {
+    tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "stable-bin-node-")));
+    const extensionDir = path.join(tmpDir, "ext-9.9.9");
+    fs.mkdirSync(path.join(extensionDir, "dist"), { recursive: true });
+    // The "real" server just proves it was reached.
+    fs.writeFileSync(
+      path.join(extensionDir, "dist", "mcp-server.js"),
+      'process.stdout.write("forwarded");\n',
+    );
+    fs.writeFileSync(path.join(extensionDir, "dist", "mcp-doc-search.js"), "");
+    launcherPath = writeStableLaunchers(extensionDir, {
+      DOC_SEARCH_HOME: path.join(tmpDir, "home"),
+    })!;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("embeds the same floor as engines.node", () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
+    expect(pkg.engines.node).toBe(`>=${MIN_NODE_MAJOR}`);
+    expect(launcherSource("/x/mcp-server.js")).toContain(`nodeMajor >= ${MIN_NODE_MAJOR}`);
+  });
+
+  it("exits 1 with a one-line message on a Node.js older than the floor", () => {
+    // Simulate an old runtime: a preload rewrites process.versions.node before
+    // the launcher runs. Everything else is the real launcher on the real node.
+    const preload = path.join(tmpDir, "old-node.cjs");
+    fs.writeFileSync(
+      preload,
+      'Object.defineProperty(process.versions, "node", { value: "20.19.0", configurable: true });\n',
+    );
+    const run = spawnSync(process.execPath, ["-r", preload, launcherPath], { encoding: "utf8" });
+
+    expect(run.status).toBe(1);
+    expect(run.stdout).toBe(""); // never reached the real server
+    expect(run.stderr).toContain("Node.js 20.19.0 is not supported");
+    expect(run.stderr).toContain(`Node.js ${MIN_NODE_MAJOR} or newer is required`);
+    expect(run.stderr.trim().split("\n")).toHaveLength(1);
+  });
+
+  it("forwards to the real server on a supported Node.js", () => {
+    const run = spawnSync(process.execPath, [launcherPath], { encoding: "utf8" });
+
+    expect(run.status).toBe(0);
+    expect(run.stderr).toBe("");
+    expect(run.stdout).toBe("forwarded");
   });
 });
