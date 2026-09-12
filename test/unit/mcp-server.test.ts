@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 
+// vi.mock is hoisted to module scope regardless of where it is written;
+// vitest 5 rejects it inside a test body, so declare it at the top level.
+vi.mock("../../src/mcp/config.js", () => ({
+  createEngineFromEnv: vi.fn(),
+}));
+
 describe("MCP Server", () => {
   let originalExit: any;
 
@@ -23,10 +29,6 @@ describe("MCP Server", () => {
   });
 
   it("should initialize server and engine", async () => {
-    vi.mock("../../src/mcp/config.js", () => ({
-      createEngineFromEnv: vi.fn(),
-    }));
-
     // This is a simple sanity check that the module can be imported
     // Full integration tests would require a real MCP server setup
     try {
