@@ -4,7 +4,13 @@
  */
 
 import { createRequire } from "node:module";
-import type { EmbedFailureKind, EmbedProvider, EmbedderPipeline, HealthResult } from "./types.js";
+import type {
+  EmbedFailureKind,
+  EmbedIdentity,
+  EmbedProvider,
+  EmbedderPipeline,
+  HealthResult,
+} from "./types.js";
 
 // WHY require() (not dynamic import()):
 //   The published VSIX ships only @huggingface/transformers/dist/transformers.node.cjs;
@@ -190,6 +196,10 @@ export class LocalEmbedder implements EmbedProvider {
     return results;
   }
 
+  identity(): EmbedIdentity {
+    return { provider: "local", model: "Xenova/all-MiniLM-L6-v2", dim: 384 };
+  }
+
   /**
    * Loading the pipeline *is* the probe: the first call downloads the ONNX
    * model, and a failed download would otherwise fail every file in turn.
@@ -249,6 +259,11 @@ export class OllamaEmbedder implements EmbedProvider {
       results.push(await this.embedOne(text, prefix));
     }
     return results;
+  }
+
+  /** Dimension is whatever the pulled model produces; learned on first embed. */
+  identity(): EmbedIdentity {
+    return { provider: "ollama", model: this.model };
   }
 
   /**
@@ -412,6 +427,17 @@ export class OpenAIEmbedder implements EmbedProvider {
       data: Array<{ embedding: number[] }>;
     };
     return data.data.map((r) => r.embedding);
+  }
+
+  /** Default output dimensions of OpenAI's embedding models. */
+  private static readonly MODEL_DIMS: Readonly<Record<string, number>> = {
+    "text-embedding-3-small": 1536,
+    "text-embedding-3-large": 3072,
+    "text-embedding-ada-002": 1536,
+  };
+
+  identity(): EmbedIdentity {
+    return { provider: "openai", model: this.model, dim: OpenAIEmbedder.MODEL_DIMS[this.model] };
   }
 
   async healthCheck(): Promise<HealthResult> {

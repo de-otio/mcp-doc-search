@@ -3,6 +3,7 @@
  * File-backed, embedded, no server process needed.
  */
 
+import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync } from "node:fs";
 import path from "node:path";
 import type { LanceTable, LanceConnection, CompactStats } from "./types.js";
@@ -13,20 +14,34 @@ import type { LanceTable, LanceConnection, CompactStats } from "./types.js";
  */
 export const COMPACT_VERSION_THRESHOLD = 20;
 
+/** Longest index key accepted; anything past this is a bug upstream, not a path. */
+const MAX_FILE_KEY_LENGTH = 2048;
+
 /**
- * Validate and escape a file path for use in LanceDB SQL queries.
- * Rejects paths with suspicious characters (outside [a-zA-Z0-9_./-])
- * and enforces a maximum length of 2048 characters.
+ * Key under which a file's chunks are found for deletion: the SHA-256 hex of
+ * its index key.
+ *
+ * WHY hash instead of filtering on `file` directly: the filter is a SQL
+ * string, and index keys are arbitrary text — `ext://<root>/<rel>` keys,
+ * spaces, `@`, `%`, non-ASCII. The previous approach allow-listed characters
+ * and threw on everything else, which turned every external-root delete into
+ * a silent no-op (duplicated chunks on reindex, undeletable pruned files).
+ * Hex needs no escaping, so nothing about the key can break the filter.
  */
-function safeLanceFilter(file: string): string {
-  if (file.length > 2048) {
-    throw new Error(`File path too long (max 2048 chars): ${file}`);
+export function fileHashKey(file: string): string {
+  if (file.length > MAX_FILE_KEY_LENGTH) {
+    throw new Error(`File key too long (max ${MAX_FILE_KEY_LENGTH} chars): ${file.slice(0, 80)}…`);
   }
-  if (!/^[a-zA-Z0-9_.'/-]+$/.test(file)) {
-    throw new Error(`File path contains suspicious characters: ${file}. Allowed: [a-zA-Z0-9_.'/-]`);
-  }
-  // Escape single quotes for SQL
-  return file.replace(/'/g, "''");
+  return createHash("sha256").update(file).digest("hex");
+}
+
+/**
+ * Filter expression selecting a file's rows. The column name is backtick
+ * quoted because Lance's SQL planner lower-cases bare identifiers and reads
+ * double-quoted ones as string literals.
+ */
+function fileFilter(file: string): string {
+  return `\`fileHash\` = '${fileHashKey(file)}'`;
 }
 
 /** Record stored in LanceDB. */
@@ -34,6 +49,8 @@ export interface VectorRecord {
   id: string;
   vector: number[];
   file: string;
+  /** sha256 hex of `file`; filled in by upsert(), see fileHashKey. */
+  fileHash?: string;
   heading: string;
   lineStart: number;
   text: string;
@@ -99,6 +116,7 @@ export class LanceVectorStore {
       id: "__seed__",
       vector: new Array(vectorDim).fill(0),
       file: "",
+      fileHash: "",
       heading: "",
       lineStart: 0,
       text: "",
@@ -110,13 +128,32 @@ export class LanceVectorStore {
     await this.table.delete('id = "__seed__"');
   }
 
+  /**
+   * Drop the whole table so the next ensureTable() starts from scratch.
+   * Used for a full rebuild (model/chunking change). No-op without a table.
+   */
+  async dropTable(): Promise<void> {
+    if (!this.db || !this.table) return;
+    await this.db.dropTable(this.tableName);
+    this.table = null;
+  }
+
+  /**
+   * Remove every chunk of one file.
+   *
+   * Errors are logged and rethrown, never swallowed: a delete that fails
+   * silently leaves stale chunks that the next upsert duplicates, so the
+   * caller must treat the file as failed rather than proceed.
+   */
   async deleteByFile(file: string): Promise<void> {
     if (!this.table) return;
     try {
-      const escaped = safeLanceFilter(file);
-      await this.table.delete(`file = '${escaped}'`);
-    } catch {
-      // Table may be empty or file not yet indexed
+      await this.table.delete(fileFilter(file));
+    } catch (err) {
+      console.warn(
+        `Vector store: failed to delete chunks for ${file}: ${err instanceof Error ? err.message : err}`,
+      );
+      throw err;
     }
   }
 
@@ -125,7 +162,7 @@ export class LanceVectorStore {
       throw new Error("Table not initialized. Call ensureTable() first.");
     }
     if (records.length === 0) return;
-    await this.table.add(records);
+    await this.table.add(records.map((r) => ({ ...r, fileHash: fileHashKey(r.file) })));
   }
 
   async query(queryVector: number[], n: number): Promise<VectorQueryResult[]> {

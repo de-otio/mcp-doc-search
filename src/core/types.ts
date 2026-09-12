@@ -59,6 +59,32 @@ export interface IndexStats {
   firstError?: string;
   /** Set when this run compacted the vector store (see LanceVectorStore.compact). */
   compacted?: CompactStats;
+  /**
+   * Set when this run discarded the whole index and re-embedded every file
+   * because the on-disk index metadata no longer matched the live
+   * configuration (provider, model, dimension, chunking, schema version).
+   */
+  rebuiltReason?: string;
+}
+
+/**
+ * What produced the index, persisted as `<indexDir>/index-meta.json`.
+ *
+ * Exists because vectors from two different models are not comparable and
+ * chunks cut with different settings do not line up: any of these fields
+ * changing means the whole index must be rebuilt, not incrementally patched.
+ */
+export interface IndexMeta {
+  /** Layout of the LanceDB table and this file. 1 = pre-metadata indexes. */
+  schemaVersion: number;
+  provider: string;
+  model: string;
+  /** Vector dimension of the stored embeddings. */
+  dim: number;
+  maxChunkChars: number;
+  headingDepth: number;
+  /** ISO timestamp of when this index generation was created. */
+  createdAt: string;
 }
 
 /** Outcome of a LanceDB compaction + old-version prune. */
@@ -92,6 +118,12 @@ export interface IndexStatus {
   docGlob: string;
   /** Names of configured external roots (empty when none) */
   extraRootNames: string[];
+  /**
+   * On-disk index metadata, when present. Absent on an empty index and on
+   * indexes built before metadata existed (those are rebuilt on the next
+   * reindex).
+   */
+  meta?: IndexMeta;
 }
 
 /**
@@ -164,6 +196,14 @@ export interface HealthResult {
   hint?: string;
 }
 
+/** Stable identity of the embedding model behind a provider. */
+export interface EmbedIdentity {
+  provider: "local" | "ollama" | "openai";
+  model: string;
+  /** Vector dimension when known ahead of the first embed call. */
+  dim?: number;
+}
+
 export interface EmbedProvider {
   /**
    * Generate embeddings for a batch of texts.
@@ -180,6 +220,14 @@ export interface EmbedProvider {
    * Optional so hand-built and mock providers remain valid EmbedProviders.
    */
   healthCheck?(): Promise<HealthResult>;
+
+  /**
+   * Optional: which model this provider embeds with. Recorded in the index
+   * metadata so a provider/model switch forces a rebuild instead of silently
+   * mixing incomparable vectors. Optional so hand-built and mock providers
+   * remain valid EmbedProviders.
+   */
+  identity?(): EmbedIdentity;
 
   /**
    * Optional: dispose of any cached model/pipeline resources.

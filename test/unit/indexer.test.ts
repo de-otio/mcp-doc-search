@@ -18,6 +18,7 @@ function makeIndexer(config?: Partial<IndexerConfig>): Indexer {
   const mockStore = {
     deleteByFile: vi.fn(),
     ensureTable: vi.fn(),
+    dropTable: vi.fn(),
     upsert: vi.fn(),
     count: vi.fn().mockResolvedValue(0),
     listFiles: vi.fn(),
@@ -49,8 +50,9 @@ describe("Indexer", () => {
     mockStore = {
       deleteByFile: vi.fn(),
       ensureTable: vi.fn(),
+      dropTable: vi.fn(),
       upsert: vi.fn(),
-      count: vi.fn(),
+      count: vi.fn().mockResolvedValue(0),
       listFiles: vi.fn(),
       retainedVersions: vi.fn().mockReturnValue(0),
       compact: vi.fn(),
@@ -451,6 +453,166 @@ describe("Indexer", () => {
 
       expect(mockStore.deleteByFile).toHaveBeenCalledWith("doc/guide.md");
       expect(stats.pruned).toBe(1);
+    });
+
+    it("counts a file as failed when its stale chunks cannot be deleted", async () => {
+      // A swallowed delete used to let the new chunks be appended next to the
+      // old ones. Now the file is skipped (and reported) rather than duplicated.
+      await setupFiles(2);
+      mockEmbedProvider.embed.mockResolvedValue([[0.1, 0.2]]);
+      mockStore.deleteByFile
+        .mockRejectedValueOnce(new Error("commit conflict"))
+        .mockResolvedValue(undefined);
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const indexer = new Indexer(config, mockStore as any);
+      const stats = await indexer.reindex(true);
+
+      expect(stats.failedFiles).toBe(1);
+      expect(stats.indexed).toBe(1);
+      expect(stats.firstError).toBe("commit conflict");
+      expect(mockStore.upsert).toHaveBeenCalledTimes(1);
+      errorSpy.mockRestore();
+    });
+
+    describe("index metadata", () => {
+      const matchingMeta = {
+        schemaVersion: 2,
+        provider: "local",
+        model: "m",
+        dim: 2,
+        maxChunkChars: 4000,
+        headingDepth: 2,
+        createdAt: "2026-09-12T00:00:00.000Z",
+      };
+
+      beforeEach(() => {
+        mockEmbedProvider.identity = vi.fn(() => ({ provider: "local", model: "m", dim: 2 }));
+        mockEmbedProvider.embed.mockResolvedValue([[0.1, 0.2]]);
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+      });
+
+      it("patches incrementally when the on-disk metadata matches", async () => {
+        await setupFiles(2);
+        const indexer = new Indexer(config, mockStore as any);
+        vi.spyOn(indexer as any, "loadIndexMeta").mockReturnValue(matchingMeta);
+        vi.spyOn(indexer as any, "loadMtimeCache").mockReturnValue({
+          "doc/file0.md": { mtime: "1000", docid: "a" },
+          "doc/file1.md": { mtime: "1000", docid: "b" },
+        });
+        const saveMeta = vi.spyOn(indexer as any, "saveIndexMeta").mockImplementation(() => {});
+
+        const stats = await indexer.reindex(false);
+
+        expect(stats.rebuiltReason).toBeUndefined();
+        expect(stats.skipped).toBe(2);
+        expect(mockStore.dropTable).not.toHaveBeenCalled();
+        expect(saveMeta).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        ["provider", { provider: "ollama" }, /provider ollama → local/],
+        ["model", { model: "old" }, /model old → m/],
+        ["dimension", { dim: 768 }, /vector dimension 768 → 2/],
+        ["maxChunkChars", { maxChunkChars: 1000 }, /maxChunkChars 1000 → 4000/],
+        ["headingDepth", { headingDepth: 1 }, /headingDepth 1 → 2/],
+        ["schemaVersion", { schemaVersion: 1 }, /schema v1 → v2/],
+      ])(
+        "drops the table, discards the cache and re-embeds everything when %s differs",
+        async (_label, diff, reason) => {
+          await setupFiles(2);
+          const indexer = new Indexer(config, mockStore as any);
+          vi.spyOn(indexer as any, "loadIndexMeta").mockReturnValue({ ...matchingMeta, ...diff });
+          // Unchanged files that an incremental run would have skipped.
+          vi.spyOn(indexer as any, "loadMtimeCache").mockReturnValue({
+            "doc/file0.md": { mtime: "1000", docid: "a" },
+            "doc/file1.md": { mtime: "1000", docid: "b" },
+            "doc/gone.md": { mtime: "1000", docid: "c" },
+          });
+          const saveMeta = vi.spyOn(indexer as any, "saveIndexMeta").mockImplementation(() => {});
+          const saveCache = vi.spyOn(indexer as any, "saveMtimeCache").mockImplementation(() => {});
+
+          const stats = await indexer.reindex(false);
+
+          expect(stats.rebuiltReason).toMatch(reason);
+          expect(mockStore.dropTable).toHaveBeenCalledTimes(1);
+          expect(stats.indexed).toBe(2);
+          expect(stats.skipped).toBe(0);
+          // No prune pass: the table is gone, and the stale key must not survive.
+          expect(stats.pruned).toBe(0);
+          expect(Object.keys(saveCache.mock.calls[0][0] as object)).not.toContain("doc/gone.md");
+          expect(saveMeta).toHaveBeenCalledWith(
+            expect.objectContaining({ schemaVersion: 2, provider: "local", model: "m", dim: 2 }),
+          );
+        },
+      );
+
+      it("treats missing metadata on a non-empty index as schema v1", async () => {
+        await setupFiles(1);
+        mockStore.count.mockResolvedValue(42);
+        const indexer = new Indexer(config, mockStore as any);
+        vi.spyOn(indexer as any, "loadIndexMeta").mockReturnValue(null);
+        vi.spyOn(indexer as any, "saveIndexMeta").mockImplementation(() => {});
+
+        const stats = await indexer.reindex(false);
+
+        expect(stats.rebuiltReason).toMatch(/schema v1/);
+        expect(mockStore.dropTable).toHaveBeenCalledTimes(1);
+      });
+
+      it("does not rebuild an empty index without metadata, and writes it after the first embed", async () => {
+        await setupFiles(1);
+        mockStore.count.mockResolvedValue(0);
+        const indexer = new Indexer(config, mockStore as any);
+        vi.spyOn(indexer as any, "loadIndexMeta").mockReturnValue(null);
+        const saveMeta = vi.spyOn(indexer as any, "saveIndexMeta").mockImplementation(() => {});
+
+        const stats = await indexer.reindex(false);
+
+        expect(stats.rebuiltReason).toBeUndefined();
+        expect(mockStore.dropTable).not.toHaveBeenCalled();
+        expect(saveMeta).toHaveBeenCalledTimes(1);
+        expect(saveMeta.mock.calls[0][0]).toMatchObject({ dim: 2, maxChunkChars: 4000 });
+      });
+
+      it("restarts as a rebuild when a dimension-less provider embeds a different size", async () => {
+        await setupFiles(3);
+        mockEmbedProvider.identity = vi.fn(() => ({ provider: "ollama", model: "m" }));
+        mockEmbedProvider.embed.mockResolvedValue([[0.1, 0.2, 0.3]]);
+        const indexer = new Indexer(config, mockStore as any);
+        vi.spyOn(indexer as any, "loadIndexMeta").mockReturnValue({
+          ...matchingMeta,
+          provider: "ollama",
+          dim: 2,
+        });
+        // Two of three files unchanged: they would be skipped before the first
+        // embed reveals the mismatch, and must be re-embedded after the restart.
+        vi.spyOn(indexer as any, "loadMtimeCache").mockReturnValue({
+          "doc/file0.md": { mtime: "1000", docid: "a" },
+          "doc/file1.md": { mtime: "1000", docid: "b" },
+        });
+        const saveMeta = vi.spyOn(indexer as any, "saveIndexMeta").mockImplementation(() => {});
+
+        const stats = await indexer.reindex(false);
+
+        expect(stats.rebuiltReason).toMatch(/vector dimension 2 → 3/);
+        expect(stats.indexed).toBe(3);
+        expect(stats.skipped).toBe(0);
+        expect(mockStore.dropTable).toHaveBeenCalledTimes(1);
+        expect(mockStore.upsert).toHaveBeenCalledTimes(3);
+        expect(saveMeta).toHaveBeenCalledWith(expect.objectContaining({ dim: 3 }));
+      });
+
+      it("exposes the metadata through getStatus", async () => {
+        const { glob } = await import("glob");
+        vi.mocked(glob).mockResolvedValue([]);
+        const indexer = new Indexer(config, mockStore as any);
+        vi.spyOn(indexer as any, "loadIndexMeta").mockReturnValue(matchingMeta);
+
+        const status = await indexer.getStatus();
+
+        expect(status.meta).toEqual(matchingMeta);
+      });
     });
 
     it("should not crash on bogus path-traversal-shaped cache key", async () => {

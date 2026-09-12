@@ -159,6 +159,7 @@ describe("Indexer with external roots", () => {
         deletedFiles.push(f);
       }),
       ensureTable: vi.fn(),
+      dropTable: vi.fn(),
       upsert: vi.fn(async (records: VectorRecord[]) => {
         upserted.push(...records);
       }),

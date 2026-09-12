@@ -385,6 +385,37 @@ describe("LocalEmbedder", () => {
 });
 
 // ---------------------------------------------------------------------------
+// identity() — what the index metadata records
+// ---------------------------------------------------------------------------
+
+describe("identity", () => {
+  it("LocalEmbedder names the bundled model with its known dimension", () => {
+    expect(new LocalEmbedder().identity()).toEqual({
+      provider: "local",
+      model: "Xenova/all-MiniLM-L6-v2",
+      dim: 384,
+    });
+  });
+
+  it("OllamaEmbedder reports the configured model without a dimension", () => {
+    expect(new OllamaEmbedder("mxbai-embed-large").identity()).toEqual({
+      provider: "ollama",
+      model: "mxbai-embed-large",
+    });
+  });
+
+  it("OpenAIEmbedder knows the dimension of its default model only", () => {
+    expect(new OpenAIEmbedder("sk-test").identity()).toEqual({
+      provider: "openai",
+      model: "text-embedding-3-small",
+      dim: 1536,
+    });
+    expect(new OpenAIEmbedder("sk-test", "text-embedding-3-large").identity().dim).toBe(3072);
+    expect(new OpenAIEmbedder("sk-test", "some-future-model").identity().dim).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // createEmbedProvider factory
 // ---------------------------------------------------------------------------
 

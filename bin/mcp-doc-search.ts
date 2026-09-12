@@ -263,6 +263,9 @@ async function cmdReindex(flags: Record<string, string | boolean>): Promise<void
     `Indexed ${stats.indexed} files, skipped ${stats.skipped}, ` +
       `${stats.totalChunks} chunks, ${(stats.durationMs / 1000).toFixed(1)}s\n`,
   );
+  if (stats.rebuiltReason) {
+    process.stdout.write(`Rebuilt the whole index: ${stats.rebuiltReason}\n`);
+  }
   if (stats.compacted) {
     const mb = (stats.compacted.bytesRemoved / 1e6).toFixed(1);
     process.stdout.write(
@@ -384,7 +387,7 @@ export async function cmdMultiGet(
   }
 }
 
-async function cmdStatus(flags: Record<string, string | boolean>): Promise<void> {
+export async function cmdStatus(flags: Record<string, string | boolean>): Promise<void> {
   const asJson = getFlag(flags, "json", false);
   const deps = await createEngineFromEnv();
   const status = await deps.indexer.getStatus();
@@ -394,6 +397,14 @@ async function cmdStatus(flags: Record<string, string | boolean>): Promise<void>
     return;
   }
 
+  const meta = status.meta;
+  const metaLines = meta
+    ? `schema:        v${meta.schemaVersion}\n` +
+      `embedding:     ${meta.provider} / ${meta.model} (${meta.dim}-dim)\n` +
+      `chunking:      maxChunkChars=${meta.maxChunkChars}, headingDepth=${meta.headingDepth}\n` +
+      `indexCreated:  ${meta.createdAt || "unknown"}\n`
+    : `schema:        none recorded (empty or pre-0.8 index; the next reindex rebuilds it)\n`;
+
   process.stdout.write(
     `totalFiles:    ${status.totalFiles}\n` +
       `chunkCount:    ${status.chunkCount}\n` +
@@ -402,11 +413,12 @@ async function cmdStatus(flags: Record<string, string | boolean>): Promise<void>
       `changedFiles:  ${status.changedFiles}\n` +
       `newFiles:      ${status.newFiles}\n` +
       `deletedFiles:  ${status.deletedFiles}\n` +
-      `docGlob:       ${status.docGlob}\n`,
+      `docGlob:       ${status.docGlob}\n` +
+      metaLines,
   );
 }
 
-async function cmdContext(
+export async function cmdContext(
   positionals: string[],
   flags: Record<string, string | boolean>,
 ): Promise<void> {
@@ -417,8 +429,7 @@ async function cmdContext(
     process.exit(1);
   }
 
-  const deps = await createEngineFromEnv();
-  const indexer = deps.indexer as any; // setContext/listContexts/removeContext may not be typed
+  const { indexer } = await createEngineFromEnv();
 
   if (action === "add") {
     const filePath = positionals[1];
@@ -427,32 +438,26 @@ async function cmdContext(
       printError("context add requires <path> and <text>");
       process.exit(1);
     }
-    if (typeof indexer.setContext !== "function") {
-      printError("setContext not available in this version");
-      process.exit(2);
-    }
-    await indexer.setContext(filePath, text);
+    indexer.setContext(filePath, text);
     process.stdout.write(`Context set for: ${filePath}\n`);
     return;
   }
 
   if (action === "list") {
     const asJson = getFlag(flags, "json", false);
-    if (typeof indexer.listContexts !== "function") {
-      printError("listContexts not available in this version");
-      process.exit(2);
-    }
-    const contexts = await indexer.listContexts();
+    // A map of path prefix → note, not an array.
+    const contexts = indexer.listContexts();
     if (asJson) {
       printJson(contexts);
-    } else {
-      if (!contexts || contexts.length === 0) {
-        process.stdout.write("No context notes.\n");
-      } else {
-        for (const c of contexts) {
-          process.stdout.write(`${c.file}: ${c.text}\n`);
-        }
-      }
+      return;
+    }
+    const prefixes = Object.keys(contexts).sort();
+    if (prefixes.length === 0) {
+      process.stdout.write("No context notes.\n");
+      return;
+    }
+    for (const prefix of prefixes) {
+      process.stdout.write(`${prefix || "(root)"}: ${contexts[prefix]}\n`);
     }
     return;
   }
@@ -463,11 +468,7 @@ async function cmdContext(
       printError("context remove requires <path>");
       process.exit(1);
     }
-    if (typeof indexer.removeContext !== "function") {
-      printError("removeContext not available in this version");
-      process.exit(2);
-    }
-    await indexer.removeContext(filePath);
+    indexer.removeContext(filePath);
     process.stdout.write(`Context removed for: ${filePath}\n`);
     return;
   }

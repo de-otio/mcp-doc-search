@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Existing indexes are rebuilt once on the next reindex.** The vector table
+  gained a `fileHash` column and the index directory an `index-meta.json`
+  (schema version 2). An index without metadata is treated as schema 1 and
+  re-embedded in full; `reindex` reports why as `rebuiltReason` (CLI: "Rebuilt
+  the whole index: …"), and `status` prints the recorded provider, model,
+  dimension and chunking settings.
+
+### Fixed
+
+- **External-root and unusual-name chunks were never deleted.** `deleteByFile`
+  filtered on the raw path through a character allow-list that rejected `:`,
+  spaces, `@`, `%` and non-ASCII — so every `ext://<root>/…` key (and any file
+  with such a name) threw, and the throw was swallowed. Reindexing a changed
+  external file appended a second copy of its chunks; deleting the file left it
+  searchable forever. Rows are now deleted by the SHA-256 of their key (hex
+  only, nothing to escape), a failed delete is logged and counted as a failed
+  file instead of ignored, and a real-LanceDB test covers `ext://` keys with
+  spaces and umlauts.
+- **Switching the embedding provider or model no longer silently loses
+  unchanged files.** The index records what produced it (provider, model,
+  vector dimension, `maxChunkChars`, `headingDepth`); when any of these differ
+  from the live configuration, `reindex` drops the table, discards the mtime
+  cache and re-embeds everything, instead of re-embedding only changed files
+  into a freshly emptied table. Two different models of the same dimension are
+  now caught too.
+- **Concurrent reindexes are refused instead of interleaving.** `reindex` takes
+  `<indexDir>/reindex.lock` for the whole run (compaction included); a second
+  run from another process — extension watcher, CLI, MCP `reindex_docs` —
+  fails with "Another reindex is already running (pid …)". A lock left by a
+  crashed process is detected by its dead pid and replaced.
+- `mtime_cache.json`, `context.json` and `index-meta.json` are written
+  atomically (temp file + rename), so a reader never sees a half-written file.
+- CLI `context list` printed "No context notes." even when notes existed (it
+  treated the map as an array).
+
 ## [0.7.1] - 2026-09-12
 
 ### Fixed
