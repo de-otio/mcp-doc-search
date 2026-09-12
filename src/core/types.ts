@@ -57,6 +57,18 @@ export interface IndexStats {
   pruned: number;
   /** First error encountered (embedding/upsert) — surfaced so the UI can show why files failed. */
   firstError?: string;
+  /** Set when this run compacted the vector store (see LanceVectorStore.compact). */
+  compacted?: CompactStats;
+}
+
+/** Outcome of a LanceDB compaction + old-version prune. */
+export interface CompactStats {
+  /** Old table versions dropped from disk. */
+  versionsRemoved: number;
+  /** Bytes reclaimed by dropping those versions. */
+  bytesRemoved: number;
+  /** Data fragments merged away. */
+  fragmentsRemoved: number;
 }
 
 export interface IndexStatus {
@@ -102,6 +114,10 @@ export interface LanceTable {
   add(records: unknown[]): Promise<void>;
   query(): { toArray(): Promise<unknown[]> };
   countRows(): Promise<number>;
+  optimize(options?: { cleanupOlderThan?: Date }): Promise<{
+    compaction: { fragmentsRemoved: number; fragmentsAdded: number };
+    prune: { bytesRemoved: number; oldVersionsRemoved: number };
+  }>;
 }
 
 /**

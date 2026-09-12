@@ -3,8 +3,15 @@
  * File-backed, embedded, no server process needed.
  */
 
-import { mkdirSync } from "node:fs";
-import type { LanceTable, LanceConnection } from "./types.js";
+import { mkdirSync, readdirSync } from "node:fs";
+import path from "node:path";
+import type { LanceTable, LanceConnection, CompactStats } from "./types.js";
+
+/**
+ * Retained table versions at which the indexer compacts the store.
+ * LanceDB's own guidance is to optimize after ~20 data modifications.
+ */
+export const COMPACT_VERSION_THRESHOLD = 20;
 
 /**
  * Validate and escape a file path for use in LanceDB SQL queries.
@@ -167,6 +174,39 @@ export class LanceVectorStore {
     if (!this.table) return 0;
     const rows = await this.table.countRows();
     return rows;
+  }
+
+  /**
+   * Number of table versions currently retained on disk.
+   *
+   * LanceDB writes a new manifest on every add/delete and never prunes them
+   * on its own, so a corpus reindexed file-by-file on save accumulates
+   * thousands of versions (one index reached 6 GB of stale versions over
+   * 250 MB of live data). Counted from disk because the installed LanceDB
+   * exposes no listVersions().
+   */
+  retainedVersions(): number {
+    const versionsDir = path.join(this.indexDir, `${this.tableName}.lance`, "_versions");
+    try {
+      return readdirSync(versionsDir).filter((f) => f.endsWith(".manifest")).length;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * Merge data fragments and drop every table version but the current one.
+   * Sub-second in steady state; minutes when thousands of versions have
+   * piled up. Returns null when there is no table yet.
+   */
+  async compact(): Promise<CompactStats | null> {
+    if (!this.table) return null;
+    const stats = await this.table.optimize({ cleanupOlderThan: new Date() });
+    return {
+      versionsRemoved: stats.prune.oldVersionsRemoved,
+      bytesRemoved: stats.prune.bytesRemoved,
+      fragmentsRemoved: stats.compaction.fragmentsRemoved,
+    };
   }
 
   isOpen(): boolean {

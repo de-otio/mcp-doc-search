@@ -263,6 +263,12 @@ async function cmdReindex(flags: Record<string, string | boolean>): Promise<void
     `Indexed ${stats.indexed} files, skipped ${stats.skipped}, ` +
       `${stats.totalChunks} chunks, ${(stats.durationMs / 1000).toFixed(1)}s\n`,
   );
+  if (stats.compacted) {
+    const mb = (stats.compacted.bytesRemoved / 1e6).toFixed(1);
+    process.stdout.write(
+      `Compacted index: dropped ${stats.compacted.versionsRemoved} old versions (${mb} MB)\n`,
+    );
+  }
 }
 
 export async function cmdGet(
