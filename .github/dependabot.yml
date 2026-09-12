@@ -17,10 +17,21 @@ updates:
       # transformers.js major bumps reshuffle the dist layout and blow the
       # VSIX size cap until .vscodeignore + prune-platform-deps are
       # updated. Re-evaluate manually for each major.
+      # 2026-09 trial of 4.2.0: dist layout, pipeline API and vectors are
+      # unchanged, but its pinned onnxruntime-node 1.24.3 ships NO
+      # darwin/x64 binary (1.21 did) — the built-in embedder would break
+      # on the darwin-x64 VSIX target. Blocked until that target is
+      # dropped or Intel Macs are routed to Ollama/OpenAI.
       - dependency-name: "@huggingface/transformers"
         update-types: ["version-update:semver-major"]
       # lancedb pre-1.0 minor bumps regularly carry breaking native-binary
       # layout changes; pin via manual review.
+      # 2026-09 trial: the darwin-arm64 native binary grows every release
+      # (0.13: 58 MB, 0.21: 67 MB, 0.33: 120 MB, 0.38: 221 MB unpacked);
+      # 0.38 gives a 110 MB VSIX (cap 80), needs Node >= 22, and pulls a
+      # nested second copy of transformers/onnxruntime as optional deps.
+      # 0.21 works (index format compatible both ways, 516 tests) at
+      # +10 MB VSIX. No feature or fix currently needs the bump.
       - dependency-name: "@lancedb/lancedb"
         update-types: ["version-update:semver-minor", "version-update:semver-major"]
       # TypeScript major bumps need typecheck audit (tsc errors above are
