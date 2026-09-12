@@ -115,7 +115,7 @@ export async function createEngineFromEnv(): Promise<EngineDeps> {
       settings["docSearch.ollamaUrl"] ?? process.env.OLLAMA_URL ?? "http://localhost:11434";
     embedProvider = new OllamaEmbedder(ollamaModel, ollamaUrl);
   } else {
-    embedProvider = new LocalEmbedder();
+    embedProvider = new LocalEmbedder({ model: process.env.DOC_SEARCH_LOCAL_MODEL });
   }
 
   const store = new LanceVectorStore(indexDir);

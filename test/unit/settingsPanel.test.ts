@@ -570,5 +570,96 @@ describe("SettingsPanel", () => {
         true,
       );
     });
+
+    // -----------------------------------------------------------------------
+    // Local model picker
+    // -----------------------------------------------------------------------
+
+    const localConfig = {
+      docGlob: "doc/**/*.md",
+      indexDir: ".doc-search-index",
+      headingDepth: 2,
+      maxChunkChars: 0,
+      embedProvider: "local",
+      ollamaUrl: "http://localhost:11434",
+      ollamaModel: "nomic-embed-text",
+      openaiApiKey: "",
+      autoReindex: true,
+    };
+
+    it("on ready, includes the local model in the config message", async () => {
+      SettingsPanel.createOrShow(mockContext);
+      const handler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
+      await handler({ type: "ready" });
+
+      const configMessage = mockPanel.webview.postMessage.mock.calls.find(
+        (c: any) => c[0].type === "config",
+      );
+      expect(configMessage?.[0].config.localModel).toBe("Xenova/all-MiniLM-L6-v2");
+    });
+
+    it("renders a picker with every registry model", () => {
+      SettingsPanel.createOrShow(mockContext);
+
+      expect(mockPanel.webview.html).toContain('<select id="localModel">');
+      expect(mockPanel.webview.html).toContain('<option value="Xenova/multilingual-e5-small">');
+      expect(mockPanel.webview.html).toContain(
+        '<option value="onnx-community/embeddinggemma-300m-ONNX">',
+      );
+      expect(mockPanel.webview.html).toMatch(/rebuilds the whole search index/);
+    });
+
+    it("saveConfig with a different local model persists it and kicks a full reindex", async () => {
+      SettingsPanel.createOrShow(mockContext);
+      const handler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
+
+      await handler({
+        type: "saveConfig",
+        config: { ...localConfig, localModel: "Xenova/multilingual-e5-small" },
+      });
+
+      const cfg = vi.mocked(vscode.workspace.getConfiguration).mock.results[0]?.value;
+      expect(cfg.update).toHaveBeenCalledWith(
+        "localModel",
+        "Xenova/multilingual-e5-small",
+        expect.anything(),
+      );
+      expect(vi.mocked(vscode.commands.executeCommand)).toHaveBeenCalledWith(
+        "docSearch.reindex",
+        true,
+      );
+    });
+
+    it("saveConfig with the unchanged local model does not reindex", async () => {
+      SettingsPanel.createOrShow(mockContext);
+      const handler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
+
+      await handler({
+        type: "saveConfig",
+        config: { ...localConfig, localModel: "Xenova/all-MiniLM-L6-v2" },
+      });
+
+      expect(vi.mocked(vscode.commands.executeCommand)).not.toHaveBeenCalledWith(
+        "docSearch.reindex",
+        true,
+      );
+    });
+
+    it("saveConfig falls back to the default for an unknown local model id", async () => {
+      SettingsPanel.createOrShow(mockContext);
+      const handler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
+
+      await handler({
+        type: "saveConfig",
+        config: { ...localConfig, localModel: "evil/not-a-model" },
+      });
+
+      const cfg = vi.mocked(vscode.workspace.getConfiguration).mock.results[0]?.value;
+      expect(cfg.update).toHaveBeenCalledWith(
+        "localModel",
+        "Xenova/all-MiniLM-L6-v2",
+        expect.anything(),
+      );
+    });
   });
 });

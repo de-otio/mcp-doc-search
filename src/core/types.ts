@@ -4,11 +4,12 @@
  */
 
 import type { ExtraRoot } from "./extraRoots.js";
+import { resolveMaxChunkChars } from "./localModels.js";
 
 export interface DocChunk {
   /** Stable ID: md5(file:lineStart) first 12 hex chars */
   id: string;
-  /** [DocTitle]\n\n<section content>, truncated to maxChunkChars */
+  /** [path › H1 › H2]\n\n<section content>, at most maxChunkChars */
   text: string;
   /** Relative path from workspace root (forward slashes) */
   file: string;
@@ -130,19 +131,6 @@ export interface LanceConnection {
 }
 
 /**
- * Embedder pipeline interface for local transformers
- */
-export interface EmbedderPipeline {
-  (
-    text: string,
-    options?: { pooling?: string; normalize?: boolean },
-  ): Promise<{
-    tolist(): number[];
-    data: Float32Array;
-  }>;
-}
-
-/**
  * Why an embedding provider is unusable.
  *
  * The distinction that matters to callers is *lifetime*: `unreachable`,
@@ -162,6 +150,14 @@ export interface HealthResult {
   detail?: string;
   /** One-line remediation shown to the user. */
   hint?: string;
+}
+
+/** Stable identity of the embedding model behind a provider. */
+export interface EmbedIdentity {
+  provider: "local" | "ollama" | "openai";
+  model: string;
+  /** Vector dimension when known ahead of the first embed call. */
+  dim?: number;
 }
 
 export interface EmbedProvider {
@@ -187,6 +183,8 @@ export interface EmbedProvider {
    * Primarily used for idle-timeout cleanup in HTTP daemon mode.
    */
   dispose?(): void;
+
+  identity?(): EmbedIdentity;
 }
 
 export interface IndexerConfig {
@@ -213,7 +211,7 @@ export function validateConfig(
     docGlob: raw.docGlob && raw.docGlob.trim() ? raw.docGlob.trim() : "doc/**/*.md",
     indexDir: raw.indexDir && raw.indexDir.trim() ? raw.indexDir.trim() : ".doc-search-index",
     headingDepth: raw.headingDepth === 1 ? 1 : 2,
-    maxChunkChars: Math.max(100, Math.min(50_000, Number(raw.maxChunkChars) || 4000)),
+    maxChunkChars: resolveMaxChunkChars(raw.maxChunkChars, embedProvider),
     embedProvider,
     extraRoots: raw.extraRoots ?? [],
   };

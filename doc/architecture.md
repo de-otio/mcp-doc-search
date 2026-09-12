@@ -48,14 +48,14 @@ Splits markdown files into chunks at heading boundaries:
 
 1. **Fence detection** — `findFenceRanges()` identifies code fence line ranges to avoid splitting inside code blocks
 2. **Heading scan** — walks lines, identifies `#`/`##` headings (respecting `headingDepth`), skips headings inside fences
-3. **Chunk extraction** — extracts text between consecutive headings, prepends document title for context
+3. **Chunk extraction** — extracts text between consecutive headings, prepends a `[path › H1 › H2]` breadcrumb for context, and splits over-budget sections without cutting a code fence or table
 4. **ID generation** — creates stable IDs via `MD5(file:lineNumber).slice(0, 12)`, enabling safe re-indexing
 
 ### Embedder (`embedder.ts`)
 
 Three embedding providers behind a common `EmbedProvider` interface:
 
-- **`LocalEmbedder`** — `@huggingface/transformers` with `all-MiniLM-L6-v2` (384-dim ONNX). Adds `search_document:` / `search_query:` prefixes.
+- **`LocalEmbedder`** — `@huggingface/transformers` with a model from the `LOCAL_MODELS` registry (`all-MiniLM-L6-v2` by default; `multilingual-e5-small`, EmbeddingGemma, `nomic-embed-text-v1.5` selectable). Translates the caller's `search_document:` / `search_query:` roles into the model's own prefixes and embeds in batches of 32; the chunk budget is derived from the model's context window.
 - **`OllamaEmbedder`** — HTTP calls to a local Ollama server (768-dim default).
 - **`OpenAIEmbedder`** — OpenAI API with `text-embedding-3-small` (1536-dim).
 

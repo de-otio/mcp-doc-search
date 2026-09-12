@@ -91,4 +91,4 @@ The extension includes a built-in walkthrough. Access it via:
 
 ### Slow initial indexing
 
-The first index build downloads the embedding model (~22MB) and processes all files. Subsequent runs are incremental and much faster. Consider using the Ollama or OpenAI provider for faster embedding of large documentation sets.
+The first index build downloads the embedding model (~90 MB for the default `all-MiniLM-L6-v2`) and processes all files. Subsequent runs are incremental and much faster. Consider using the Ollama or OpenAI provider for faster embedding of large documentation sets.
