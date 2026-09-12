@@ -21,7 +21,13 @@ import { glob } from "glob";
 import { chunkMarkdown, computeDocid } from "./chunker.js";
 import { EmbedError, EmbedderUnavailableError, isFatalEmbedKind } from "./embedder.js";
 import { EXT_REF_SCHEME, extKey, parseExtKey } from "./extraRoots.js";
-import { PathTraversalError, resolveSafePath, resolveWithinBase } from "./safePath.js";
+import {
+  canonicalRoot,
+  isSymlinkOrEscapes,
+  PathTraversalError,
+  resolveSafePath,
+  resolveWithinBase,
+} from "./safePath.js";
 import type {
   CompactStats,
   EmbedFailureKind,
@@ -115,6 +121,34 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Path-context entries (sec 2.3: bounded, sanitized, dated)
+// ---------------------------------------------------------------------------
+
+/** Longest context text accepted by `setContext`, after sanitizing. */
+export const MAX_CONTEXT_TEXT_CHARS = 200;
+/** Most context entries one index may hold. */
+export const MAX_CONTEXT_ENTRIES = 100;
+/** Longest path prefix accepted as a context key. */
+export const MAX_CONTEXT_PREFIX_CHARS = 1024;
+
+/** A stored context entry: the sanitized text and when it was last written. */
+export interface ContextEntry {
+  text: string;
+  updatedAt: string;
+}
+
+/** On-disk / in-memory shape of `context.json`. */
+type ContextEntries = Record<string, ContextEntry>;
+
+/** Thrown by `setContext` when the prefix or text violates a cap or rule. */
+export class ContextValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ContextValidationError";
+  }
+}
+
 /**
  * Write JSON via a temp file + rename so a reader never sees a half-written
  * file and a crash mid-write leaves the previous version intact.
@@ -170,10 +204,49 @@ function describeMetaMismatch(
   return diffs.length > 0 ? diffs.join(", ") : null;
 }
 
+/**
+ * Make caller-supplied context text safe to prepend to every excerpt:
+ * line breaks and tabs become single spaces; remaining control (Cc) and
+ * format (Cf — bidi overrides, zero-width) characters are dropped; `[`/`]`
+ * become `(`/`)` so the text cannot close or forge a `[Context: ...]`
+ * marker; runs of whitespace collapse; result is trimmed.
+ */
+export function sanitizeContextText(raw: string): string {
+  return raw
+    .replace(/[\r\n\t\v\f]+/g, " ")
+    .replace(/[\p{Cc}\p{Cf}]/gu, "")
+    .replace(/\[/g, "(")
+    .replace(/\]/g, ")")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Coerce one raw `context.json` value into a `ContextEntry`. Legacy files
+ * hold bare strings; those get an empty `updatedAt`. Anything else is
+ * dropped. Text is re-sanitized and hard-capped so a hand-edited or
+ * pre-cap file cannot smuggle an unbounded entry past `setContext`.
+ */
+function normalizeContextEntry(value: unknown): ContextEntry | null {
+  let text: unknown;
+  let updatedAt = "";
+  if (typeof value === "string") {
+    text = value;
+  } else if (value && typeof value === "object") {
+    text = (value as { text?: unknown }).text;
+    const at = (value as { updatedAt?: unknown }).updatedAt;
+    if (typeof at === "string") updatedAt = at;
+  }
+  if (typeof text !== "string") return null;
+  const sanitized = sanitizeContextText(text).slice(0, MAX_CONTEXT_TEXT_CHARS);
+  if (!sanitized) return null;
+  return { text: sanitized, updatedAt };
+}
+
 export class Indexer {
   private config: IndexerConfig;
   private store: LanceVectorStore;
-  private _contextCache: PathContext | null = null;
+  private _contextCache: ContextEntries | null = null;
 
   /**
    * Consecutive per-file embed failures tolerated before abandoning the run.
@@ -214,6 +287,34 @@ export class Indexer {
   }
 
   /**
+   * The configured root directory that contains `absPath`: the matching
+   * external root's path, else the workspace root. Callers that read file
+   * content pass this to `assertRealpathWithin` so a symlink under the root
+   * cannot lead the read outside it.
+   */
+  rootForAbsPath(absPath: string): string {
+    const abs = path.resolve(absPath);
+    for (const root of this.config.extraRoots) {
+      // resolveExtKey hands back canonical paths, so match the canonical root
+      // as well as the configured spelling (a root under /tmp, ~/repos, ...
+      // is routinely a symlink).
+      const bases = [path.resolve(root.path)];
+      try {
+        bases.push(realpathSync(root.path));
+      } catch {
+        // Missing root: the configured spelling is the only form to match.
+      }
+      for (const base of bases) {
+        const baseWithSep = base.endsWith(path.sep) ? base : base + path.sep;
+        if (abs === base || abs.startsWith(baseWithSep)) {
+          return root.path;
+        }
+      }
+    }
+    return this.config.workspaceRoot;
+  }
+
+  /**
    * Enumerate every file the index should contain, as { absPath, key } pairs:
    * workspace files keyed by workspace-relative path, external-root files
    * keyed as `ext://<name>/<rel>`.
@@ -228,11 +329,28 @@ export class Indexer {
   }> {
     const entries: Array<{ absPath: string; key: string }> = [];
 
-    const mdFiles = await glob(this.config.docGlob, {
-      cwd: this.config.workspaceRoot,
-      absolute: true,
-      ignore: ["**/node_modules/**"],
-    });
+    // Symlink containment (sec 2.3): glob follows one level of symlinked
+    // directories even with `follow: false`, and a committed link can point
+    // anywhere on the machine. Every match is checked with lstat (drop links
+    // outright) and realpath (drop files under a link that leaves the root).
+    // The root is canonicalized once per scan; a root that cannot be
+    // canonicalized yields no files (fail closed).
+    let realWorkspace: string | null;
+    try {
+      realWorkspace = canonicalRoot(this.config.workspaceRoot);
+    } catch {
+      realWorkspace = null;
+    }
+
+    const mdFiles = realWorkspace
+      ? await glob(this.config.docGlob, {
+          cwd: this.config.workspaceRoot,
+          absolute: true,
+          ignore: ["**/node_modules/**"],
+          nodir: true,
+          follow: false,
+        })
+      : [];
     mdFiles.sort();
     for (const filePath of mdFiles) {
       const rel = path.relative(this.config.workspaceRoot, filePath).replace(/\\/g, "/");
@@ -241,12 +359,19 @@ export class Indexer {
         console.warn(`Path traversal blocked: ${filePath} is outside workspace`);
         continue;
       }
+      if (isSymlinkOrEscapes(realWorkspace as string, filePath)) {
+        console.warn(`Symlink skipped: ${rel} is a link or resolves outside the workspace`);
+        continue;
+      }
       entries.push({ absPath: filePath, key: rel });
     }
 
     const missingRootPrefixes: string[] = [];
     for (const root of this.config.extraRoots) {
-      if (!existsSync(root.path)) {
+      let realRoot: string;
+      try {
+        realRoot = canonicalRoot(root.path);
+      } catch {
         missingRootPrefixes.push(`${EXT_REF_SCHEME}${root.name}/`);
         console.warn(
           `Extra root "${root.name}" not found on disk; keeping its existing index entries`,
@@ -258,11 +383,18 @@ export class Indexer {
         absolute: true,
         ignore: ["**/node_modules/**"],
         nodir: true,
+        follow: false,
       });
       rootFiles.sort();
       for (const filePath of rootFiles) {
         const rel = path.relative(root.path, filePath).replace(/\\/g, "/");
         if (rel.startsWith("..") || path.isAbsolute(rel)) continue;
+        if (isSymlinkOrEscapes(realRoot, filePath)) {
+          console.warn(
+            `Symlink skipped: ${extKey(root.name, rel)} is a link or resolves outside its root`,
+          );
+          continue;
+        }
         entries.push({ absPath: filePath, key: extKey(root.name, rel) });
       }
     }
@@ -624,24 +756,38 @@ export class Indexer {
     return path.join(this.config.indexDir, "context.json");
   }
 
-  private loadContextCache(): PathContext {
+  /**
+   * Load `context.json` as a map of sanitized entries. Accepts both the
+   * legacy shape (`prefix: "text"`) and the current one
+   * (`prefix: { text, updatedAt }`). Text is re-sanitized and re-capped on
+   * load so an entry written by an older version, or edited by hand, is
+   * bounded the same way a fresh `setContext` is.
+   */
+  private loadContextCache(): ContextEntries {
     if (this._contextCache !== null) {
       return this._contextCache;
     }
     const p = this.contextPath();
+    let raw: unknown = {};
     if (existsSync(p)) {
       try {
-        this._contextCache = JSON.parse(readFileSync(p, "utf8")) as PathContext;
+        raw = JSON.parse(readFileSync(p, "utf8"));
       } catch {
-        this._contextCache = {};
+        raw = {};
       }
-    } else {
-      this._contextCache = {};
     }
-    return this._contextCache;
+    const entries: ContextEntries = {};
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      for (const [prefix, value] of Object.entries(raw as Record<string, unknown>)) {
+        const entry = normalizeContextEntry(value);
+        if (entry) entries[prefix] = entry;
+      }
+    }
+    this._contextCache = entries;
+    return entries;
   }
 
-  private saveContextCache(ctx: PathContext): void {
+  private saveContextCache(ctx: ContextEntries): void {
     writeJsonAtomic(this.contextPath(), ctx);
     this._contextCache = ctx;
   }
@@ -673,7 +819,7 @@ export class Indexer {
 
     for (const candidate of candidates) {
       if (Object.prototype.hasOwnProperty.call(ctx, candidate)) {
-        return ctx[candidate];
+        return ctx[candidate].text;
       }
     }
     return "";
@@ -682,30 +828,55 @@ export class Indexer {
   /**
    * Set a context description for a path prefix.
    * - Normalizes prefix to POSIX slashes.
-   * - Throws if prefix contains ".." or is an absolute path.
-   * - If text is empty after stripping whitespace, removes the entry instead.
+   * - Throws `ContextValidationError` if prefix contains ".." or is absolute.
+   * - Sanitizes text: newlines/tabs become spaces, other control and format
+   *   characters are stripped, `[`/`]` become `(`/`)` so the stored text can
+   *   never close or forge the `[Context: ...]` marker it is rendered in.
+   * - Throws `ContextValidationError` when the sanitized text exceeds
+   *   `MAX_CONTEXT_TEXT_CHARS`, or when adding a new prefix would exceed
+   *   `MAX_CONTEXT_ENTRIES` entries for this index.
+   * - If text is empty after sanitizing, removes the entry instead.
+   * Returns the stored entry (sanitized text + `updatedAt`), or null on removal.
    */
-  setContext(prefix: string, text: string): void {
+  setContext(prefix: string, text: string): ContextEntry | null {
     const normalized = prefix.replace(/\\/g, "/");
 
     if (path.isAbsolute(normalized) || path.isAbsolute(prefix)) {
-      throw new Error(`Context prefix must not be absolute: "${prefix}"`);
+      throw new ContextValidationError(`Context prefix must not be absolute: "${prefix}"`);
     }
     if (normalized.split("/").some((seg) => seg === "..")) {
-      throw new Error(`Context prefix must not contain "..": "${prefix}"`);
+      throw new ContextValidationError(`Context prefix must not contain "..": "${prefix}"`);
+    }
+    if (normalized.length > MAX_CONTEXT_PREFIX_CHARS) {
+      throw new ContextValidationError(
+        `Context prefix exceeds ${MAX_CONTEXT_PREFIX_CHARS} characters`,
+      );
     }
 
-    const trimmed = text.trim();
-    if (!trimmed) {
+    const sanitized = sanitizeContextText(text);
+    if (!sanitized) {
       this.removeContext(normalized);
-      return;
+      return null;
+    }
+    if (sanitized.length > MAX_CONTEXT_TEXT_CHARS) {
+      throw new ContextValidationError(
+        `Context text exceeds ${MAX_CONTEXT_TEXT_CHARS} characters (got ${sanitized.length})`,
+      );
     }
 
     // Reload from disk to avoid clobbering external edits
     this._contextCache = null;
     const ctx = { ...this.loadContextCache() };
-    ctx[normalized] = trimmed;
+    const isNew = !Object.prototype.hasOwnProperty.call(ctx, normalized);
+    if (isNew && Object.keys(ctx).length >= MAX_CONTEXT_ENTRIES) {
+      throw new ContextValidationError(
+        `Context entry limit reached (${MAX_CONTEXT_ENTRIES}); remove an entry first`,
+      );
+    }
+    const entry: ContextEntry = { text: sanitized, updatedAt: new Date().toISOString() };
+    ctx[normalized] = entry;
     this.saveContextCache(ctx);
+    return entry;
   }
 
   /**
@@ -726,10 +897,14 @@ export class Indexer {
   }
 
   /**
-   * Return a copy of the entire context map.
+   * Return the context map as prefix -> text (the shape consumers render).
    */
   listContexts(): PathContext {
-    return { ...this.loadContextCache() };
+    const out: PathContext = {};
+    for (const [prefix, entry] of Object.entries(this.loadContextCache())) {
+      out[prefix] = entry.text;
+    }
+    return out;
   }
 
   // ---------------------------------------------------------------------------

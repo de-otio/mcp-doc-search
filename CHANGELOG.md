@@ -7,14 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
+### Security
 
-- **Existing indexes are rebuilt once on the next reindex.** The vector table
-  gained a `fileHash` column and the index directory an `index-meta.json`
-  (schema version 2). An index without metadata is treated as schema 1 and
-  re-embedded in full; `reindex` reports why as `rebuiltReason` (CLI: "Rebuilt
-  the whole index: …"), and `status` prints the recorded provider, model,
-  dimension and chunking settings.
+- **HTTP daemon: DNS-rebinding and cross-origin protection.** The loopback
+  daemon now refuses any request whose `Host` header is not
+  `127.0.0.1:<port>` or `localhost:<port>`, and any request carrying an
+  `Origin` header at all, with 403 before a transport is built; the MCP
+  transport is additionally constructed with the SDK's
+  `enableDnsRebindingProtection` and the same host allow-list. CLI and IDE
+  MCP clients send neither header, so nothing changes for them.
+- **Symlinks can no longer lead reads outside the workspace.** `get` and
+  `multi_get` re-check the real path of every file against the real path of
+  its workspace or external root, and the crawl drops any glob match that is
+  a symlink or whose real path leaves the root (glob no longer follows
+  symlinked directories). A committed `doc/link -> ~/.ssh` is skipped by
+  `reindex_docs` and refused by `get`.
+- **`set_context` is bounded.** Text is capped at 200 characters after
+  sanitizing (line breaks and tabs become spaces, control and format
+  characters are dropped, `[`/`]` become `(`/`)`), an index holds at most
+  100 entries, prefixes are length-limited, and each entry records
+  `updatedAt`. Violations return a typed error instead of being stored.
+  Existing `context.json` files are read as before; over-long or unclean
+  legacy entries are sanitized and capped on load.
+- **Response caps on `get` / `multi_get`.** `max_bytes` is clamped to 1 MiB,
+  `max_lines` to 5000 (and now defaults to 5000 rather than "all lines"), a
+  glob batch returns at most 500 files and reports `globTruncated: { matched,
+limit }` when it was cut, and a file larger than 16 MiB is refused before
+  it is read.
+- `SECURITY.md` now states the threat model the code implements: a hostile
+  workspace is in scope; a hostile local user on the same machine is not.
 
 ### Fixed
 
@@ -43,6 +64,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   atomically (temp file + rename), so a reader never sees a half-written file.
 - CLI `context list` printed "No context notes." even when notes existed (it
   treated the map as an array).
+
+### Changed
+
+- **Existing indexes are rebuilt once on the next reindex.** The vector table
+  gained a `fileHash` column and the index directory an `index-meta.json`
+  (schema version 2). An index without metadata is treated as schema 1 and
+  re-embedded in full; `reindex` reports why as `rebuiltReason` (CLI: "Rebuilt
+  the whole index: …"), and `status` prints the recorded provider, model,
+  dimension and chunking settings.
 
 ## [0.7.1] - 2026-09-12
 
