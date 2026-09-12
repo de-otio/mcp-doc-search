@@ -39,6 +39,10 @@ updates:
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
 
+  # Every `uses:` in .github/workflows is pinned to a full commit SHA with a
+  # trailing `# vX.Y.Z` comment. Dependabot reads that comment to know the
+  # current version and rewrites both the SHA and the comment on update, so
+  # keep the comment when editing a pin by hand.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
