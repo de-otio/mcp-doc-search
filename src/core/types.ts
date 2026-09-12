@@ -4,11 +4,12 @@
  */
 
 import type { ExtraRoot } from "./extraRoots.js";
+import { resolveMaxChunkChars } from "./localModels.js";
 
 export interface DocChunk {
   /** Stable ID: md5(file:lineStart) first 12 hex chars */
   id: string;
-  /** [DocTitle]\n\n<section content>, truncated to maxChunkChars */
+  /** [path › H1 › H2]\n\n<section content>, at most maxChunkChars */
   text: string;
   /** Relative path from workspace root (forward slashes) */
   file: string;
@@ -21,12 +22,23 @@ export interface DocChunk {
 }
 
 export interface SearchExplanation {
-  /** Raw cosine similarity before keyword bonus */
+  /** Cosine similarity between the query and the chunk (same as SearchResult.score) */
   vectorScore: number;
-  /** Query terms that matched in the chunk text/heading */
+  /**
+   * 1-indexed position in the vector candidate list, or null when the chunk
+   * was recovered through the full-text side only. With several queries this
+   * is the best rank across them.
+   */
+  vectorRank: number | null;
+  /**
+   * 1-indexed position in the full-text (BM25) candidate list, or null when
+   * the chunk was not matched literally. Best rank across queries.
+   */
+  ftsRank: number | null;
+  /** Reciprocal-rank-fusion score the ranking is sorted by (sum of 1/(60 + rank)). */
+  rrfScore: number;
+  /** Query terms (see tokenizeQuery) found as substrings of the chunk text */
   keywordTermsMatched: string[];
-  /** Total keyword bonus applied */
-  keywordBonus: number;
   /** Final score (same as SearchResult.score, for completeness) */
   finalScore: number;
   /** 1-indexed position in result list */
@@ -38,7 +50,11 @@ export interface SearchResult {
   heading: string;
   /** First 600 chars of chunk text */
   excerpt: string;
-  /** vector_score + keyword_boost, rounded to 3 decimals */
+  /**
+   * Cosine similarity between query and chunk in [0, 1], rounded to 3
+   * decimals. Results are ordered by reciprocal rank fusion of the vector and
+   * full-text candidate lists, so `score` is not monotonic in rank.
+   */
   score: number;
   lineStart: number;
   /** Stable docid: first 6 chars of SHA-256 hex of the file's full content */
@@ -59,6 +75,32 @@ export interface IndexStats {
   firstError?: string;
   /** Set when this run compacted the vector store (see LanceVectorStore.compact). */
   compacted?: CompactStats;
+  /**
+   * Set when this run discarded the whole index and re-embedded every file
+   * because the on-disk index metadata no longer matched the live
+   * configuration (provider, model, dimension, chunking, schema version).
+   */
+  rebuiltReason?: string;
+}
+
+/**
+ * What produced the index, persisted as `<indexDir>/index-meta.json`.
+ *
+ * Exists because vectors from two different models are not comparable and
+ * chunks cut with different settings do not line up: any of these fields
+ * changing means the whole index must be rebuilt, not incrementally patched.
+ */
+export interface IndexMeta {
+  /** Layout of the LanceDB table and this file. 1 = pre-metadata indexes. */
+  schemaVersion: number;
+  provider: string;
+  model: string;
+  /** Vector dimension of the stored embeddings. */
+  dim: number;
+  maxChunkChars: number;
+  headingDepth: number;
+  /** ISO timestamp of when this index generation was created. */
+  createdAt: string;
 }
 
 /** Outcome of a LanceDB compaction + old-version prune. */
@@ -92,6 +134,17 @@ export interface IndexStatus {
   docGlob: string;
   /** Names of configured external roots (empty when none) */
   extraRootNames: string[];
+  /**
+   * On-disk index metadata, when present. Absent on an empty index and on
+   * indexes built before metadata existed (those are rebuilt on the next
+   * reindex).
+   */
+  meta?: IndexMeta;
+  /**
+   * Whether the full-text (BM25) index exists. False on an index built before
+   * hybrid search; `reindex` creates it. Absent when the store cannot say.
+   */
+  ftsIndex?: boolean;
 }
 
 /**
@@ -99,6 +152,15 @@ export interface IndexStatus {
  * values are short prose descriptions attached to that subtree.
  */
 export type PathContext = Record<string, string>;
+
+/**
+ * LanceDB scan/full-text query builder (minimal shape for type safety)
+ */
+export interface LanceQuery {
+  fullTextSearch(query: string, options?: { columns?: string | string[] }): LanceQuery;
+  limit(n: number): LanceQuery;
+  toArray(): Promise<unknown[]>;
+}
 
 /**
  * LanceDB table interface (minimal shape for type safety)
@@ -112,8 +174,10 @@ export interface LanceTable {
   };
   delete(filter: string): Promise<void>;
   add(records: unknown[]): Promise<void>;
-  query(): { toArray(): Promise<unknown[]> };
+  query(): LanceQuery;
   countRows(): Promise<number>;
+  createIndex(column: string, options?: { config?: unknown; replace?: boolean }): Promise<void>;
+  listIndices(): Promise<Array<{ name: string; indexType: string; columns: string[] }>>;
   optimize(options?: { cleanupOlderThan?: Date }): Promise<{
     compaction: { fragmentsRemoved: number; fragmentsAdded: number };
     prune: { bytesRemoved: number; oldVersionsRemoved: number };
@@ -127,19 +191,6 @@ export interface LanceConnection {
   openTable(name: string): Promise<LanceTable>;
   createTable(name: string, records: unknown[], options?: { mode?: string }): Promise<LanceTable>;
   dropTable(name: string): Promise<void>;
-}
-
-/**
- * Embedder pipeline interface for local transformers
- */
-export interface EmbedderPipeline {
-  (
-    text: string,
-    options?: { pooling?: string; normalize?: boolean },
-  ): Promise<{
-    tolist(): number[];
-    data: Float32Array;
-  }>;
 }
 
 /**
@@ -164,6 +215,14 @@ export interface HealthResult {
   hint?: string;
 }
 
+/** Stable identity of the embedding model behind a provider. */
+export interface EmbedIdentity {
+  provider: "local" | "ollama" | "openai";
+  model: string;
+  /** Vector dimension when known ahead of the first embed call. */
+  dim?: number;
+}
+
 export interface EmbedProvider {
   /**
    * Generate embeddings for a batch of texts.
@@ -180,6 +239,14 @@ export interface EmbedProvider {
    * Optional so hand-built and mock providers remain valid EmbedProviders.
    */
   healthCheck?(): Promise<HealthResult>;
+
+  /**
+   * Optional: which model this provider embeds with. Recorded in the index
+   * metadata so a provider/model switch forces a rebuild instead of silently
+   * mixing incomparable vectors. Optional so hand-built and mock providers
+   * remain valid EmbedProviders.
+   */
+  identity?(): EmbedIdentity;
 
   /**
    * Optional: dispose of any cached model/pipeline resources.
@@ -213,7 +280,7 @@ export function validateConfig(
     docGlob: raw.docGlob && raw.docGlob.trim() ? raw.docGlob.trim() : "doc/**/*.md",
     indexDir: raw.indexDir && raw.indexDir.trim() ? raw.indexDir.trim() : ".doc-search-index",
     headingDepth: raw.headingDepth === 1 ? 1 : 2,
-    maxChunkChars: Math.max(100, Math.min(50_000, Number(raw.maxChunkChars) || 4000)),
+    maxChunkChars: resolveMaxChunkChars(raw.maxChunkChars, embedProvider),
     embedProvider,
     extraRoots: raw.extraRoots ?? [],
   };

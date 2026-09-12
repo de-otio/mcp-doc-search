@@ -17,24 +17,31 @@ concurrency:
   group: publish-${{ github.ref }}
   cancel-in-progress: false
 
+# Least privilege by default. Jobs that need more (wait-for-ci reads
+# workflow runs; package signs provenance; release writes the GitHub
+# Release) escalate individually below. The package matrix runs npm
+# lifecycle scripts from third-party dependencies, so it must never hold
+# a token that can write to the repo.
 permissions:
-  contents: write
-  actions: read
+  contents: read
 
 jobs:
   # Block the publish until ci.yml has succeeded on the same commit.
   # Tag pushes do not trigger ci.yml (it only listens to main pushes and
   # PRs), so we wait for the ci.yml run that fired on the merge commit
-  # this tag points at. workflow_dispatch (manual smoke tests) skips
-  # the gate so dry-runs don't depend on a fresh CI run.
+  # this tag points at. The gate also applies to a workflow_dispatch that
+  # will publish; only a dry_run (package only, nothing leaves the runner)
+  # skips it so smoke tests don't depend on a fresh CI run.
   wait-for-ci:
     name: Wait for ci.yml on this commit
-    if: github.event_name == 'push'
+    if: ${{ github.event_name == 'push' || github.event.inputs.dry_run != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    permissions:
+      actions: read
     steps:
       - name: Wait for ci.yml to succeed
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -77,12 +84,17 @@ jobs:
     name: Package VSIX (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
     needs: wait-for-ci
-    # wait-for-ci only runs on tag pushes; on workflow_dispatch (manual
-    # re-publish / partial-publish recovery) it is skipped, which would
-    # otherwise cascade-skip this job. Run when the CI gate passed OR was
-    # skipped, but never when it actually failed.
+    # wait-for-ci is skipped on a dry-run dispatch, which would otherwise
+    # cascade-skip this job. Run when the CI gate passed OR was skipped,
+    # but never when it actually failed.
     if: ${{ !cancelled() && (needs.wait-for-ci.result == 'success' || needs.wait-for-ci.result == 'skipped') }}
     timeout-minutes: 25
+    # id-token + attestations are what actions/attest-build-provenance needs
+    # to sign the VSIX; contents stays read-only (see the workflow-level note).
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
 
     strategy:
       fail-fast: false
@@ -98,9 +110,9 @@ jobs:
             runner: windows-latest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: npm
@@ -136,8 +148,18 @@ jobs:
         shell: bash
         run: node scripts/verify-vsix.mjs --target=${{ matrix.target }}
 
+      # SLSA build provenance for the artifact that will be published. Users
+      # verify a downloaded VSIX against it with
+      #   gh attestation verify <file>.vsix --repo <owner>/<repo>
+      # Only signed when the run may publish; dry-run builds are throwaway.
+      - name: Attest build provenance
+        if: ${{ github.event_name == 'push' || github.event.inputs.dry_run != 'true' }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: "*.vsix"
+
       - name: Upload VSIX artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: vsix-${{ matrix.target }}
           path: "*.vsix"
@@ -153,11 +175,17 @@ jobs:
     # reads the dispatch input proved unreliable in combination with `needs`
     # (it silently skipped the whole job on workflow_dispatch).
     if: ${{ !cancelled() && needs.package.result == 'success' }}
+    # The `marketplace` environment guards the Marketplace PAT: with a
+    # required reviewer configured on it (repo Settings > Environments), a
+    # human approves this job before the secret is exposed to it.
+    environment: marketplace
+    permissions:
+      contents: read
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: npm
@@ -168,7 +196,7 @@ jobs:
           ONNXRUNTIME_NODE_INSTALL_CUDA: skip
 
       - name: Download all per-target VSIXes
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: artifacts
           pattern: vsix-*
@@ -224,12 +252,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     if: startsWith(github.ref, 'refs/tags/ext-v')
+    # Same gated environment as publish; contents: write is confined to this
+    # job because `gh release create|upload` needs it.
+    environment: marketplace
+    permissions:
+      contents: write
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Download all per-target VSIXes
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: artifacts
           pattern: vsix-*

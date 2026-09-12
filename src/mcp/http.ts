@@ -7,6 +7,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { registerTools } from "./tools.js";
+import { SERVER_INFO, SERVER_INSTRUCTIONS } from "./serverInfo.js";
 import type { EngineDeps } from "./config.js";
 import { sanitizeForClient } from "./errors.js";
 
@@ -29,6 +30,39 @@ class BodyTooLargeError extends Error {
     super("request body exceeds 10 MB limit");
     this.name = "BodyTooLargeError";
   }
+}
+
+/**
+ * Cross-origin / DNS-rebinding gate (sec 2.2). The daemon binds loopback, but
+ * a web page can still reach it two ways: a DNS name the attacker controls
+ * that resolves to 127.0.0.1 (Host header is then that name), or a plain
+ * cross-origin request from a browser on the same machine (Origin header is
+ * then the page's origin). CLI/IDE MCP clients send neither, so both are
+ * refused outright, before any body is read or a transport is built.
+ * Returns true when the request was rejected (a 403 has been written).
+ */
+function rejectCrossOrigin(req: IncomingMessage, res: ServerResponse, port: number): boolean {
+  const deny = (reason: string): boolean => {
+    res.writeHead(403, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: reason }));
+    return true;
+  };
+  if (req.headers.origin !== undefined) {
+    return deny("Cross-origin requests are not accepted");
+  }
+  const host = req.headers.host;
+  if (host === undefined || !allowedHostsFor(port).includes(host.toLowerCase())) {
+    return deny("Invalid Host header");
+  }
+  return false;
+}
+
+/**
+ * Host values the daemon answers to. The SDK compares the full header value
+ * (name and port), so both loopback spellings are listed with the bound port.
+ */
+function allowedHostsFor(port: number): string[] {
+  return [`127.0.0.1:${port}`, `localhost:${port}`];
 }
 
 function handleHealth(res: ServerResponse): void {
@@ -108,17 +142,26 @@ export async function startHttpServer(
    * The expensive deps are captured via closure and shared across requests.
    */
   function createMcpServer(): Server {
-    const server = new Server(
-      { name: "doc-search", version: "0.1.0" },
-      { capabilities: { tools: {} } },
-    );
+    const server = new Server(SERVER_INFO, {
+      capabilities: { tools: {} },
+      instructions: SERVER_INSTRUCTIONS,
+    });
     registerTools(server, deps);
     return server;
   }
 
+  // The bound port is needed for Host validation; set once listen() resolves
+  // (an ephemeral `port: 0` request is only known then). No request can
+  // arrive before that.
+  let boundPort = port;
+
   const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = req.url ?? "/";
     const method = req.method ?? "GET";
+
+    if (rejectCrossOrigin(req, res, boundPort)) {
+      return;
+    }
 
     if (method === "GET" && url === "/health") {
       handleHealth(res);
@@ -131,6 +174,12 @@ export async function startHttpServer(
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         enableJsonResponse: true,
+        // Belt and braces with rejectCrossOrigin above: the SDK re-validates
+        // Host against the exact allow-list. allowedOrigins is empty because
+        // no Origin is acceptable at all (already refused before this point).
+        enableDnsRebindingProtection: true,
+        allowedHosts: allowedHostsFor(boundPort),
+        allowedOrigins: [],
       });
       const mcpServer = createMcpServer();
 
@@ -201,7 +250,7 @@ export async function startHttpServer(
     httpServer.once("error", reject);
     httpServer.listen(port, "127.0.0.1", () => {
       const addr = httpServer.address();
-      const boundPort = typeof addr === "object" && addr !== null ? addr.port : port;
+      boundPort = typeof addr === "object" && addr !== null ? addr.port : port;
       process.stderr.write(`MCP HTTP server listening on http://127.0.0.1:${boundPort}\n`);
       resolve({
         port: boundPort,

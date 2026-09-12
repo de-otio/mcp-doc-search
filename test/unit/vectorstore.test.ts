@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { LanceVectorStore } from "../../src/core/vectorstore.js";
+import { createHash } from "node:crypto";
+import { LanceVectorStore, fileHashKey } from "../../src/core/vectorstore.js";
+
+const sha256 = (s: string): string => createHash("sha256").update(s).digest("hex");
 
 // Mock LanceDB
 vi.mock("@lancedb/lancedb", () => ({
@@ -26,6 +29,8 @@ describe("LanceVectorStore", () => {
       query: vi.fn(),
       countRows: vi.fn(),
       optimize: vi.fn(),
+      listIndices: vi.fn().mockResolvedValue([]),
+      createIndex: vi.fn(),
     };
 
     mockDb = {
@@ -117,7 +122,8 @@ describe("LanceVectorStore", () => {
 
       await store.upsert(records);
 
-      expect(mockTable.add).toHaveBeenCalledWith(records);
+      // Each row is stored with the sha256 of its key, which deleteByFile filters on.
+      expect(mockTable.add).toHaveBeenCalledWith([{ ...records[0], fileHash: sha256("test.md") }]);
     });
 
     it("should throw error if table not initialized", async () => {
@@ -186,7 +192,7 @@ describe("LanceVectorStore", () => {
   });
 
   describe("deleteByFile", () => {
-    it("should delete records by file path", async () => {
+    it("filters on the sha256 of the key, never on the raw path", async () => {
       const lancedb = await import("@lancedb/lancedb");
       vi.mocked(lancedb.connect).mockResolvedValue(mockDb);
       mockDb.openTable.mockResolvedValue(mockTable);
@@ -195,33 +201,94 @@ describe("LanceVectorStore", () => {
       await store.open();
       await store.deleteByFile("test.md");
 
-      expect(mockTable.delete).toHaveBeenCalledWith("file = 'test.md'");
+      expect(mockTable.delete).toHaveBeenCalledWith(`\`fileHash\` = '${sha256("test.md")}'`);
     });
 
-    it("should escape single quotes in file paths", async () => {
+    it.each([
+      ["ext:// key", "ext://vendor/pages/guide.mdx"],
+      ["single quote", "test's-file.md"],
+      ["space and non-ASCII", "ext://v/ü file.md"],
+      ["shell-ish characters", "a@b+c%d<script>.md"],
+    ])("deletes keys the old allow-list refused (%s)", async (_label, key) => {
       const lancedb = await import("@lancedb/lancedb");
       vi.mocked(lancedb.connect).mockResolvedValue(mockDb);
       mockDb.openTable.mockResolvedValue(mockTable);
 
       const store = new LanceVectorStore("/tmp/index");
       await store.open();
-      await store.deleteByFile("test's-file.md");
+      await store.deleteByFile(key);
 
-      expect(mockTable.delete).toHaveBeenCalledWith("file = 'test''s-file.md'");
+      const filter = mockTable.delete.mock.calls[0][0] as string;
+      expect(filter).toBe(`\`fileHash\` = '${fileHashKey(key)}'`);
+      // Hex only after the column name: nothing from the key reaches the SQL.
+      expect(filter).toMatch(/^`fileHash` = '[0-9a-f]{64}'$/);
     });
 
-    it("should reject suspicious file paths", async () => {
+    it("rethrows a failed delete after warning, instead of swallowing it", async () => {
       const lancedb = await import("@lancedb/lancedb");
       vi.mocked(lancedb.connect).mockResolvedValue(mockDb);
       mockDb.openTable.mockResolvedValue(mockTable);
+      mockTable.delete.mockRejectedValue(new Error("commit conflict"));
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
       const store = new LanceVectorStore("/tmp/index");
       await store.open();
 
-      // Should not throw, but should catch internally
-      await store.deleteByFile("test<script>.md");
+      await expect(store.deleteByFile("doc/a.md")).rejects.toThrow("commit conflict");
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("doc/a.md"));
+      warn.mockRestore();
+    });
 
+    it("still enforces the key length cap", async () => {
+      const lancedb = await import("@lancedb/lancedb");
+      vi.mocked(lancedb.connect).mockResolvedValue(mockDb);
+      mockDb.openTable.mockResolvedValue(mockTable);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const store = new LanceVectorStore("/tmp/index");
+      await store.open();
+
+      await expect(store.deleteByFile("x".repeat(2049))).rejects.toThrow(/too long/);
       expect(mockTable.delete).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    it("is a no-op when there is no table yet", async () => {
+      const lancedb = await import("@lancedb/lancedb");
+      vi.mocked(lancedb.connect).mockResolvedValue(mockDb);
+      mockDb.openTable.mockRejectedValue(new Error("Not found"));
+
+      const store = new LanceVectorStore("/tmp/index");
+      await store.open();
+      await expect(store.deleteByFile("doc/a.md")).resolves.toBeUndefined();
+      expect(mockTable.delete).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("dropTable", () => {
+    it("drops the table and forgets it", async () => {
+      const lancedb = await import("@lancedb/lancedb");
+      vi.mocked(lancedb.connect).mockResolvedValue(mockDb);
+      mockDb.openTable.mockResolvedValue(mockTable);
+
+      const store = new LanceVectorStore("/tmp/index");
+      await store.open();
+      await store.dropTable();
+
+      expect(mockDb.dropTable).toHaveBeenCalledWith("doc_chunks");
+      expect(store.hasTable()).toBe(false);
+    });
+
+    it("is a no-op without a table", async () => {
+      const lancedb = await import("@lancedb/lancedb");
+      vi.mocked(lancedb.connect).mockResolvedValue(mockDb);
+      mockDb.openTable.mockRejectedValue(new Error("Not found"));
+
+      const store = new LanceVectorStore("/tmp/index");
+      await store.open();
+      await store.dropTable();
+
+      expect(mockDb.dropTable).not.toHaveBeenCalled();
     });
   });
 

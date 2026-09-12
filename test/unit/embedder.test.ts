@@ -1,10 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
+  DEFAULT_LOCAL_MODEL,
+  LOCAL_MODELS,
+  LocalEmbedder,
   OllamaEmbedder,
   OpenAIEmbedder,
-  LocalEmbedder,
   createEmbedProvider,
+  defaultMaxChunkChars,
   isFatalEmbedKind,
+  resolveMaxChunkChars,
 } from "../../src/core/embedder.js";
 
 // ---------------------------------------------------------------------------
@@ -319,23 +323,45 @@ describe("OpenAIEmbedder", () => {
 // We inject a fake `loader` so tests never actually require the real
 // @huggingface/transformers package (which would download a model).
 
+/** A fake transformers.js runtime that records calls and returns fixed vectors. */
+function makeFakeRuntime() {
+  const pipelineFn = vi.fn(async (texts: string[]) => ({
+    tolist: () => texts.map(() => [0.1, 0.2, 0.3]),
+  }));
+  const pipelineFactory = vi.fn(async () => pipelineFn);
+  const tokenizer = vi.fn(async (texts: string[]) => ({ texts }));
+  const tokenizerFactory = vi.fn(async () => tokenizer);
+  const modelFn = vi.fn(async (inputs: { texts: string[] }) => ({
+    sentence_embedding: {
+      normalize: () => ({ tolist: () => inputs.texts.map(() => [0.4, 0.5]) }),
+    },
+  }));
+  const modelFactory = vi.fn(async () => modelFn);
+  const env = { localModelPath: "" };
+  const loader = () =>
+    ({
+      pipeline: pipelineFactory,
+      env,
+      AutoTokenizer: { from_pretrained: tokenizerFactory },
+      AutoModel: { from_pretrained: modelFactory },
+    }) as unknown as typeof import("@huggingface/transformers");
+  return {
+    pipelineFn,
+    pipelineFactory,
+    tokenizer,
+    tokenizerFactory,
+    modelFn,
+    modelFactory,
+    env,
+    loader,
+  };
+}
+
 describe("LocalEmbedder", () => {
-  let fakePipelineFn: ReturnType<typeof vi.fn>;
-  let fakePipelineFactory: ReturnType<typeof vi.fn>;
-  let fakeEnv: { localModelPath: string };
-  let fakeLoader: () => typeof import("@huggingface/transformers");
+  let rt: ReturnType<typeof makeFakeRuntime>;
 
   beforeEach(() => {
-    fakeEnv = { localModelPath: "" };
-    fakePipelineFn = vi.fn(async () => ({
-      data: new Float32Array([0.1, 0.2, 0.3]),
-    }));
-    fakePipelineFactory = vi.fn(async () => fakePipelineFn);
-    fakeLoader = () =>
-      ({
-        pipeline: fakePipelineFactory,
-        env: fakeEnv,
-      }) as unknown as typeof import("@huggingface/transformers");
+    rt = makeFakeRuntime();
   });
 
   afterEach(() => {
@@ -343,44 +369,258 @@ describe("LocalEmbedder", () => {
   });
 
   it("calls the transformers pipeline and returns float arrays", async () => {
-    const embedder = new LocalEmbedder({ loader: fakeLoader });
+    const embedder = new LocalEmbedder({ loader: rt.loader });
     const result = await embedder.embed(["hello world"]);
 
-    expect(result).toHaveLength(1);
-    expect(result[0]).toEqual([
-      expect.closeTo(0.1, 4),
-      expect.closeTo(0.2, 4),
-      expect.closeTo(0.3, 4),
+    expect(result).toEqual([
+      [expect.closeTo(0.1, 4), expect.closeTo(0.2, 4), expect.closeTo(0.3, 4)],
     ]);
   });
 
-  it("ignores the prefix parameter", async () => {
-    const embedder = new LocalEmbedder({ loader: fakeLoader });
+  it("drops the caller's role prefix for a model trained without prefixes (MiniLM)", async () => {
+    const embedder = new LocalEmbedder({ loader: rt.loader });
     await embedder.embed(["test"], "search_document: ");
 
-    // The pipeline is called with the raw text, NOT with the prefix
-    expect(fakePipelineFn).toHaveBeenCalledWith("test", {
-      pooling: "mean",
-      normalize: true,
+    expect(rt.pipelineFn).toHaveBeenCalledWith(["test"], { pooling: "mean", normalize: true });
+  });
+
+  it("translates role prefixes into the model's own (multilingual-e5-small)", async () => {
+    const embedder = new LocalEmbedder({
+      model: "Xenova/multilingual-e5-small",
+      loader: rt.loader,
     });
+    await embedder.embed(["frage"], "search_query: ");
+    await embedder.embed(["absatz"], "search_document: ");
+    await embedder.embed(["roh"]);
+
+    const calls = rt.pipelineFn.mock.calls.map((c) => c[0]);
+    expect(calls).toEqual([["query: frage"], ["passage: absatz"], ["roh"]]);
+  });
+
+  it("loads the default model with no dtype and a registry model with its dtype", async () => {
+    await new LocalEmbedder({ loader: rt.loader }).embed(["a"]);
+    await new LocalEmbedder({ model: "nomic-ai/nomic-embed-text-v1.5", loader: rt.loader }).embed([
+      "b",
+    ]);
+
+    expect(rt.pipelineFactory).toHaveBeenNthCalledWith(
+      1,
+      "feature-extraction",
+      "Xenova/all-MiniLM-L6-v2",
+      {},
+    );
+    expect(rt.pipelineFactory).toHaveBeenNthCalledWith(
+      2,
+      "feature-extraction",
+      "nomic-ai/nomic-embed-text-v1.5",
+      { dtype: "q8" },
+    );
+  });
+
+  it("batches model calls in groups of 32 and preserves order", async () => {
+    const embedder = new LocalEmbedder({ loader: rt.loader });
+    const texts = Array.from({ length: 70 }, (_, i) => `t${i}`);
+
+    const result = await embedder.embed(texts);
+
+    expect(result).toHaveLength(70);
+    expect(rt.pipelineFn.mock.calls.map((c) => c[0].length)).toEqual([32, 32, 6]);
+    expect(rt.pipelineFn.mock.calls[2][0]).toEqual(["t64", "t65", "t66", "t67", "t68", "t69"]);
+  });
+
+  it("drives EmbeddingGemma through AutoModel and its sentence_embedding output", async () => {
+    const embedder = new LocalEmbedder({
+      model: "onnx-community/embeddinggemma-300m-ONNX",
+      loader: rt.loader,
+    });
+    const result = await embedder.embed(["hello"], "search_query: ");
+
+    expect(rt.pipelineFactory).not.toHaveBeenCalled();
+    expect(rt.modelFactory).toHaveBeenCalledWith("onnx-community/embeddinggemma-300m-ONNX", {
+      dtype: "q8",
+    });
+    expect(rt.tokenizer).toHaveBeenCalledWith(["task: search result | query: hello"], {
+      padding: true,
+      truncation: true,
+    });
+    expect(result).toEqual([[0.4, 0.5]]);
+  });
+
+  it("returns an empty result without loading anything for an empty batch", async () => {
+    const embedder = new LocalEmbedder({ loader: rt.loader });
+
+    expect(await embedder.embed([])).toEqual([]);
+    expect(rt.pipelineFactory).not.toHaveBeenCalled();
   });
 
   it("sets localModelPath on env when modelPath is provided", async () => {
-    const embedder = new LocalEmbedder({ modelPath: "/tmp/models", loader: fakeLoader });
+    const embedder = new LocalEmbedder({ modelPath: "/tmp/models", loader: rt.loader });
     await embedder.embed(["test"]);
 
-    expect(fakeEnv.localModelPath).toBe("/tmp/models");
+    expect(rt.env.localModelPath).toBe("/tmp/models");
   });
 
-  it("reuses the pipeline across multiple embed calls", async () => {
-    const embedder = new LocalEmbedder({ loader: fakeLoader });
+  it("reuses the loaded model across multiple embed calls", async () => {
+    const embedder = new LocalEmbedder({ loader: rt.loader });
     await embedder.embed(["first"]);
     await embedder.embed(["second"]);
 
-    // pipeline factory should only be called once (lazy init)
-    expect(fakePipelineFactory).toHaveBeenCalledTimes(1);
-    // But the pipeline function itself is called for each text
-    expect(fakePipelineFn).toHaveBeenCalledTimes(2);
+    // model factory should only be called once (lazy init)
+    expect(rt.pipelineFactory).toHaveBeenCalledTimes(1);
+    // But the model itself is called for each batch
+    expect(rt.pipelineFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports its identity from the registry spec", () => {
+    expect(new LocalEmbedder({ loader: rt.loader }).identity()).toEqual({
+      provider: "local",
+      model: "Xenova/all-MiniLM-L6-v2",
+      dim: 384,
+    });
+    expect(
+      new LocalEmbedder({
+        model: "onnx-community/embeddinggemma-300m-ONNX",
+        loader: rt.loader,
+      }).identity(),
+    ).toEqual({ provider: "local", model: "onnx-community/embeddinggemma-300m-ONNX", dim: 768 });
+  });
+
+  it("rejects an unknown model id at construction, naming the known ones", () => {
+    expect(() => new LocalEmbedder({ model: "Xenova/no-such-model", loader: rt.loader })).toThrow(
+      /Unknown local embedding model "Xenova\/no-such-model".*all-MiniLM-L6-v2/,
+    );
+  });
+
+  it("treats a blank model id as the default", () => {
+    expect(new LocalEmbedder({ model: "  ", loader: rt.loader }).identity().model).toBe(
+      DEFAULT_LOCAL_MODEL,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LOCAL_MODELS registry and the chunk budget derived from it
+// ---------------------------------------------------------------------------
+
+describe("LOCAL_MODELS", () => {
+  it("keeps all-MiniLM-L6-v2 as the default and lists the four supported models", () => {
+    expect(DEFAULT_LOCAL_MODEL).toBe("Xenova/all-MiniLM-L6-v2");
+    expect(Object.keys(LOCAL_MODELS).sort()).toEqual([
+      "Xenova/all-MiniLM-L6-v2",
+      "Xenova/multilingual-e5-small",
+      "nomic-ai/nomic-embed-text-v1.5",
+      "onnx-community/embeddinggemma-300m-ONNX",
+    ]);
+  });
+
+  it("every spec is internally consistent", () => {
+    for (const [key, spec] of Object.entries(LOCAL_MODELS)) {
+      expect(spec.id).toBe(key);
+      expect(spec.dim).toBeGreaterThan(0);
+      expect(spec.ctxTokens).toBeGreaterThan(0);
+      expect(spec.downloadMb).toBeGreaterThan(0);
+      // A query prefix without a document prefix (or vice versa) is a typo.
+      expect(spec.queryPrefix === "").toBe(spec.docPrefix === "");
+    }
+  });
+
+  it("derives the chunk budget from the context window, clamped to [800, 8000]", () => {
+    expect(defaultMaxChunkChars(LOCAL_MODELS["Xenova/all-MiniLM-L6-v2"])).toBe(800);
+    expect(defaultMaxChunkChars(LOCAL_MODELS["Xenova/multilingual-e5-small"])).toBe(1536);
+    expect(defaultMaxChunkChars(LOCAL_MODELS["onnx-community/embeddinggemma-300m-ONNX"])).toBe(
+      6144,
+    );
+    expect(defaultMaxChunkChars(LOCAL_MODELS["nomic-ai/nomic-embed-text-v1.5"])).toBe(8000);
+  });
+});
+
+describe("resolveMaxChunkChars", () => {
+  const local = new LocalEmbedder({ loader: makeFakeRuntime().loader });
+
+  it("lets an explicit value win, clamped to 100–50000", () => {
+    expect(resolveMaxChunkChars(1200, local)).toBe(1200);
+    expect(resolveMaxChunkChars("2500", local)).toBe(2500);
+    expect(resolveMaxChunkChars(5, local)).toBe(100);
+    expect(resolveMaxChunkChars(1e9, local)).toBe(50_000);
+  });
+
+  it("treats 0, unset and junk as auto: model-derived for the local provider", () => {
+    expect(resolveMaxChunkChars(0, local)).toBe(800);
+    expect(resolveMaxChunkChars(undefined, local)).toBe(800);
+    expect(resolveMaxChunkChars("auto", local)).toBe(800);
+    const e5 = new LocalEmbedder({
+      model: "Xenova/multilingual-e5-small",
+      loader: makeFakeRuntime().loader,
+    });
+    expect(resolveMaxChunkChars(0, e5)).toBe(1536);
+  });
+
+  it("keeps the legacy 4000 for Ollama, OpenAI and identity-less providers", () => {
+    expect(resolveMaxChunkChars(0, new OllamaEmbedder())).toBe(4000);
+    expect(resolveMaxChunkChars(0, new OpenAIEmbedder("sk-x"))).toBe(4000);
+    expect(resolveMaxChunkChars(0, { embed: async () => [] })).toBe(4000);
+    expect(resolveMaxChunkChars(0, undefined)).toBe(4000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// identity() on the remote providers
+// ---------------------------------------------------------------------------
+
+describe("identity()", () => {
+  it("Ollama reports its model without a dimension", () => {
+    expect(new OllamaEmbedder("mxbai-embed-large").identity()).toEqual({
+      provider: "ollama",
+      model: "mxbai-embed-large",
+    });
+  });
+
+  it("OpenAI reports the dimension of known models only", () => {
+    expect(new OpenAIEmbedder("sk-x").identity()).toEqual({
+      provider: "openai",
+      model: "text-embedding-3-small",
+      dim: 1536,
+    });
+    expect(new OpenAIEmbedder("sk-x", "text-embedding-3-large").identity()).toEqual({
+      provider: "openai",
+      model: "text-embedding-3-large",
+      dim: 3072,
+    });
+    expect(new OpenAIEmbedder("sk-x", "future-model").identity()).toEqual({
+      provider: "openai",
+      model: "future-model",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// identity() — what the index metadata records
+// ---------------------------------------------------------------------------
+
+describe("identity", () => {
+  it("LocalEmbedder names the bundled model with its known dimension", () => {
+    expect(new LocalEmbedder().identity()).toEqual({
+      provider: "local",
+      model: "Xenova/all-MiniLM-L6-v2",
+      dim: 384,
+    });
+  });
+
+  it("OllamaEmbedder reports the configured model without a dimension", () => {
+    expect(new OllamaEmbedder("mxbai-embed-large").identity()).toEqual({
+      provider: "ollama",
+      model: "mxbai-embed-large",
+    });
+  });
+
+  it("OpenAIEmbedder knows the dimension of its default model only", () => {
+    expect(new OpenAIEmbedder("sk-test").identity()).toEqual({
+      provider: "openai",
+      model: "text-embedding-3-small",
+      dim: 1536,
+    });
+    expect(new OpenAIEmbedder("sk-test", "text-embedding-3-large").identity().dim).toBe(3072);
+    expect(new OpenAIEmbedder("sk-test", "some-future-model").identity().dim).toBeUndefined();
   });
 });
 
@@ -392,6 +632,18 @@ describe("createEmbedProvider", () => {
   it("returns a LocalEmbedder for 'local' provider", () => {
     const provider = createEmbedProvider({ embedProvider: "local" });
     expect(provider).toBeInstanceOf(LocalEmbedder);
+    expect(provider.identity?.().model).toBe(DEFAULT_LOCAL_MODEL);
+  });
+
+  it("passes localModel through to the LocalEmbedder", () => {
+    const provider = createEmbedProvider({
+      embedProvider: "local",
+      localModel: "Xenova/multilingual-e5-small",
+    });
+    expect(provider.identity?.()).toMatchObject({
+      provider: "local",
+      model: "Xenova/multilingual-e5-small",
+    });
   });
 
   it("returns an OllamaEmbedder for 'ollama' provider", () => {

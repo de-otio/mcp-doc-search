@@ -48,14 +48,14 @@ Splits markdown files into chunks at heading boundaries:
 
 1. **Fence detection** — `findFenceRanges()` identifies code fence line ranges to avoid splitting inside code blocks
 2. **Heading scan** — walks lines, identifies `#`/`##` headings (respecting `headingDepth`), skips headings inside fences
-3. **Chunk extraction** — extracts text between consecutive headings, prepends document title for context
+3. **Chunk extraction** — extracts text between consecutive headings, prepends a `[path › H1 › H2]` breadcrumb for context, and splits over-budget sections without cutting a code fence or table
 4. **ID generation** — creates stable IDs via `MD5(file:lineNumber).slice(0, 12)`, enabling safe re-indexing
 
 ### Embedder (`embedder.ts`)
 
 Three embedding providers behind a common `EmbedProvider` interface:
 
-- **`LocalEmbedder`** — `@huggingface/transformers` with `all-MiniLM-L6-v2` (384-dim ONNX). Adds `search_document:` / `search_query:` prefixes.
+- **`LocalEmbedder`** — `@huggingface/transformers` with a model from the `LOCAL_MODELS` registry (`all-MiniLM-L6-v2` by default; `multilingual-e5-small`, EmbeddingGemma, `nomic-embed-text-v1.5` selectable). Translates the caller's `search_document:` / `search_query:` roles into the model's own prefixes and embeds in batches of 32; the chunk budget is derived from the model's context window.
 - **`OllamaEmbedder`** — HTTP calls to a local Ollama server (768-dim default).
 - **`OpenAIEmbedder`** — OpenAI API with `text-embedding-3-small` (1536-dim).
 
@@ -66,33 +66,47 @@ Factory function `createEmbedProvider(config)` instantiates the correct provider
 Wraps `@lancedb/lancedb` with a file-backed database:
 
 - **Cosine distance** metric for similarity
-- **Operations:** `upsert`, `query`, `deleteByFile`, `listFiles`, `count`
-- **Schema:** `{id, text, file, heading, lineStart, vector}`
+- **Operations:** `upsert`, `query`, `deleteByFile`, `dropTable`, `listFiles`, `count`
+- **Schema:** `{id, text, file, fileHash, heading, lineStart, vector, docid}` —
+  `fileHash` is the SHA-256 of `file`; `deleteByFile` filters on it so index
+  keys of any shape (`ext://…`, spaces, non-ASCII) can be deleted without
+  escaping. A failed delete is logged and rethrown, never swallowed.
 - No server process — reads/writes directly to disk
 
 ### Indexer (`indexer.ts`)
 
 Orchestrates the full indexing pipeline:
 
-1. **Crawl** — glob for matching files
-2. **mtime check** — skip files unchanged since last index (reads `mtime_cache.json`)
-3. **Chunk** — split each file via the chunker
-4. **Embed** — batch embed chunk texts
-5. **Delete + Upsert** — remove old chunks for the file, insert new ones
-6. **Cache** — write updated mtimes
+1. **Lock** — take `<indexDir>/reindex.lock` (`O_EXCL`, pid + start time); a
+   live holder makes the run throw `ReindexInProgressError`, a dead one is
+   replaced. Released in `finally`, after compaction.
+2. **Crawl** — glob for matching files
+3. **Metadata check** — compare `index-meta.json` (schema version, provider,
+   model, vector dimension, `maxChunkChars`, `headingDepth`) with the live
+   config; on any difference, or on a non-empty index with no metadata, drop
+   the table and the mtime cache and re-embed everything (`rebuiltReason`)
+4. **mtime check** — skip files unchanged since last index (reads `mtime_cache.json`)
+5. **Chunk** — split each file via the chunker
+6. **Embed** — batch embed chunk texts
+7. **Delete + Upsert** — remove old chunks for the file, insert new ones
+8. **Cache** — write updated mtimes (temp file + rename, like every JSON file
+   in the index directory)
 
 Progress callbacks report `(processed, total, file, phase)` where phase is `scanning`, `loading`, or `indexing`.
 
 ### Searcher (`searcher.ts`)
 
-Hybrid search combining vector similarity with keyword re-ranking:
+Hybrid search fusing vector similarity with a full-text index:
 
-1. **Embed** the query with `search_query:` prefix
-2. **Vector search** — fetch 3x candidates from LanceDB (cosine distance)
-3. **Keyword boost** — tokenize query (with camelCase expansion), count term matches in each chunk, add `hits * 0.03` to the score
-4. **Re-rank** — sort by final score, return top N
+1. **Embed** every query (the primary `query` plus any `queries`, at most 5) with the `search_query:` prefix, in one batch
+2. **Vector search** — per query, fetch the top 3n candidates from LanceDB (cosine distance, capped at 300)
+3. **Full-text search** — per query, fetch the top 3n BM25 matches from LanceDB's inverted index on `text` (literal, lowercased tokens; no stemming)
+4. **Fuse** — reciprocal rank fusion (`1 / (60 + rank)` summed over every list), deterministic tie-break on similarity
+5. **Return** the top N; `score` is the chunk's cosine similarity, the order is the RRF order
 
-The keyword boost prevents purely semantic matches from dominating when exact terms appear in the documentation.
+A chunk the embedding misses but the exact terms hit is recovered through the full-text list. If the table has no full-text index yet (or it is stale mid-reindex) the full-text side is skipped with a warning and ranking is vector-only.
+
+The full-text index is maintained by the indexer: it is rebuilt at the end of every `reindex()` that wrote or pruned rows (LanceDB 0.13 leaves stale postings behind after deletes, which can make a query fail), and the store rebuilds it again after compaction, which invalidates the inverted index's row mapping.
 
 ## VS Code Extension (`src/extension/`)
 
@@ -153,20 +167,20 @@ DocChunk[]
 DocChunk[] + vectors
     ↓ store.deleteByFile() + store.upsert()
 LanceDB table
-    ↓ write mtime_cache.json
+    ↓ write mtime_cache.json (+ index-meta.json on a fresh or rebuilt index)
 Done
 ```
 
 ### Searching
 
 ```
-User query
+User query (+ optional alternative phrasings)
     ↓ embedder.embed()
-Query vector
-    ↓ store.query(vector, n*3)
-Candidate chunks (over-fetched)
-    ↓ keywordBoost()
-Scored candidates
-    ↓ sort + slice(0, n)
-Top N results
+Query vectors
+    ↓ store.query(vector, n*3)        ↓ store.fullTextQuery(text, n*3)
+Vector candidates (per query)        Full-text candidates (per query)
+    ↓ rrfFuse()  — 1 / (60 + rank) summed over every list
+Fused candidates
+    ↓ slice(0, n)
+Top N results (score = cosine similarity, order = RRF)
 ```

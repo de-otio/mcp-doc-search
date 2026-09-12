@@ -53,13 +53,156 @@ export function computeDocid(content: string): string {
 }
 
 /**
+ * Character ranges `[start, end)` of blocks a mid-section split must not land
+ * inside: fenced code (``` … ```) and pipe tables (consecutive lines whose
+ * first non-blank character is `|`). `end` is the end of the block's last
+ * line, excluding its newline. An unclosed fence runs to the end of the text.
+ */
+export function findProtectedRanges(text: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  const lines = text.split("\n");
+  let offset = 0;
+  let fenceStart = -1;
+  let tableStart = -1;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const lineEnd = offset + line.length;
+
+    if (fenceStart >= 0) {
+      if (trimmed.startsWith("```")) {
+        ranges.push([fenceStart, lineEnd]);
+        fenceStart = -1;
+      }
+    } else if (trimmed.startsWith("```")) {
+      if (tableStart >= 0) {
+        ranges.push([tableStart, offset - 1]);
+        tableStart = -1;
+      }
+      fenceStart = offset;
+    } else if (trimmed.startsWith("|")) {
+      if (tableStart < 0) tableStart = offset;
+    } else if (tableStart >= 0) {
+      ranges.push([tableStart, offset - 1]);
+      tableStart = -1;
+    }
+
+    offset = lineEnd + 1;
+  }
+
+  if (fenceStart >= 0) ranges.push([fenceStart, text.length]);
+  if (tableStart >= 0) ranges.push([tableStart, text.length]);
+  return ranges;
+}
+
+/** Separator between breadcrumb segments. */
+export const BREADCRUMB_SEPARATOR = " › ";
+
+/** Longest breadcrumb worth spending chunk budget on. */
+const MAX_BREADCRUMB_CHARS = 200;
+
+/**
+ * Build the `[path › H1 › H2]` prefix that places a chunk in its corpus.
+ * Empty heading segments are skipped, so an H2 with no preceding H1 gets
+ * `[path › H2]` and a headingless file gets `[path]`.
+ */
+export function buildBreadcrumb(file: string, ...headings: Array<string | undefined>): string {
+  const parts = [file, ...headings.filter((h): h is string => typeof h === "string" && h !== "")];
+  let crumb = parts.join(BREADCRUMB_SEPARATOR);
+  if (crumb.length > MAX_BREADCRUMB_CHARS) {
+    crumb = `${crumb.slice(0, MAX_BREADCRUMB_CHARS - 1)}…`;
+  }
+  return `[${crumb}]`;
+}
+
+/** Overlap carried from a chunk into its mid-section successor: 15 %, capped. */
+const OVERLAP_RATIO = 0.15;
+const OVERLAP_CAP_CHARS = 200;
+
+/**
+ * Least section text a split chunk must consume. Only matters when a
+ * breadcrumb plus overlap is wider than a (pathologically small) maxChars;
+ * without it the loop would stall or slice from the wrong end.
+ */
+const MIN_SPLIT_PROGRESS = 32;
+
+/** Start of the protected block that strictly contains `pos`, if any. */
+function protectedBlockStart(ranges: Array<[number, number]>, pos: number): number | undefined {
+  for (const [start, end] of ranges) {
+    if (start < pos && pos < end) return start;
+  }
+  return undefined;
+}
+
+/**
+ * Split one section into chunk texts of at most `maxChars`, each prefixed
+ * with `breadcrumb` (which ends in a blank line). Mid-section splits carry
+ * an overlap of the previous chunk's tail, and never land inside a code
+ * fence or a table: the cut moves back to the block's first line so the
+ * block starts the next chunk intact. A block longer than the budget cannot
+ * fit any chunk and is hard-cut.
+ *
+ * WHY move the cut back rather than stretch the chunk to the block's end:
+ * the budget exists because the model truncates silently past its window,
+ * so a chunk stretched over a fence would lose exactly that fence's tail.
+ */
+function splitSection(sectionText: string, breadcrumb: string, maxChars: number): string[] {
+  const protectedRanges = findProtectedRanges(sectionText);
+  const texts: string[] = [];
+  let consumed = 0;
+  let prevBody = "";
+
+  for (;;) {
+    const remaining = sectionText.slice(consumed);
+    let head = breadcrumb;
+    if (texts.length > 0) {
+      const overlapSize = Math.min(Math.ceil(prevBody.length * OVERLAP_RATIO), OVERLAP_CAP_CHARS);
+      head += `${prevBody.slice(-overlapSize)}\n\n`;
+    }
+
+    const budget = maxChars - head.length;
+    if (remaining.length <= budget) {
+      texts.push(head + remaining);
+      break;
+    }
+
+    let cut: number;
+    if (budget < MIN_SPLIT_PROGRESS) {
+      cut = MIN_SPLIT_PROGRESS;
+    } else {
+      cut = budget;
+      const blockStart = protectedBlockStart(protectedRanges, consumed + cut);
+      if (blockStart !== undefined && blockStart > consumed) {
+        cut = blockStart - consumed;
+      }
+    }
+    cut = Math.min(cut, remaining.length);
+
+    const text = head + remaining.slice(0, cut);
+    texts.push(text);
+    prevBody = text.slice(breadcrumb.length);
+    consumed += cut;
+    if (consumed >= sectionText.length) break;
+  }
+
+  return texts;
+}
+
+/** Heading level from the raw `#…` line, and its text with the marker stripped. */
+function parseHeading(raw: string): { level: number; title: string } {
+  const hashes = raw.match(/^#+/)?.[0].length ?? 0;
+  return { level: hashes, title: raw.replace(/^#+\s+/, "").trim() };
+}
+
+/**
  * Split a markdown file into chunks on heading boundaries.
  *
  * - Skips headings inside code fences
- * - Prepends [DocTitle] breadcrumb for embedding disambiguation
- * - Uses stable IDs based on md5(file:lineNumber)
+ * - Prepends a `[path › H1 › H2]` breadcrumb so every chunk embeds with its
+ *   place in the corpus, not just its own words
+ * - Uses stable IDs based on md5(file:lineNumber:splitIndex)
  * - Splits sections that exceed maxChars, adding 15% (cap 200 chars) overlap
- *   context between mid-section splits
+ *   context between mid-section splits, never cutting a code fence or table
  * - All chunks share the same docid (SHA-256 of file content, first 6 chars)
  *
  * When `fileKey` is provided it is used verbatim as the chunk `file` key
@@ -86,10 +229,6 @@ export function chunkMarkdown(
   // Stable content-based docid shared by all chunks from this file
   const docid = computeDocid(content);
 
-  // Find the document title (first # heading, or filename stem)
-  const titleMatch = content.match(/^#\s+(.+)$/m);
-  const docTitle = titleMatch ? titleMatch[1].trim() : path.parse(absolutePath).name;
-
   // Build fence ranges to skip headings inside code blocks
   const fenceRanges = findFenceRanges(content);
 
@@ -110,127 +249,52 @@ export function chunkMarkdown(
     }
   }
 
-  // No headings — treat the whole file as one chunk
+  // No headings — the whole file is one section, titled by its filename stem
   if (positions.length === 0) {
-    const chunkId = createHash("md5").update(rel).digest("hex").slice(0, 12);
-    const text = `[${docTitle}]\n\n${content}`.slice(0, maxChars);
-    return [
-      {
-        id: `${chunkId}-0`,
-        text,
-        file: rel,
-        heading: docTitle,
-        lineStart: 0,
-        docid,
-      },
-    ];
-  }
-
-  // Helper to split a single section into multiple chunks if needed
-  interface ChunkPart {
-    text: string;
-    heading: string;
-    lineNum: number;
-    splitIndex: number;
-  }
-
-  function splitSectionIntoChunks(
-    sectionText: string,
-    heading: string,
-    lineNum: number,
-  ): ChunkPart[] {
-    const breadcrumb = `[${docTitle}]\n\n`;
-    const chunks: ChunkPart[] = [];
-
-    let remaining = sectionText;
-    let splitIndex = 0;
-
-    while (remaining.length > 0) {
-      let fullText: string;
-
-      if (splitIndex === 0) {
-        // First chunk: prepend breadcrumb and heading
-        fullText = `${breadcrumb}${remaining}`;
-      } else {
-        // Subsequent chunks: add overlap from the previous chunk
-        const prevChunkBody = chunks[chunks.length - 1].text.slice(
-          chunks[chunks.length - 1].text.indexOf("\n\n") + 2,
-        );
-        const overlapSize = Math.min(Math.ceil(prevChunkBody.length * 0.15), 200);
-        const overlap = prevChunkBody.slice(-overlapSize);
-        fullText = `${breadcrumb}${overlap}\n\n${remaining}`;
-      }
-
-      // Truncate to maxChars (overlap is not counted toward budget)
-      const truncatedText = fullText.slice(0, maxChars);
-      chunks.push({
-        text: truncatedText,
-        heading,
-        lineNum,
-        splitIndex,
-      });
-
-      // Calculate how much of the remaining text was consumed
-      // The consumed text is everything after the breadcrumb+overlap
-      let consumedFromRemaining: number;
-
-      if (splitIndex === 0) {
-        // First chunk: consumed = truncated - breadcrumb
-        consumedFromRemaining = truncatedText.length - breadcrumb.length;
-      } else {
-        // Later chunks: consumed = truncated - breadcrumb - overlap - separator
-        const prevChunkBody = chunks[chunks.length - 2].text.slice(
-          chunks[chunks.length - 2].text.indexOf("\n\n") + 2,
-        );
-        const overlapSize = Math.min(Math.ceil(prevChunkBody.length * 0.15), 200);
-        // -2 accounts for the "\n\n" separator between overlap and remaining text
-        consumedFromRemaining = truncatedText.length - breadcrumb.length - overlapSize - 2;
-      }
-
-      // Stop if we consumed less than what we tried to add (reached end of text)
-      if (consumedFromRemaining >= remaining.length) {
-        break;
-      }
-
-      // Move forward in remaining text
-      remaining = remaining.slice(consumedFromRemaining);
-      splitIndex++;
-    }
-
-    return chunks;
+    const baseId = createHash("md5").update(rel).digest("hex").slice(0, 12);
+    const texts = splitSection(content, `${buildBreadcrumb(rel)}\n\n`, maxChars);
+    return texts.map((text, splitIndex) => ({
+      id: `${baseId}-${splitIndex}`,
+      text,
+      file: rel,
+      heading: path.parse(absolutePath).name,
+      lineStart: 0,
+      docid,
+    }));
   }
 
   // Extract chunks between consecutive headings
   const chunks: DocChunk[] = [];
+  let currentH1: string | undefined;
 
   for (let i = 0; i < positions.length; i++) {
     const start = positions[i].offset;
     const end = i + 1 < positions.length ? positions[i + 1].offset : content.length;
     const rawText = content.slice(start, end).trim();
 
+    const { level, title } = parseHeading(positions[i].heading);
+    if (level === 1) currentH1 = title;
     if (!rawText) continue;
 
-    const sectionChunks = splitSectionIntoChunks(
-      rawText,
-      positions[i].heading.replace(/^#+\s+/, ""),
-      positions[i].lineNum,
-    );
+    const breadcrumb =
+      level === 1 ? buildBreadcrumb(rel, title) : buildBreadcrumb(rel, currentH1, title);
+    const texts = splitSection(rawText, `${breadcrumb}\n\n`, maxChars);
 
-    for (const sectionChunk of sectionChunks) {
+    texts.forEach((text, splitIndex) => {
       const chunkId = createHash("md5")
-        .update(`${rel}:${sectionChunk.lineNum}:${sectionChunk.splitIndex}`)
+        .update(`${rel}:${positions[i].lineNum}:${splitIndex}`)
         .digest("hex")
         .slice(0, 12);
 
       chunks.push({
         id: chunkId,
-        text: sectionChunk.text,
+        text,
         file: rel,
-        heading: sectionChunk.heading,
-        lineStart: sectionChunk.lineNum,
+        heading: title,
+        lineStart: positions[i].lineNum,
         docid,
       });
-    }
+    });
   }
 
   return chunks;

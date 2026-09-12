@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Node.js 18+
+- Node.js 22+ (`engines.node`; the stable launcher refuses older runtimes)
 - npm
 - VS Code (for extension development)
 
@@ -23,7 +23,7 @@ src/
 │   ├── chunker.ts     # Markdown heading-aware chunking
 │   ├── embedder.ts    # Embedding providers (local, Ollama, OpenAI)
 │   ├── vectorstore.ts # LanceDB wrapper
-│   ├── searcher.ts    # Hybrid vector + keyword search
+│   ├── searcher.ts    # Hybrid vector + full-text search (RRF)
 │   └── indexer.ts     # Crawl, chunk, embed, upsert pipeline
 ├── extension/      # VS Code extension integration
 │   ├── extension.ts      # Entry point and activation
@@ -100,6 +100,34 @@ The package script runs `npm prune --omit=dev` before `vsce package` to exclude 
 
 Platform-specific builds are necessary because `@lancedb/lancedb` includes native binaries.
 
+Every packaged VSIX is checked by `scripts/verify-vsix.mjs` before it can be uploaded or published. Besides the required bundles and the size cap (80 MB), the check fails on any dev-only path (`src/`, `test/`, `.vscode/`, `CLAUDE.md`, ...) and on any credential-shaped file at any depth in the archive: `.env*`, `*.pem`, `*.key`, `.npmrc`, `id_*`, `*token*`, `*secret*`. The last three are name heuristics and exempt files with a code extension (`tokenizers.js` inside a library is fine; `token.json` is not). The rules are pure functions with unit tests in `test/unit/verify-vsix.test.ts`.
+
+## Releasing
+
+Releases are cut by `.github/workflows/publish-extension.yml`.
+
+1. Bump `version` in `package.json` and move the `## [Unreleased]` entries in `CHANGELOG.md` under a new `## [X.Y.Z] - date` heading, in a PR to `main`.
+2. Tag the merge commit `ext-vX.Y.Z` and push the tag. The tag must match `package.json`, or the workflow fails.
+
+What the workflow then does, and the guarantees each step gives:
+
+| Stage         | What happens                                                                                                                                    |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wait-for-ci` | Blocks until `ci.yml` has succeeded on the tagged commit. Nothing is packaged from a commit CI has not passed.                                  |
+| `package`     | Builds one VSIX per target (darwin-arm64, darwin-x64, linux-x64, win32-x64), runs `verify-vsix.mjs`, then signs a build-provenance attestation. |
+| `publish`     | Waits for approval on the `marketplace` environment, then uploads each VSIX to the VS Code Marketplace (idempotent on re-run).                  |
+| `release`     | Waits for approval on the `marketplace` environment again, then creates the GitHub Release with the changelog section and the four VSIX assets. |
+
+Manual runs (`workflow_dispatch`) behave the same, with one exception: `dry_run: true` packages only, skips the CI gate, signs nothing and publishes nothing. A dispatch with `dry_run: false` is a real publish and waits for CI like a tag push does.
+
+Security properties of the pipeline:
+
+- **Least privilege.** The workflow token is `contents: read` everywhere; `contents: write` exists only on the `release` job. The `package` matrix, which executes npm lifecycle scripts from third-party dependencies, never holds a token that can write to the repository.
+- **Human approval before the Marketplace PAT is used.** The `publish` and `release` jobs run in the `marketplace` GitHub Environment. A required reviewer on that environment (repo Settings > Environments > marketplace) turns a tag push into a request that a maintainer approves in the Actions UI before the publish step can read `VSCODE_MARKETPLACE_PAT`.
+- **Build provenance.** Each VSIX carries a SLSA provenance attestation signed by `actions/attest-build-provenance`. Verify a downloaded file with `gh attestation verify <file>.vsix --repo de-otio/mcp-doc-search`.
+- **Pinned actions.** Every `uses:` in every workflow is pinned to a full commit SHA with a `# vX.Y.Z` comment; Dependabot's `github-actions` ecosystem bumps the SHA and the comment together. All pinned actions run on the `node24` runtime (or are composites of node24 actions).
+- **Timeouts** on every job, so a wedged Marketplace call cannot burn the six-hour default.
+
 ## Key Design Decisions
 
 ### CommonJS output
@@ -112,7 +140,7 @@ Splitting on markdown headings (rather than fixed character counts) preserves do
 
 ### Hybrid search
 
-Pure vector search can miss exact keyword matches. The keyword boost (0.03 per matching term, with camelCase expansion) ensures that documents containing the exact search terms rank higher.
+Pure vector search can miss exact keyword matches, and a chunk outside the vector top-3n can never be recovered by re-ranking alone. The searcher therefore runs a BM25 full-text query in parallel and fuses both candidate lists with reciprocal rank fusion, so chunks containing the exact terms are found even when the embedding misses them, and chunks both sides agree on rank first. The full-text index lives in LanceDB (`Index.fts()` on `text`) and is rebuilt by the indexer after every run that writes rows.
 
 ### Stable chunk IDs
 

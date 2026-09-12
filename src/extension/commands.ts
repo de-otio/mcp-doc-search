@@ -17,6 +17,8 @@ import { SettingsPanel } from "./settingsPanel.js";
 import { IndexStatusPanel } from "./indexStatusPanel.js";
 import { McpSetupPanel } from "./mcpSetupPanel.js";
 import { writeStableLaunchers } from "./stableBin.js";
+import { buildMcpServerEnv, CLAUDE_PROJECT_DIR_REF, portableLauncherPath } from "./mcpEnv.js";
+import { isGitTracked } from "./mcpJson.js";
 import { ensureGitignored } from "../core/gitignore.js";
 
 interface CommandDeps {
@@ -223,47 +225,63 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         writeStableLaunchers(extensionDir) ?? path.join(extensionDir, "dist", "mcp-server.js");
       const mcpJsonPath = path.join(workspaceRoot, ".mcp.json");
 
-      const env: Record<string, string> = {
-        DOC_SEARCH_WORKSPACE: workspaceRoot,
-      };
+      // The server reads extraRoots and the embedding provider from env only
+      // (workspace settings.json is untrusted), so the user's effective VS
+      // Code configuration is translated into the env block here. Two forms:
+      // the portable one goes into .mcp.json (Claude Code expands ${HOME} and
+      // ${CLAUDE_PROJECT_DIR} at launch); the absolute one is shown in the
+      // panel for clients without that expansion. The OpenAI key is emitted
+      // as a ${OPENAI_API_KEY} reference, never as the literal secret.
+      const currentConfig = readConfig();
+      const env = buildMcpServerEnv(currentConfig, CLAUDE_PROJECT_DIR_REF);
+      const absoluteEnv = buildMcpServerEnv(currentConfig, workspaceRoot);
+      const portableServerPath = portableLauncherPath(mcpServerPath);
 
-      // M1: the MCP server reads OPENAI_API_KEY only from env. If the user
-      // has the key in SecretStorage and is on the OpenAI provider, copy it
-      // into the .mcp.json env block so the standalone MCP server works
-      // out of the box. .mcp.json is gitignored by ensureGitignored() below,
-      // so the key stays local to the workspace.
-      const currentProvider = vscode.workspace
-        .getConfiguration("docSearch")
-        .get<string>("embedProvider", "local");
-      if (currentProvider === "openai") {
-        const apiKey = await context.secrets.get("docSearch.openaiApiKey");
-        if (apiKey) {
-          env.OPENAI_API_KEY = apiKey;
-          env.USE_OPENAI = "1";
-        }
-      }
-
+      // Read without a prior existence check (check-then-read race): an
+      // absent or malformed file simply means we start fresh.
       let mcpConfig: Record<string, unknown> = {};
-      if (fs.existsSync(mcpJsonPath)) {
-        try {
-          mcpConfig = JSON.parse(fs.readFileSync(mcpJsonPath, "utf8"));
-        } catch {
-          // If the file is malformed, start fresh
-        }
+      try {
+        mcpConfig = JSON.parse(fs.readFileSync(mcpJsonPath, "utf8"));
+      } catch {
+        // Absent or malformed — start fresh.
       }
 
       const mcpServers = (mcpConfig.mcpServers as Record<string, unknown>) ?? {};
       mcpServers["doc-search"] = {
         command: "node",
-        args: [mcpServerPath],
+        args: [portableServerPath],
         env,
       };
       mcpConfig.mcpServers = mcpServers;
 
-      fs.writeFileSync(mcpJsonPath, JSON.stringify(mcpConfig, null, 2) + "\n", "utf8");
+      // 0600: the file names directories the server may read and may carry
+      // a key reference; `mode` applies only at creation, so an existing
+      // 0644 file is tightened explicitly (best-effort on Windows).
+      fs.writeFileSync(mcpJsonPath, JSON.stringify(mcpConfig, null, 2) + "\n", {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+      try {
+        fs.chmodSync(mcpJsonPath, 0o600);
+      } catch {
+        // chmod is not supported on every filesystem; the creation mode stands.
+      }
+      const mcpJsonTracked = isGitTracked(workspaceRoot, ".mcp.json");
+      if (mcpJsonTracked) {
+        vscode.window.showWarningMessage(
+          "Doc Search: .mcp.json is tracked by git in this workspace, so the generated " +
+            "server config (including any external-root paths) will be committed. " +
+            "Run `git rm --cached .mcp.json` to keep it local.",
+        );
+      }
       ensureGitignored(workspaceRoot, ".mcp.json");
 
-      McpSetupPanel.createOrShow(context, { mcpServerPath, env });
+      McpSetupPanel.createOrShow(context, {
+        mcpServerPath,
+        env: absoluteEnv,
+        portable: { mcpServerPath: portableServerPath, env },
+        mcpJsonTracked,
+      });
     }),
   );
 }

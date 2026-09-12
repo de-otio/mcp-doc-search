@@ -4,7 +4,18 @@
  */
 
 import { createRequire } from "node:module";
-import type { EmbedFailureKind, EmbedProvider, EmbedderPipeline, HealthResult } from "./types.js";
+import type { EmbedFailureKind, EmbedIdentity, EmbedProvider, HealthResult } from "./types.js";
+import { resolveLocalModel, type LocalModelSpec } from "./localModels.js";
+
+export {
+  DEFAULT_LOCAL_MODEL,
+  LEGACY_MAX_CHUNK_CHARS,
+  LOCAL_MODELS,
+  defaultMaxChunkChars,
+  resolveLocalModel,
+  resolveMaxChunkChars,
+} from "./localModels.js";
+export type { LocalModelDtype, LocalModelSpec } from "./localModels.js";
 
 // WHY require() (not dynamic import()):
 //   The published VSIX ships only @huggingface/transformers/dist/transformers.node.cjs;
@@ -150,70 +161,145 @@ async function fetchWithTimeout(
   throw lastError || new Error("Fetch failed after retries");
 }
 
+// ---------------------------------------------------------------------------
+// Local (transformers.js)
+// ---------------------------------------------------------------------------
+
+/** The slice of a transformers.js Tensor the local runner touches. */
+interface TensorLike {
+  tolist(): number[][];
+  normalize(p: number, dim: number): TensorLike;
+}
+
+/** Embeds one batch of already-prefixed texts into unit vectors. */
+type BatchEmbedFn = (texts: string[]) => Promise<number[][]>;
+
 /**
- * Local embeddings using @huggingface/transformers with all-MiniLM-L6-v2.
- * Zero config, no server needed. Model is ~22MB ONNX, downloaded on first use.
+ * The slice of the transformers.js module the local runner touches. Typed
+ * here rather than via the package's generated d.ts, whose JSDoc-derived
+ * overloads do not narrow on the task string.
+ */
+interface TransformersRuntime {
+  env: { localModelPath?: string };
+  pipeline(
+    task: "feature-extraction",
+    model: string,
+    options: { dtype?: string },
+  ): Promise<
+    (texts: string[], options: { pooling: "mean"; normalize: boolean }) => Promise<TensorLike>
+  >;
+  AutoTokenizer: {
+    from_pretrained(
+      model: string,
+    ): Promise<
+      (texts: string[], options: { padding: boolean; truncation: boolean }) => Promise<unknown>
+    >;
+  };
+  AutoModel: {
+    from_pretrained(
+      model: string,
+      options: { dtype?: string },
+    ): Promise<(inputs: unknown) => Promise<{ sentence_embedding: TensorLike }>>;
+  };
+}
+
+/**
+ * Local embeddings using @huggingface/transformers with a model from
+ * LOCAL_MODELS (default all-MiniLM-L6-v2). Zero config, no server needed;
+ * the ONNX weights are downloaded on first use.
  *
- * Note: all-MiniLM-L6-v2 does NOT use task prefixes — the prefix param is ignored.
+ * Callers pass role prefixes in nomic's dialect ("search_query: " /
+ * "search_document: "); the embedder translates the *role* into whatever
+ * prefix its model was trained with, and drops it for models that use none.
  */
 export class LocalEmbedder implements EmbedProvider {
-  private pipeline: EmbedderPipeline | null = null;
+  /** Texts per model call. Bounded so padding waste and peak memory stay small. */
+  static readonly BATCH_SIZE = 32;
+
+  readonly spec: LocalModelSpec;
+  private runner: BatchEmbedFn | null = null;
   private modelPath: string | undefined;
   private loader: typeof loadTransformers;
 
-  constructor(options?: { modelPath?: string; loader?: typeof loadTransformers }) {
+  constructor(options?: { model?: string; modelPath?: string; loader?: typeof loadTransformers }) {
+    this.spec = resolveLocalModel(options?.model);
     this.modelPath = options?.modelPath;
     this.loader = options?.loader ?? loadTransformers;
   }
 
-  async embed(texts: string[]): Promise<number[][]> {
-    if (!this.pipeline) {
-      const { pipeline, env } = this.loader();
-      if (this.modelPath) {
-        env.localModelPath = this.modelPath;
-      }
-      this.pipeline = (await pipeline(
-        "feature-extraction",
-        "Xenova/all-MiniLM-L6-v2",
-      )) as unknown as EmbedderPipeline;
-    }
+  identity(): EmbedIdentity {
+    return { provider: "local", model: this.spec.id, dim: this.spec.dim };
+  }
 
-    const pipe = this.pipeline;
+  async embed(texts: string[], prefix = ""): Promise<number[][]> {
+    if (texts.length === 0) return [];
+    this.runner ??= await this.load();
+
+    const modelPrefix = this.mapPrefix(prefix);
+    const inputs = modelPrefix ? texts.map((t) => `${modelPrefix}${t}`) : texts;
     const results: number[][] = [];
-    for (const text of texts) {
-      const output = await pipe(text, {
-        pooling: "mean",
-        normalize: true,
-      });
-      results.push(Array.from(output.data as Float32Array));
+    for (let i = 0; i < inputs.length; i += LocalEmbedder.BATCH_SIZE) {
+      const rows = await this.runner(inputs.slice(i, i + LocalEmbedder.BATCH_SIZE));
+      for (const row of rows) results.push(Array.from(row));
     }
     return results;
   }
 
+  /** Map the caller's role prefix onto the model's own; unknown roles get none. */
+  private mapPrefix(prefix: string): string {
+    if (prefix.startsWith("search_query")) return this.spec.queryPrefix;
+    if (prefix.startsWith("search_document")) return this.spec.docPrefix;
+    return "";
+  }
+
+  private async load(): Promise<BatchEmbedFn> {
+    const tf = this.loader() as unknown as TransformersRuntime;
+    if (this.modelPath) {
+      tf.env.localModelPath = this.modelPath;
+    }
+    const { id, dtype } = this.spec;
+    const loadOptions = dtype ? { dtype } : {};
+
+    if (this.spec.runner === "sentence-embedding") {
+      const tokenizer = await tf.AutoTokenizer.from_pretrained(id);
+      const model = await tf.AutoModel.from_pretrained(id, loadOptions);
+      return async (texts) => {
+        const inputs = await tokenizer(texts, { padding: true, truncation: true });
+        const { sentence_embedding } = await model(inputs);
+        return sentence_embedding.normalize(2, -1).tolist();
+      };
+    }
+
+    const pipe = await tf.pipeline("feature-extraction", id, loadOptions);
+    return async (texts) => (await pipe(texts, { pooling: "mean", normalize: true })).tolist();
+  }
+
   /**
-   * Loading the pipeline *is* the probe: the first call downloads the ONNX
-   * model, and a failed download would otherwise fail every file in turn.
+   * Loading the model *is* the probe: the first call downloads the ONNX
+   * weights, and a failed download would otherwise fail every file in turn.
    */
   async healthCheck(): Promise<HealthResult> {
     try {
       await this.embed(["ok"]);
-      return { ok: true, detail: "Built-in model (all-MiniLM-L6-v2)" };
+      return { ok: true, detail: `Built-in model (${this.spec.id})` };
     } catch (err) {
       return {
         ok: false,
         kind: "unknown",
         detail: err instanceof Error ? err.message : String(err),
-        hint: "The built-in model is downloaded on first use — check network access.",
+        hint:
+          `The built-in model is downloaded on first use (~${this.spec.downloadMb} MB) — ` +
+          "check network access.",
       };
     }
   }
 
   /**
-   * Release the cached pipeline so the next embed() call will reload it.
+   * Release the cached model so the next embed() call will reload it.
    * Useful in long-lived HTTP daemon mode to free memory during idle periods.
    */
   dispose(): void {
-    this.pipeline = null;
+    this.runner = null;
   }
 }
 
@@ -241,6 +327,11 @@ export class OllamaEmbedder implements EmbedProvider {
     this.model = model;
     this.baseUrl = baseUrl.replace(/\/$/, "");
     this.probeTimeoutMs = options.probeTimeoutMs ?? 30_000;
+  }
+
+  /** Dimension is the model's to know; Ollama does not report it before the first embed. */
+  identity(): EmbedIdentity {
+    return { provider: "ollama", model: this.model };
   }
 
   async embed(texts: string[], prefix = ""): Promise<number[][]> {
@@ -373,6 +464,13 @@ export class OllamaEmbedder implements EmbedProvider {
   }
 }
 
+/** Output dimensions of the OpenAI embedding models at their default size. */
+const OPENAI_MODEL_DIMS: Record<string, number> = {
+  "text-embedding-3-small": 1536,
+  "text-embedding-3-large": 3072,
+  "text-embedding-ada-002": 1536,
+};
+
 /**
  * OpenAI embeddings via API. Uses text-embedding-3-small by default (1536-dim).
  * Supports batch embedding in a single API call.
@@ -386,6 +484,13 @@ export class OpenAIEmbedder implements EmbedProvider {
     if (!apiKey) throw new Error("OpenAI API key is required");
     this.apiKey = apiKey;
     this.model = model;
+  }
+
+  identity(): EmbedIdentity {
+    const dim = OPENAI_MODEL_DIMS[this.model];
+    return dim
+      ? { provider: "openai", model: this.model, dim }
+      : { provider: "openai", model: this.model };
   }
 
   async embed(texts: string[], prefix = ""): Promise<number[][]> {
@@ -446,6 +551,8 @@ export function createEmbedProvider(config: {
   ollamaUrl?: string;
   ollamaModel?: string;
   openaiApiKey?: string;
+  /** LOCAL_MODELS id for the local provider; blank = default. */
+  localModel?: string;
   modelPath?: string;
 }): EmbedProvider {
   switch (config.embedProvider) {
@@ -454,6 +561,6 @@ export function createEmbedProvider(config: {
     case "openai":
       return new OpenAIEmbedder(config.openaiApiKey ?? "");
     default:
-      return new LocalEmbedder({ modelPath: config.modelPath });
+      return new LocalEmbedder({ model: config.localModel, modelPath: config.modelPath });
   }
 }

@@ -280,6 +280,135 @@ describe("CLI subcommands", () => {
       expect(parsed).toHaveProperty("needsReindex");
       expect(parsed).toHaveProperty("docGlob");
     });
+
+    it("prints the index metadata when present", async () => {
+      const { cmdStatus } = await import("../../bin/mcp-doc-search.js");
+      mockIndexer.getStatus.mockResolvedValue({
+        ...(await mockIndexer.getStatus()),
+        meta: {
+          schemaVersion: 2,
+          provider: "ollama",
+          model: "nomic-embed-text",
+          dim: 768,
+          maxChunkChars: 4000,
+          headingDepth: 2,
+          createdAt: "2026-09-12T08:00:00.000Z",
+        },
+      });
+
+      await cmdStatus({});
+
+      const out = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+      expect(out).toContain("schema:        v2");
+      expect(out).toContain("ollama / nomic-embed-text (768-dim)");
+      expect(out).toContain("maxChunkChars=4000, headingDepth=2");
+      expect(out).toContain("2026-09-12T08:00:00.000Z");
+    });
+
+    it("reports whether the full-text index is present", async () => {
+      const { cmdStatus } = await import("../../bin/mcp-doc-search.js");
+      const base = await mockIndexer.getStatus();
+
+      mockIndexer.getStatus.mockResolvedValue({ ...base, ftsIndex: true });
+      await cmdStatus({});
+      expect(stdoutSpy.mock.calls.map((c) => String(c[0])).join("")).toContain(
+        "fts:           present",
+      );
+
+      stdoutSpy.mockClear();
+      mockIndexer.getStatus.mockResolvedValue({ ...base, ftsIndex: false });
+      await cmdStatus({});
+      expect(stdoutSpy.mock.calls.map((c) => String(c[0])).join("")).toContain(
+        "fts:           missing",
+      );
+    });
+
+    it("says so when no metadata has been recorded yet", async () => {
+      const { cmdStatus } = await import("../../bin/mcp-doc-search.js");
+
+      await cmdStatus({});
+
+      const out = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+      expect(out).toContain("schema:        none recorded");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // search
+  // -------------------------------------------------------------------------
+
+  describe("search subcommand", () => {
+    it("passes the indexer to search() so excerpts carry [Context: ...] like the MCP path", async () => {
+      const { cmdSearch } = await import("../../bin/mcp-doc-search.js");
+      const { search } = await import("../../src/core/searcher.js");
+      vi.mocked(search).mockResolvedValue([
+        {
+          file: "doc/api.md",
+          heading: "Auth",
+          excerpt: "[Context: API docs] Tokens expire after an hour.",
+          score: 0.9,
+          lineStart: 4,
+          docid: "abc123",
+        },
+      ]);
+
+      await cmdSearch(["token expiry"], { n: "3", explain: true });
+
+      expect(search).toHaveBeenCalledWith(
+        "token expiry",
+        3,
+        mockStore,
+        mockEmbedProvider,
+        { explain: true },
+        mockIndexer,
+      );
+      const out = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+      expect(out).toContain("[0.900] doc/api.md:4 — Auth");
+      expect(out).toContain("[Context: API docs] Tokens expire after an hour.");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // context list
+  // -------------------------------------------------------------------------
+
+  describe("context list subcommand", () => {
+    it("prints every entry of the context map", async () => {
+      // Regression: the map was treated as an array, so this always printed
+      // "No context notes." regardless of content.
+      const { cmdContext } = await import("../../bin/mcp-doc-search.js");
+      mockIndexer.listContexts = vi.fn().mockReturnValue({
+        "doc/api": "API reference",
+        "": "Everything else",
+      });
+
+      await cmdContext(["list"], {});
+
+      const out = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+      expect(out).toContain("doc/api: API reference");
+      expect(out).toContain("(root): Everything else");
+      expect(out).not.toContain("No context notes");
+    });
+
+    it("prints the placeholder for an empty map", async () => {
+      const { cmdContext } = await import("../../bin/mcp-doc-search.js");
+      mockIndexer.listContexts = vi.fn().mockReturnValue({});
+
+      await cmdContext(["list"], {});
+
+      const out = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+      expect(out).toBe("No context notes.\n");
+    });
+
+    it("emits the map as JSON with --json", async () => {
+      const { cmdContext } = await import("../../bin/mcp-doc-search.js");
+      mockIndexer.listContexts = vi.fn().mockReturnValue({ "doc/api": "API reference" });
+
+      await cmdContext(["list"], { json: true });
+
+      const out = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+      expect(JSON.parse(out)).toEqual({ "doc/api": "API reference" });
+    });
   });
 
   // -------------------------------------------------------------------------

@@ -7,6 +7,186 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **HTTP daemon: DNS-rebinding and cross-origin protection.** The loopback
+  daemon now refuses any request whose `Host` header is not
+  `127.0.0.1:<port>` or `localhost:<port>`, and any request carrying an
+  `Origin` header at all, with 403 before a transport is built; the MCP
+  transport is additionally constructed with the SDK's
+  `enableDnsRebindingProtection` and the same host allow-list. CLI and IDE
+  MCP clients send neither header, so nothing changes for them.
+- **Symlinks can no longer lead reads outside the workspace.** `get` and
+  `multi_get` re-check the real path of every file against the real path of
+  its workspace or external root, and the crawl drops any glob match that is
+  a symlink or whose real path leaves the root (glob no longer follows
+  symlinked directories). A committed `doc/link -> ~/.ssh` is skipped by
+  `reindex_docs` and refused by `get`.
+- **`set_context` is bounded.** Text is capped at 200 characters after
+  sanitizing (line breaks and tabs become spaces, control and format
+  characters are dropped, `[`/`]` become `(`/`)`), an index holds at most
+  100 entries, prefixes are length-limited, and each entry records
+  `updatedAt`. Violations return a typed error instead of being stored.
+  Existing `context.json` files are read as before; over-long or unclean
+  legacy entries are sanitized and capped on load.
+- **Response caps on `get` / `multi_get`.** `max_bytes` is clamped to 1 MiB,
+  `max_lines` to 5000 (and now defaults to 5000 rather than "all lines"), a
+  glob batch returns at most 500 files and reports `globTruncated: { matched,
+limit }` when it was cut, and a file larger than 16 MiB is refused before
+  it is read.
+- `SECURITY.md` now states the threat model the code implements: a hostile
+  workspace is in scope; a hostile local user on the same machine is not.
+- **Hardened the release pipeline.** Every GitHub Action is pinned to a
+  commit SHA; the workflow token is read-only except on the job that creates
+  the GitHub Release; the Marketplace publish and the release now run in a
+  `marketplace` environment that can require a maintainer's approval; manual
+  (non-dry-run) publishes wait for CI like tag pushes do; and each VSIX ships
+  with a SLSA build-provenance attestation, verifiable with
+  `gh attestation verify <file>.vsix --repo de-otio/mcp-doc-search`. The
+  pre-publish VSIX check also refuses any credential-shaped file (`.env*`,
+  `*.pem`, `*.key`, `.npmrc`, `id_*`, `*token*`, `*secret*`) at any depth in
+  the archive.
+- **The MCP server and CLI no longer trust the workspace's
+  `.vscode/settings.json` for keys that reach outside the workspace.**
+  `docSearch.extraRoots`, `docSearch.embedProvider`, `docSearch.ollamaUrl` and
+  `docSearch.ollamaModel` are read from the environment only
+  (`DOC_SEARCH_EXTRA_ROOTS`, `USE_OPENAI` / `OLLAMA_URL`, `OLLAMA_MODEL`). A
+  cloned repository could previously grant itself read access to any directory
+  (`extraRoots` pointing at `~`) or redirect every chunk and query to a remote
+  host (`ollamaUrl`). Settings.json is consulted for those keys only with
+  `DOC_SEARCH_TRUST_WORKSPACE_SETTINGS=1`, with a stderr notice either way;
+  even then an Ollama URL from settings.json must be loopback. The environment
+  now wins over settings.json for every key (the Ollama URL and model were
+  checked in the wrong order). Workspace-contained keys (`docGlob`,
+  `headingDepth`, `maxChunkChars`, `indexLocation`, `indexDir`) still work
+  from settings.json.
+- **Generated `.mcp.json` is portable and carries the settings the server
+  needs.** `Doc Search: Generate .mcp.json` now writes
+  `${HOME}/.doc-search/bin/mcp-server.js` and
+  `DOC_SEARCH_WORKSPACE: "${CLAUDE_PROJECT_DIR}"` (Claude Code expands both),
+  plus `DOC_SEARCH_GLOB`, `DOC_SEARCH_EXTRA_ROOTS` and the provider variables
+  built from your effective VS Code configuration — so federation keeps
+  working under the new trust model. The OpenAI key is written as the
+  reference `${OPENAI_API_KEY}`, never as the literal; the file is created
+  with mode 0600 (existing files are tightened); and the command warns when
+  `.mcp.json` is already tracked by git. The setup panel's CLI snippet
+  single-quotes env values so a shell cannot splice the key in. The
+  activation-time repair recognises the `${HOME}` launcher form as current.
+  The setup panel shows absolute-path variants for clients that do not expand
+  `${VAR}` references. Regenerate `.mcp.json` once after upgrading if you use
+  external roots or a non-local provider through MCP.
+
+### Fixed
+
+- **External-root and unusual-name chunks were never deleted.** `deleteByFile`
+  filtered on the raw path through a character allow-list that rejected `:`,
+  spaces, `@`, `%` and non-ASCII — so every `ext://<root>/…` key (and any file
+  with such a name) threw, and the throw was swallowed. Reindexing a changed
+  external file appended a second copy of its chunks; deleting the file left it
+  searchable forever. Rows are now deleted by the SHA-256 of their key (hex
+  only, nothing to escape), a failed delete is logged and counted as a failed
+  file instead of ignored, and a real-LanceDB test covers `ext://` keys with
+  spaces and umlauts.
+- **Switching the embedding provider or model no longer silently loses
+  unchanged files.** The index records what produced it (provider, model,
+  vector dimension, `maxChunkChars`, `headingDepth`); when any of these differ
+  from the live configuration, `reindex` drops the table, discards the mtime
+  cache and re-embeds everything, instead of re-embedding only changed files
+  into a freshly emptied table. Two different models of the same dimension are
+  now caught too.
+- **Concurrent reindexes are refused instead of interleaving.** `reindex` takes
+  `<indexDir>/reindex.lock` for the whole run (compaction included); a second
+  run from another process — extension watcher, CLI, MCP `reindex_docs` —
+  fails with "Another reindex is already running (pid …)". A lock left by a
+  crashed process is detected by its dead pid and replaced.
+- `mtime_cache.json`, `context.json` and `index-meta.json` are written
+  atomically (temp file + rename), so a reader never sees a half-written file.
+- CLI `context list` printed "No context notes." even when notes existed (it
+  treated the map as an array).
+- CLI `search` now prefixes excerpts with `[Context: …]` like `search_docs`
+  does; it never passed the indexer to the searcher.
+- The MCP server and CLI defaulted `maxChunkChars` to a literal 4000 while the
+  extension defaults to `0` (model-derived), so an index touched from both
+  sides was rebuilt on every alternation. All entry points now resolve the
+  same model-derived budget and `index-meta.json` records the resolved value.
+- A context prefix written with a trailing slash (`doc/`) never matched: the
+  prefix walk generates `doc`. Prefixes are now stored without trailing
+  slashes (`doc/`, `doc\` and `doc` are one key) and existing `context.json`
+  keys are normalised on load.
+
+### Changed
+
+- **Existing indexes are rebuilt once on the next reindex.** The vector table
+  gained a `fileHash` column and the index directory an `index-meta.json`
+  (schema version 2). An index without metadata is treated as schema 1 and
+  re-embedded in full; `reindex` reports why as `rebuiltReason` (CLI: "Rebuilt
+  the whole index: …"), and `status` prints the recorded provider, model,
+  dimension and chunking settings.
+- **Node.js 22 or newer is required** (`engines.node >=22`, bundles target
+  `node22`). The stable launchers under `~/.doc-search/bin` exit 1 with a
+  one-line message on an older runtime instead of failing inside a native
+  module. Minimum VS Code is now 1.101.
+- **Scores.** `score` is the chunk's cosine similarity (still 0–1); results
+  are ordered by the fused rank, so `score` is no longer monotonic in rank.
+  The substring bonus (+0.03 per term) is gone. `explain` reports
+  `vectorRank`, `ftsRank` and `rrfScore` instead of `keywordBonus`.
+- **Chunk size follows the model.** `docSearch.maxChunkChars` now defaults to
+  `0` = automatic: the model's context window × 3 characters, clamped to
+  800–8000 (800 for all-MiniLM-L6-v2, 1536 for multilingual-e5-small; Ollama
+  and OpenAI keep 4000). The old fixed 4000 exceeded MiniLM's 256-token window,
+  so the tail of every large chunk was silently dropped from its vector. An
+  explicit value still wins.
+- **Breadcrumbs name the file and headings.** Chunks are prefixed with
+  `[path › H1 › H2]` instead of `[DocTitle]`; a section that must be split is
+  never cut inside a code fence or a table; and files without headings are
+  split too instead of being truncated at the budget. Chunk ids are unchanged.
+
+### Added
+
+- **Native VS Code MCP registration.** The extension registers its MCP server
+  through `vscode.lm.registerMcpServerDefinitionProvider` (VS Code 1.101+), so
+  Copilot Chat and other in-editor MCP clients discover `Doc Search` without a
+  `.vscode/mcp.json` entry. The definition runs the stable launcher with the
+  same environment the generated `.mcp.json` carries. The setup panel's
+  Copilot tab now says so instead of asking for a hand-edited file.
+- **Tool annotations and structured output.** Every MCP tool declares
+  `annotations` (`readOnlyHint` on the readers; non-destructive, idempotent
+  on `reindex_docs`/`set_context`/`remove_context`) and an `outputSchema`,
+  and returns `structuredContent` alongside the JSON text block. `get` and
+  `multi_get` carry an `anthropic/maxResultSizeChars` hint. Clients that
+  auto-approve read-only tools or validate structured results can use them.
+- **Server identity and instructions.** `initialize` now reports the real
+  package name and version (built in from `package.json`; it was a hard-coded
+  `0.1.0`) and ships server `instructions` with the three agent-guide rules
+  (search before reading, scoped `get` by `#docid`, delegate broad sweeps).
+- **Full-text side for hybrid search.** Every query now also runs against a
+  BM25 inverted index over chunk text (LanceDB `Index.fts()`), and the vector
+  and full-text candidate lists are fused with reciprocal rank fusion
+  (k = 60). A chunk the embedding misses but the exact terms hit — an
+  identifier, a setting key, a German compound — is recovered instead of
+  being unreachable. The index is built by `reindex` and rebuilt after every
+  run that writes rows; an index created before this release ranks by
+  vector similarity only until its next reindex.
+- **Multi-query.** `search_docs` accepts `queries: string[]` (at most 5
+  distinct queries including `query`); each phrasing contributes its own
+  ranked lists to the same fusion.
+- The `search_docs` description now says how to phrase a query: one concept
+  per call, exact identifiers included, German is fine.
+- **Selectable built-in embedding model.** `docSearch.localModel` (env
+  `DOC_SEARCH_LOCAL_MODEL` for the MCP server and CLI) chooses which model the
+  `local` provider runs: `Xenova/multilingual-e5-small` (German and ~90 other
+  languages), `onnx-community/embeddinggemma-300m-ONNX` and
+  `nomic-ai/nomic-embed-text-v1.5` join the default `all-MiniLM-L6-v2`. A
+  registry records each model's dimension, context window and task prefixes,
+  so the local provider now applies the prefixes its model was trained with
+  and embeds in batches of 32 instead of one text per call. The default model
+  is unchanged; switching downloads the new weights on first use and rebuilds
+  the index.
+- Every provider reports its identity (`provider`, `model`, `dim`) so the
+  index can record which model built it.
+- `status` (CLI and `IndexStatus.ftsIndex`) reports whether the full-text
+  index is present.
+
 ## [0.7.1] - 2026-09-12
 
 ### Fixed

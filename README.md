@@ -11,9 +11,9 @@ Large repos can have hundreds or thousands of markdown files of documentation. T
 
 - **VS Code extension**: type-ahead search in the command palette, auto-reindex on save, status bar indicator
 - **MCP server**: `search_docs`, `list_docs`, `reindex_docs`, `get`, `multi_get`, plus per-file `set_context` / `list_contexts` / `remove_context` tools so any MCP-compatible AI assistant can find and read the right document in a single call
-- **Local embeddings**: auto-downloads `all-MiniLM-L6-v2` (ONNX, 22MB) on first use, then works fully offline — no API key required
-- **Heading-aware chunking**: splits markdown on `#`/`##` boundaries, skips code fences, prepends document title as breadcrumb context
-- **Hybrid search**: vector similarity + keyword re-ranking (+0.03 per matching term, camelCase-aware)
+- **Local embeddings**: auto-downloads `all-MiniLM-L6-v2` (ONNX, ~90 MB) on first use, then works fully offline — no API key required; `multilingual-e5-small`, EmbeddingGemma and `nomic-embed-text-v1.5` are one setting away
+- **Heading-aware chunking**: splits markdown on `#`/`##` boundaries, sizes chunks to the model's context window, never cuts a code fence or table, and prefixes every chunk with a `[path › H1 › H2]` breadcrumb
+- **Hybrid search**: vector similarity fused with a BM25 full-text index (reciprocal rank fusion), so exact identifiers and German terms are matched literally, not only by meaning
 
 ## Quick start
 
@@ -55,7 +55,7 @@ Open VS Code settings and set:
 ]
 ```
 
-Their files appear in results as `ext://vendor-docs/<path>` and are fetchable through `get`/`multi_get` like any other ref. External roots are re-scanned on reindex (the save-time watcher covers only the workspace), and can be edited in the settings panel ("Doc Search: Open Settings" → "External folders") or directly in settings.json. Note that a configured root grants doc-search clients read access to that subtree — review the setting in untrusted workspaces. Details in [doc/configuration.md](doc/configuration.md).
+Their files appear in results as `ext://vendor-docs/<path>` and are fetchable through `get`/`multi_get` like any other ref. External roots are re-scanned on reindex (the save-time watcher covers only the workspace), and can be edited in the settings panel ("Doc Search: Open Settings" → "External folders") or directly in settings.json. Note that a configured root grants doc-search clients read access to that subtree — so the MCP server and CLI take it from the `DOC_SEARCH_EXTRA_ROOTS` environment variable only, never from a cloned repo's `.vscode/settings.json` (the generated `.mcp.json` carries your setting in its `env` block). Details and the opt-in in [doc/configuration.md](doc/configuration.md#trust-model).
 
 ### Use it
 
@@ -65,7 +65,7 @@ Their files appear in results as `ext://vendor-docs/<path>` and are fetchable th
 
 ### Understanding scores
 
-Each result includes a `score` (0–1) computed from vector similarity plus keyword re-ranking:
+Each result includes a `score` (0–1): the cosine similarity between your query and the chunk's embedding.
 
 | Score   | Meaning             |
 | ------- | ------------------- |
@@ -74,17 +74,32 @@ Each result includes a `score` (0–1) computed from vector similarity plus keyw
 | 0.2–0.5 | Somewhat relevant   |
 | 0.0–0.2 | Low relevance       |
 
+Results are **ordered by rank fusion**, not by `score` alone (see [Hybrid search](#hybrid-search)): a chunk that matches your exact terms can appear above one with a higher similarity. A low-scoring hit near the top therefore usually means "found by the literal terms, not by meaning".
+
 Pass `explain: true` to `search_docs` to get a detailed breakdown:
 
-- `vectorScore` — raw cosine similarity from embeddings
-- `keywordTermsMatched` — query terms found in the chunk
-- `keywordBonus` — boost applied (+0.03 per matching term)
-- `finalScore` — combined score (same as `score`)
+- `vectorScore` — cosine similarity from embeddings (same as `score`)
+- `vectorRank` — position in the vector candidate list, or `null` if only the full-text side found it
+- `ftsRank` — position in the full-text (BM25) candidate list, or `null` if no term matched literally
+- `rrfScore` — the fused score the ordering is sorted by
+- `keywordTermsMatched` — query terms found in the chunk text
+- `finalScore` — same as `score`
 - `rank` — position in result list (1-indexed)
+
+### Hybrid search
+
+Every search runs two candidate lists per query and fuses them with reciprocal rank fusion (RRF, k = 60):
+
+1. **Vector** — the query embedding's nearest chunks (top 3n, capped at 300)
+2. **Full-text** — a BM25 inverted index over chunk text (top 3n). Terms are lowercased and matched literally; punctuation splits tokens (`dot:workstream` matches `dot` and `workstream`), there is no stemming, so identifiers, setting keys and German compounds hit exactly as written.
+
+A chunk found by both sides rises to the top; a chunk the embedding misses but the words hit is still recovered. Phrase queries as one concept per call and include exact identifiers where you know them. To fuse several phrasings (a synonym, the German term, an identifier) in one round trip, pass `queries: ["...", "..."]` alongside `query` — at most 5 distinct queries in total.
+
+The full-text index is built and refreshed by `reindex`. An index created before 0.8 has none until its next reindex; until then search silently ranks by vector similarity only (a warning is logged).
 
 ### MCP integration
 
-After running "Generate .mcp.json", connect any MCP-compatible client (Claude Code, Cursor, etc.). The generated config points at the **stable launcher** `~/.doc-search/bin/mcp-server.js` — a forwarder the extension refreshes on every activation — so it keeps working across extension upgrades instead of embedding a versioned install path. The MCP tools appear automatically:
+After running "Generate .mcp.json", connect any MCP-compatible client (Claude Code, Cursor, etc.). The generated config is portable — it points at the **stable launcher** as `${HOME}/.doc-search/bin/mcp-server.js` (a forwarder the extension refreshes on every activation, so it survives upgrades) with `DOC_SEARCH_WORKSPACE` set to `${CLAUDE_PROJECT_DIR}`, and carries your external roots and embedding provider in its `env` block, which is the only place the server reads them from. It is written with mode 0600 and gitignored. The MCP tools appear automatically:
 
 ```
 search_docs("authentication flow")               → semantic search
@@ -106,11 +121,13 @@ If the client is an AI coding agent, see the [Agent Guide](doc/agent-guide.md) f
 
 | Provider          | Quality          | Setup                                                 | Cost            |
 | ----------------- | ---------------- | ----------------------------------------------------- | --------------- |
-| `local` (default) | Good (384-dim)   | None — ships with extension                           | Free            |
+| `local` (default) | Good (384-dim)   | None — model downloaded on first use                  | Free            |
 | `ollama`          | Better (768-dim) | `brew install ollama && ollama pull nomic-embed-text` | Free            |
 | `openai`          | Best (1536-dim)  | Enter the key in the Doc Search Settings panel        | ~$0.02/M tokens |
 
-The OpenAI API key is stored in VS Code's SecretStorage (the OS keychain) — never in `settings.json`. For the standalone MCP server and CLI, set the `OPENAI_API_KEY` environment variable in your `.mcp.json` `env` block or shell; the generated `.mcp.json` (via **Doc Search: Generate .mcp.json**) copies the key from SecretStorage into that block for you.
+The `local` provider runs one of four bundled-runtime models, chosen with `docSearch.localModel` (env `DOC_SEARCH_LOCAL_MODEL` for the MCP server and CLI): `all-MiniLM-L6-v2` (default, English, ~90 MB), `multilingual-e5-small` (~95 languages incl. German, ~118 MB), `embeddinggemma-300m` (100+ languages, 768-dim, ~310 MB) and `nomic-embed-text-v1.5` (English, 768-dim, 8k-token window, ~131 MB). Non-English docs should use one of the multilingual models; switching downloads the model once and rebuilds the index. See [Configuration](doc/configuration.md#docsearchlocalmodel).
+
+The OpenAI API key is stored in VS Code's SecretStorage (the OS keychain) — never in `settings.json`. For the standalone MCP server and CLI, export `OPENAI_API_KEY` in your shell; the generated `.mcp.json` (via **Doc Search: Generate .mcp.json**) references it as `"${OPENAI_API_KEY}"`, which Claude Code expands at launch, and never contains the key itself.
 
 Doc Search probes the provider before a large reindex and stops with a specific
 error — server unreachable, model not pulled, bad key — rather than failing file
@@ -147,7 +164,7 @@ mcp-doc-search get doc/api.md --from-line 20 --max-lines 50
 mcp-doc-search multi-get "doc/**/*.md" --files         # list matched paths
 mcp-doc-search multi-get "doc/a.md,doc/b.md" --json
 
-# Index health
+# Index health (file counts plus the recorded embedding model and chunking settings)
 mcp-doc-search status
 mcp-doc-search status --json
 
@@ -159,7 +176,7 @@ mcp-doc-search context remove doc/api.md
 
 **Flags:** `--json` (machine-readable output), `--files` (paths only, for `search`/`multi-get`), `--explain` (score breakdown for `search`).
 
-**Environment:** same as the MCP server — `DOC_SEARCH_WORKSPACE`, `DOC_SEARCH_GLOB`, `DOC_SEARCH_HOME`, `DOC_SEARCH_INDEX_LOCATION`, `DOC_SEARCH_INDEX_DIR`, `USE_OPENAI=1`, `OLLAMA_URL`.
+**Environment:** same as the MCP server — `DOC_SEARCH_WORKSPACE`, `DOC_SEARCH_GLOB`, `DOC_SEARCH_EXTRA_ROOTS`, `DOC_SEARCH_HOME`, `DOC_SEARCH_INDEX_LOCATION`, `DOC_SEARCH_INDEX_DIR`, `USE_OPENAI=1`, `OLLAMA_URL`, `OLLAMA_MODEL`. External roots and the provider are read from the environment only (see [Trust model](doc/configuration.md#trust-model)).
 
 **Exit codes:** 0 = success, 1 = user error (bad args / missing file), 2 = engine error.
 
@@ -223,6 +240,10 @@ Edit your `.mcp.json` (or `~/.claude.json`) to use the `http` transport:
 
 After 5 minutes of inactivity, the daemon automatically releases the embed pipeline from memory. The next request transparently reloads it (~1 s penalty), then stays fast again.
 
+### Loopback only, no browser access
+
+The daemon binds `127.0.0.1` and answers only requests whose `Host` header is `127.0.0.1:<port>` or `localhost:<port>`; anything else, and any request that carries an `Origin` header, gets `403` before it reaches the MCP transport. That closes DNS-rebinding and cross-origin calls from a web page on the same machine. CLI and IDE MCP clients (Claude Code, VS Code, `curl`) send neither header, so they are unaffected. There is no authentication beyond that: any local process running as you can reach the daemon, just as it can read the workspace directly (see [SECURITY.md](SECURITY.md)).
+
 ## Development
 
 ```bash
@@ -253,7 +274,7 @@ src/
     chunker.ts   # Markdown heading-aware chunking with fence detection
     embedder.ts  # LocalEmbedder, OllamaEmbedder, OpenAIEmbedder
     vectorstore.ts  # LanceDB wrapper (file-backed, cosine metric)
-    searcher.ts  # Hybrid search: vector + keyword re-ranking
+    searcher.ts  # Hybrid search: vector + full-text (BM25), reciprocal rank fusion
     indexer.ts   # Crawl, chunk, embed, upsert with mtime cache
   extension/     # VS Code extension shell
   mcp/           # MCP server: stdio + HTTP daemon transports

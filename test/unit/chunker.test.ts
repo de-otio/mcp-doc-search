@@ -2,7 +2,15 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { chunkMarkdown, computeDocid, findFenceRanges, inFence } from "../../src/core/chunker.js";
+import { createHash } from "node:crypto";
+import {
+  buildBreadcrumb,
+  chunkMarkdown,
+  computeDocid,
+  findFenceRanges,
+  findProtectedRanges,
+  inFence,
+} from "../../src/core/chunker.js";
 
 let tmpDir: string;
 
@@ -106,7 +114,7 @@ describe("chunkMarkdown — no headings", () => {
     expect(chunks).toHaveLength(1);
     expect(chunks[0].heading).toBe("plain-notes");
     // Text should be breadcrumb-prefixed
-    expect(chunks[0].text).toContain("[plain-notes]");
+    expect(chunks[0].text.startsWith("[plain-notes.md]\n\n")).toBe(true);
     expect(chunks[0].lineStart).toBe(0);
   });
 
@@ -117,7 +125,7 @@ describe("chunkMarkdown — no headings", () => {
     expect(chunks).toHaveLength(1);
     expect(chunks[0].lineStart).toBe(0);
     // Text consists of just the breadcrumb prefix + empty content
-    expect(chunks[0].text).toMatch(/^\[empty\]\n\n/);
+    expect(chunks[0].text).toMatch(/^\[empty\.md\]\n\n/);
   });
 });
 
@@ -150,7 +158,7 @@ describe("chunkMarkdown — H1/H2 splitting", () => {
     expect(chunks[2].heading).toBe("Section2");
   });
 
-  it("prepends the doc title as a breadcrumb to every chunk's text", () => {
+  it("prepends a [path › H1 › H2] breadcrumb to every chunk's text", () => {
     const content = ["# My Doc", "", "## Alpha", "Alpha content.", "## Beta", "Beta content."].join(
       "\n",
     );
@@ -158,9 +166,11 @@ describe("chunkMarkdown — H1/H2 splitting", () => {
 
     const chunks = chunkMarkdown(filePath, tmpDir);
 
-    for (const chunk of chunks) {
-      expect(chunk.text.startsWith("[My Doc]\n\n")).toBe(true);
-    }
+    expect(chunks.map((c) => c.text.split("\n\n")[0])).toEqual([
+      "[breadcrumb-doc.md › My Doc]",
+      "[breadcrumb-doc.md › My Doc › Alpha]",
+      "[breadcrumb-doc.md › My Doc › Beta]",
+    ]);
   });
 });
 
@@ -463,5 +473,204 @@ describe("computeDocid", () => {
     const docid2 = chunks2[0].docid;
 
     expect(docid1).not.toBe(docid2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Breadcrumbs — [path › H1 › H2]
+// ---------------------------------------------------------------------------
+
+describe("chunkMarkdown — breadcrumbs", () => {
+  it("names the file and the enclosing H1 for every H2 section", () => {
+    const content = [
+      "# Guide",
+      "",
+      "Intro.",
+      "",
+      "## Setup",
+      "",
+      "Steps.",
+      "",
+      "# Reference",
+      "",
+      "Ref.",
+      "",
+      "## Flags",
+      "",
+      "F.",
+    ].join("\n");
+    const filePath = writeTemp("crumb-doc.md", content);
+
+    const chunks = chunkMarkdown(filePath, tmpDir);
+
+    expect(chunks.map((c) => c.text.split("\n\n")[0])).toEqual([
+      "[crumb-doc.md › Guide]",
+      "[crumb-doc.md › Guide › Setup]",
+      "[crumb-doc.md › Reference]",
+      "[crumb-doc.md › Reference › Flags]",
+    ]);
+  });
+
+  it("omits the H1 segment for an H2 that precedes any H1", () => {
+    const content = ["## Orphan", "", "Text.", "", "# Title", "", "Body."].join("\n");
+    const filePath = writeTemp("orphan-h2.md", content);
+
+    const chunks = chunkMarkdown(filePath, tmpDir);
+
+    expect(chunks[0].text.startsWith("[orphan-h2.md › Orphan]\n\n")).toBe(true);
+    expect(chunks[1].text.startsWith("[orphan-h2.md › Title]\n\n")).toBe(true);
+  });
+
+  it("uses the explicit fileKey (ext:// ref) as the path segment", () => {
+    const filePath = writeTemp("ext-key.md", "# Vendor\n\nText.");
+
+    const chunks = chunkMarkdown(filePath, tmpDir, 4000, 2, "ext://vendor/docs/ext-key.md");
+
+    expect(chunks[0].text.startsWith("[ext://vendor/docs/ext-key.md › Vendor]\n\n")).toBe(true);
+    expect(chunks[0].file).toBe("ext://vendor/docs/ext-key.md");
+  });
+
+  it("caps a runaway breadcrumb so it cannot eat the chunk budget", () => {
+    const crumb = buildBreadcrumb("a.md", "h".repeat(500));
+
+    expect(crumb.length).toBeLessThanOrEqual(202);
+    expect(crumb.startsWith("[a.md › hhh")).toBe(true);
+    expect(crumb.endsWith("…]")).toBe(true);
+  });
+
+  it("buildBreadcrumb skips empty segments", () => {
+    expect(buildBreadcrumb("x.md", undefined, "Sub")).toBe("[x.md › Sub]");
+    expect(buildBreadcrumb("x.md")).toBe("[x.md]");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Protected blocks — fences and tables are never split
+// ---------------------------------------------------------------------------
+
+describe("findProtectedRanges", () => {
+  it("returns char ranges for a fence and a table", () => {
+    const text = [
+      "intro", // 0-5
+      "```", // 6-9
+      "code", // 10-14
+      "```", // 15-18
+      "text", // 19-23
+      "| a | b |", // 24-33
+      "|---|---|", // 34-43
+      "| 1 | 2 |", // 44-53
+      "end", // 54-57
+    ].join("\n");
+
+    expect(findProtectedRanges(text)).toEqual([
+      [6, 18],
+      [24, 53],
+    ]);
+  });
+
+  it("runs an unclosed fence and a trailing table to the end of the text", () => {
+    expect(findProtectedRanges("a\n```\nb")).toEqual([[2, 7]]);
+    expect(findProtectedRanges("a\n| x |\n| y |")).toEqual([[2, 13]]);
+  });
+
+  it("does not treat pipe lines inside a fence as a table", () => {
+    const text = "```\n| not | table |\n```";
+    expect(findProtectedRanges(text)).toEqual([[0, text.length]]);
+  });
+});
+
+describe("chunkMarkdown — never splits a code fence or table", () => {
+  const fenceBody = Array.from({ length: 10 }, (_, i) => `const v${i} = "${"x".repeat(20)}";`);
+  const fence = ["```ts", ...fenceBody, "```"].join("\n");
+
+  it("moves a mid-section cut to before a fence so the fence starts the next chunk intact", () => {
+    const prose = "word ".repeat(60).trim();
+    const content = `# Fence\n\n${prose}\n\n${fence}\n\nAfter the fence.`;
+    const filePath = writeTemp("fence-split.md", content);
+
+    const chunks = chunkMarkdown(filePath, tmpDir, /* maxChars= */ 500);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) expect(chunk.text.length).toBeLessThanOrEqual(500);
+    const holders = chunks.filter((c) => c.text.includes("```"));
+    expect(holders).toHaveLength(1);
+    expect(holders[0].text).toContain(fence);
+  });
+
+  it("moves the cut to before a table likewise", () => {
+    const prose = "word ".repeat(60).trim();
+    const rows = Array.from({ length: 8 }, (_, i) => `| k${i} | ${"v".repeat(12)} |`);
+    const table = ["| key | value |", "|-----|-------|", ...rows].join("\n");
+    const content = `# Table\n\n${prose}\n\n${table}\n\nAfter.`;
+    const filePath = writeTemp("table-split.md", content);
+
+    const chunks = chunkMarkdown(filePath, tmpDir, /* maxChars= */ 500);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) expect(chunk.text.length).toBeLessThanOrEqual(500);
+    const holders = chunks.filter((c) => c.text.includes("| key | value |"));
+    expect(holders).toHaveLength(1);
+    expect(holders[0].text).toContain(table);
+  });
+
+  it("hard-cuts a fence that is longer than the whole budget", () => {
+    const lines = Array.from({ length: 40 }, (_, i) => `line ${i} ${"y".repeat(30)}`);
+    const longFence = ["```", ...lines, "```"].join("\n");
+    const filePath = writeTemp("fence-hard-cut.md", `# Big\n\n${longFence}`);
+
+    const chunks = chunkMarkdown(filePath, tmpDir, /* maxChars= */ 400);
+
+    expect(chunks.length).toBeGreaterThan(2);
+    for (const chunk of chunks) expect(chunk.text.length).toBeLessThanOrEqual(400);
+    expect(chunks[chunks.length - 1].text.trimEnd().endsWith("```")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Headingless files are split, not truncated
+// ---------------------------------------------------------------------------
+
+describe("chunkMarkdown — headingless files", () => {
+  it("splits a long headingless file into several chunks with -N ids", () => {
+    const content = "para ".repeat(400);
+    const filePath = writeTemp("long-plain.md", content);
+
+    const chunks = chunkMarkdown(filePath, tmpDir, /* maxChars= */ 500);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    const baseId = createHash("md5").update("long-plain.md").digest("hex").slice(0, 12);
+    expect(chunks.map((c) => c.id)).toEqual(chunks.map((_, i) => `${baseId}-${i}`));
+    for (const chunk of chunks) {
+      expect(chunk.text.length).toBeLessThanOrEqual(500);
+      expect(chunk.heading).toBe("long-plain");
+      expect(chunk.lineStart).toBe(0);
+    }
+    expect(chunks[chunks.length - 1].text.endsWith(content.slice(-40))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Chunk ids pin the md5(file:line:split) formula (index compatibility)
+// ---------------------------------------------------------------------------
+
+describe("chunkMarkdown — id formula", () => {
+  const md5 = (s: string) => createHash("md5").update(s).digest("hex").slice(0, 12);
+
+  it("derives ids from md5(file:lineStart:splitIndex) exactly as earlier releases did", () => {
+    const content = ["# A", "", "text", "", "## B", "", "more"].join("\n");
+    const filePath = writeTemp("id-formula.md", content);
+
+    const chunks = chunkMarkdown(filePath, tmpDir);
+
+    expect(chunks.map((c) => c.id)).toEqual([md5("id-formula.md:0:0"), md5("id-formula.md:4:0")]);
+  });
+
+  it("numbers mid-section splits in the id", () => {
+    const filePath = writeTemp("id-split.md", `# Long\n\n${"z".repeat(3000)}`);
+
+    const chunks = chunkMarkdown(filePath, tmpDir, /* maxChars= */ 1000);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks[1].id).toBe(md5("id-split.md:0:1"));
   });
 });
