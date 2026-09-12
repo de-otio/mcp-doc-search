@@ -8,6 +8,7 @@ vi.mock("@lancedb/lancedb", () => ({
 
 vi.mock("node:fs", () => ({
   mkdirSync: vi.fn(),
+  readdirSync: vi.fn(),
 }));
 
 describe("LanceVectorStore", () => {
@@ -24,6 +25,7 @@ describe("LanceVectorStore", () => {
       search: vi.fn(),
       query: vi.fn(),
       countRows: vi.fn(),
+      optimize: vi.fn(),
     };
 
     mockDb = {
@@ -247,6 +249,72 @@ describe("LanceVectorStore", () => {
       const count = await store.count();
 
       expect(count).toBe(0);
+    });
+  });
+
+  describe("retainedVersions", () => {
+    it("counts manifest files in the table's _versions dir", async () => {
+      const { readdirSync } = await import("node:fs");
+      vi.mocked(readdirSync).mockReturnValue([
+        "1.manifest",
+        "2.manifest",
+        "3.manifest",
+        "stray.txt",
+      ] as any);
+
+      const store = new LanceVectorStore("/tmp/index");
+
+      expect(store.retainedVersions()).toBe(3);
+      expect(readdirSync).toHaveBeenCalledWith("/tmp/index/doc_chunks.lance/_versions");
+    });
+
+    it("returns 0 when the table has not been created yet", async () => {
+      const { readdirSync } = await import("node:fs");
+      vi.mocked(readdirSync).mockImplementation(() => {
+        throw new Error("ENOENT");
+      });
+
+      const store = new LanceVectorStore("/tmp/index");
+
+      expect(store.retainedVersions()).toBe(0);
+    });
+  });
+
+  describe("compact", () => {
+    it("optimizes with cleanupOlderThan=now and maps the stats", async () => {
+      const lancedb = await import("@lancedb/lancedb");
+      vi.mocked(lancedb.connect).mockResolvedValue(mockDb);
+      mockDb.openTable.mockResolvedValue(mockTable);
+      mockTable.optimize.mockResolvedValue({
+        compaction: { fragmentsRemoved: 443, fragmentsAdded: 1 },
+        prune: { bytesRemoved: 22_900_000, oldVersionsRemoved: 512 },
+      });
+
+      const store = new LanceVectorStore("/tmp/index");
+      await store.open();
+      const before = Date.now();
+      const stats = await store.compact();
+
+      expect(stats).toEqual({
+        versionsRemoved: 512,
+        bytesRemoved: 22_900_000,
+        fragmentsRemoved: 443,
+      });
+      const opts = mockTable.optimize.mock.calls[0][0];
+      expect(opts.cleanupOlderThan).toBeInstanceOf(Date);
+      expect(opts.cleanupOlderThan.getTime()).toBeGreaterThanOrEqual(before);
+    });
+
+    it("returns null when there is no table", async () => {
+      const lancedb = await import("@lancedb/lancedb");
+      vi.mocked(lancedb.connect).mockResolvedValue(mockDb);
+      mockDb.openTable.mockRejectedValue(new Error("Not found"));
+
+      const store = new LanceVectorStore("/tmp/index");
+      await store.open();
+
+      expect(await store.compact()).toBeNull();
+      expect(mockTable.optimize).not.toHaveBeenCalled();
     });
   });
 

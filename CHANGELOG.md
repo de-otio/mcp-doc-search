@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Index directories no longer grow without bound.** LanceDB keeps a table
+  version for every write and never prunes them on its own, so a corpus
+  reindexed file-by-file on save accumulated thousands of stale versions —
+  one index had reached 6.4 GB for 250 MB of live data. `reindex` now compacts
+  the store and drops old versions once 20 or more have piled up
+  (sub-second in steady state). The CLI reports what was reclaimed, and the
+  MCP `reindex_docs` result carries it as `compacted`. Existing bloated
+  indexes are cleaned up on their next reindex.
+
 ## [0.7.0] - 2026-08-28
 
 ### Added

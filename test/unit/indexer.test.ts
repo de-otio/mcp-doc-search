@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { Indexer } from "../../src/core/indexer.js";
 import { EmbedError, EmbedderUnavailableError } from "../../src/core/embedder.js";
 import type { LanceVectorStore } from "../../src/core/vectorstore.js";
+import { COMPACT_VERSION_THRESHOLD } from "../../src/core/vectorstore.js";
 import type { EmbedProvider, IndexerConfig } from "../../src/core/types.js";
 
 vi.mock("glob");
@@ -20,6 +21,8 @@ function makeIndexer(config?: Partial<IndexerConfig>): Indexer {
     upsert: vi.fn(),
     count: vi.fn().mockResolvedValue(0),
     listFiles: vi.fn(),
+    retainedVersions: vi.fn().mockReturnValue(0),
+    compact: vi.fn(),
   } as unknown as LanceVectorStore;
 
   const defaultConfig: IndexerConfig = {
@@ -49,6 +52,8 @@ describe("Indexer", () => {
       upsert: vi.fn(),
       count: vi.fn(),
       listFiles: vi.fn(),
+      retainedVersions: vi.fn().mockReturnValue(0),
+      compact: vi.fn(),
     };
 
     mockEmbedProvider = {
@@ -66,6 +71,50 @@ describe("Indexer", () => {
   });
 
   describe("reindex", () => {
+    /** Point the mocks at an empty corpus so reindex() reaches its tail. */
+    async function setupEmptyCorpus(): Promise<void> {
+      const { glob } = await import("glob");
+      vi.mocked(glob).mockResolvedValue([]);
+    }
+
+    it("compacts the store once retained versions reach the threshold", async () => {
+      await setupEmptyCorpus();
+      mockStore.retainedVersions.mockReturnValue(COMPACT_VERSION_THRESHOLD);
+      const compactStats = { versionsRemoved: 20, bytesRemoved: 1024, fragmentsRemoved: 10 };
+      mockStore.compact.mockResolvedValue(compactStats);
+
+      const indexer = new Indexer(config, mockStore as any);
+      const stats = await indexer.reindex();
+
+      expect(mockStore.compact).toHaveBeenCalledTimes(1);
+      expect(stats.compacted).toEqual(compactStats);
+    });
+
+    it("does not compact below the threshold", async () => {
+      await setupEmptyCorpus();
+      mockStore.retainedVersions.mockReturnValue(COMPACT_VERSION_THRESHOLD - 1);
+
+      const indexer = new Indexer(config, mockStore as any);
+      const stats = await indexer.reindex();
+
+      expect(mockStore.compact).not.toHaveBeenCalled();
+      expect(stats.compacted).toBeUndefined();
+    });
+
+    it("survives a failed compaction", async () => {
+      await setupEmptyCorpus();
+      mockStore.retainedVersions.mockReturnValue(COMPACT_VERSION_THRESHOLD);
+      mockStore.compact.mockRejectedValue(new Error("disk full"));
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const indexer = new Indexer(config, mockStore as any);
+      const stats = await indexer.reindex();
+
+      expect(stats.compacted).toBeUndefined();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("disk full"));
+      warn.mockRestore();
+    });
+
     it("should track failed files on embed error", async () => {
       const { glob } = await import("glob");
       const { chunkMarkdown } = await import("../../src/core/chunker.js");

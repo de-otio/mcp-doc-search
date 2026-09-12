@@ -12,12 +12,14 @@ import { EmbedError, EmbedderUnavailableError, isFatalEmbedKind } from "./embedd
 import { EXT_REF_SCHEME, extKey, parseExtKey } from "./extraRoots.js";
 import { PathTraversalError, resolveSafePath, resolveWithinBase } from "./safePath.js";
 import type {
+  CompactStats,
   EmbedFailureKind,
   IndexerConfig,
   IndexStats,
   IndexStatus,
   PathContext,
 } from "./types.js";
+import { COMPACT_VERSION_THRESHOLD } from "./vectorstore.js";
 import type { LanceVectorStore, VectorRecord } from "./vectorstore.js";
 
 /** Per-file entry in the mtime cache. Supports both old (string) and new (object) formats. */
@@ -333,6 +335,18 @@ export class Indexer {
     // Merge new cache with unchanged entries from old cache, excluding pruned keys
     persistCache();
 
+    // Every write above left a table version behind; reclaim them once enough
+    // have piled up. Checked regardless of whether this run wrote anything so
+    // a backlog from before compaction existed is cleared on the next run.
+    let compacted: CompactStats | undefined;
+    if (this.store.retainedVersions() >= COMPACT_VERSION_THRESHOLD) {
+      try {
+        compacted = (await this.store.compact()) ?? undefined;
+      } catch (err) {
+        console.warn(`Compact: failed: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+
     return {
       indexed,
       skipped,
@@ -341,6 +355,7 @@ export class Indexer {
       durationMs: Date.now() - t0,
       pruned,
       firstError,
+      compacted,
     };
   }
 
