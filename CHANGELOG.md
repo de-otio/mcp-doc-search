@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-09-13
+
 ### Fixed
 
 - **Stale reindex locks are detected and cleaned up, not just tripped over.**
@@ -601,7 +603,7 @@ Initial public release.
 - On-activation catch-up reindex when the workspace has changed since the
   last index run.
 
-[Unreleased]: https://github.com/de-otio/mcp-doc-search/compare/ext-v0.8.0...HEAD
+[Unreleased]: https://github.com/de-otio/mcp-doc-search/compare/ext-v0.8.1...HEAD
 [0.3.1]: https://github.com/de-otio/mcp-doc-search/compare/ext-v0.3.0...ext-v0.3.1
 [0.3.0]: https://github.com/de-otio/mcp-doc-search/compare/ext-v0.2.0...ext-v0.3.0
 [0.2.0]: https://github.com/de-otio/mcp-doc-search/compare/ext-v0.1.3...ext-v0.2.0
