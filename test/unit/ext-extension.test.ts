@@ -198,6 +198,48 @@ describe("Extension", () => {
       expect(setIndexingMock).toHaveBeenCalled();
       expect(setReadyMock).toHaveBeenCalled();
     });
+
+    it("sweeps a stale reindex lock on activation, before the catch-up check, even with autoReindex off", async () => {
+      const { readConfig } = await import("../../src/extension/config.js");
+      vi.mocked(readConfig).mockReturnValue({
+        docGlob: "doc/**/*.md",
+        indexDir: ".doc-search-index",
+        indexLocation: "global",
+        headingDepth: 2,
+        maxChunkChars: 4000,
+        embedProvider: "local",
+        ollamaUrl: "http://localhost:11434",
+        ollamaModel: "nomic-embed-text",
+        openaiApiKey: "",
+        autoReindex: false,
+      } as any);
+
+      const { Indexer } = await import("../../src/core/indexer.js");
+      const clearStale = vi.fn().mockReturnValue({
+        pid: 56457,
+        startedAt: "2026-09-13T06:14:05.451Z",
+        heartbeatAt: new Date("2026-09-13T06:53:38.000Z"),
+        stale: true,
+        staleReason: "holder-dead",
+      });
+      vi.mocked(Indexer).prototype.clearStaleReindexLock = clearStale;
+      vi.mocked(Indexer).prototype.getStatus = vi.fn();
+      vi.mocked(Indexer).prototype.reindex = vi.fn();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      await activate(mockContext);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(clearStale).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringMatching(/stale reindex lock.*56457.*holder-dead/),
+      );
+      // autoReindex is off: nothing else runs.
+      expect(vi.mocked(Indexer).prototype.getStatus).not.toHaveBeenCalled();
+      expect(vi.mocked(Indexer).prototype.reindex).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
   });
 
   describe("resolver wiring", () => {

@@ -22,7 +22,12 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Indexer, INDEX_SCHEMA_VERSION, ReindexInProgressError } from "../../src/core/indexer.js";
+import {
+  Indexer,
+  INDEX_SCHEMA_VERSION,
+  LOCK_STALE_AFTER_MS,
+  ReindexInProgressError,
+} from "../../src/core/indexer.js";
 import { LanceVectorStore, fileHashKey } from "../../src/core/vectorstore.js";
 import { DEFAULT_EXTRA_ROOT_GLOB } from "../../src/core/extraRoots.js";
 import { validateConfig } from "../../src/core/types.js";
@@ -473,6 +478,189 @@ describe("Indexer integrity (real LanceDB)", () => {
       }
       await expect(indexer.reindex()).rejects.toThrow(/down/);
       expect(existsSync(path.join(indexDir, "reindex.lock"))).toBe(false);
+    });
+
+    it("treats a live pid whose heartbeat has expired as stale (pid reuse)", async () => {
+      const lockPath = path.join(indexDir, "reindex.lock");
+      writeFileSync(
+        lockPath,
+        JSON.stringify({ pid: process.pid, startedAt: "2026-09-13T06:14:05.451Z" }),
+      );
+      const old = new Date(Date.now() - LOCK_STALE_AFTER_MS - 1000);
+      utimesSync(lockPath, old, old);
+
+      const indexer = new Indexer(makeConfig(fakeProvider(3, IDENTITY)), store);
+      expect(indexer.inspectReindexLock()).toMatchObject({
+        pid: process.pid,
+        stale: true,
+        staleReason: "heartbeat-expired",
+      });
+      // reindex() replaces it rather than refusing.
+      const stats = await indexer.reindex();
+      expect(stats.indexed).toBe(2);
+      expect(existsSync(lockPath)).toBe(false);
+    });
+
+    it("inspectReindexLock reports a dead holder, and clearStaleReindexLock removes it", async () => {
+      const lockPath = path.join(indexDir, "reindex.lock");
+      writeFileSync(
+        lockPath,
+        JSON.stringify({ pid: 2_147_483_000, startedAt: "2026-09-13T06:14:05.451Z" }),
+      );
+      const indexer = new Indexer(makeConfig(fakeProvider(3, IDENTITY)), store);
+
+      const seen = indexer.inspectReindexLock();
+      expect(seen).toMatchObject({
+        pid: 2_147_483_000,
+        startedAt: "2026-09-13T06:14:05.451Z",
+        stale: true,
+        staleReason: "holder-dead",
+      });
+      expect(seen?.heartbeatAt).toBeInstanceOf(Date);
+
+      const cleared = indexer.clearStaleReindexLock();
+      expect(cleared?.pid).toBe(2_147_483_000);
+      expect(existsSync(lockPath)).toBe(false);
+      // Nothing left to clear.
+      expect(indexer.clearStaleReindexLock()).toBeNull();
+      expect(indexer.inspectReindexLock()).toBeNull();
+    });
+
+    it("clearStaleReindexLock leaves a live lock alone", async () => {
+      const lockPath = path.join(indexDir, "reindex.lock");
+      writeFileSync(
+        lockPath,
+        JSON.stringify({ pid: process.pid, startedAt: "2026-09-13T06:14:05.451Z" }),
+      );
+      const indexer = new Indexer(makeConfig(fakeProvider(3, IDENTITY)), store);
+      expect(indexer.inspectReindexLock()).toMatchObject({ pid: process.pid, stale: false });
+      expect(indexer.clearStaleReindexLock()).toBeNull();
+      expect(existsSync(lockPath)).toBe(true);
+    });
+
+    it("treats an unreadable lock file as stale", async () => {
+      const lockPath = path.join(indexDir, "reindex.lock");
+      writeFileSync(lockPath, "not json");
+      const indexer = new Indexer(makeConfig(fakeProvider(3, IDENTITY)), store);
+      expect(indexer.inspectReindexLock()).toMatchObject({
+        stale: true,
+        staleReason: "unreadable",
+      });
+      expect(indexer.clearStaleReindexLock()?.staleReason).toBe("unreadable");
+      expect(existsSync(lockPath)).toBe(false);
+    });
+
+    it("getStatus removes a stale lock and reports both the removal and a live lock", async () => {
+      const lockPath = path.join(indexDir, "reindex.lock");
+      writeFileSync(
+        lockPath,
+        JSON.stringify({ pid: 2_147_483_000, startedAt: "2026-09-13T06:14:05.451Z" }),
+      );
+      const indexer = new Indexer(makeConfig(fakeProvider(3, IDENTITY)), store);
+
+      const first = await indexer.getStatus();
+      expect(first.clearedStaleLock).toMatchObject({
+        pid: 2_147_483_000,
+        staleReason: "holder-dead",
+      });
+      expect(first.reindexLock).toBeUndefined();
+      expect(indexer.inspectReindexLock()).toBeNull();
+
+      writeFileSync(
+        lockPath,
+        JSON.stringify({ pid: process.pid, startedAt: "2026-09-13T06:14:05.451Z" }),
+      );
+      const second = await indexer.getStatus();
+      expect(second.clearedStaleLock).toBeUndefined();
+      expect(second.reindexLock).toMatchObject({ pid: process.pid, stale: false });
+      expect(existsSync(lockPath)).toBe(true);
+    });
+  });
+
+  describe("interrupted rebuild", () => {
+    /**
+     * Simulate a run killed part-way through (VS Code reload, SIGKILL): the
+     * store's upsert throws after N files. Unlike an embed failure — which the
+     * loop catches, counts, and eventually turns into an orderly abort that
+     * persists the cache — this escapes reindex() with no bookkeeping at all,
+     * exactly what a kill leaves behind (the lock's `finally` aside).
+     */
+    function killStoreAfter(target: LanceVectorStore, files: number): LanceVectorStore {
+      let calls = 0;
+      const upsert = target.upsert.bind(target);
+      target.upsert = async (records) => {
+        if (calls++ >= files) throw new Error("killed");
+        return upsert(records);
+      };
+      return target;
+    }
+
+    beforeEach(() => {
+      // Enough files that the kill lands mid-corpus.
+      for (let i = 0; i < 6; i++) {
+        writeFileSync(path.join(workspace, "doc", `f${i}.md`), `# F${i}\n\nBody ${i}.\n`);
+      }
+    });
+
+    it("a killed rebuild does not leave an incremental run believing the index is complete", async () => {
+      // Full index under the old model.
+      await new Indexer(makeConfig(fakeProvider(3, IDENTITY)), store).reindex();
+      const total = (await store.count()) > 0 ? 8 : 0;
+      expect(total).toBe(8);
+
+      // Model switch → rebuild, killed after 3 files.
+      const switchedIdentity = { ...IDENTITY, model: "other-model" };
+      const killed = new Indexer(
+        makeConfig(fakeProvider(3, switchedIdentity)),
+        killStoreAfter(await freshStore(), 3),
+      );
+      await expect(killed.reindex()).rejects.toThrow("killed");
+      expect(existsSync(path.join(indexDir, "reindex.lock"))).toBe(false);
+
+      // The old cache must be gone: the run wrote an empty one when it dropped
+      // the table, so nothing vouches for files that were never re-embedded.
+      const cacheAfterKill = JSON.parse(
+        readFileSync(path.join(indexDir, "mtime_cache.json"), "utf8"),
+      ) as Record<string, unknown>;
+      expect(Object.keys(cacheAfterKill).length).toBeLessThanOrEqual(3);
+
+      // A plain (non-forced) reindex under the new model finishes the job.
+      const resumed = new Indexer(
+        makeConfig(fakeProvider(3, switchedIdentity)),
+        await freshStore(),
+      );
+      const stats = await resumed.reindex();
+      expect(stats.rebuiltReason).toBeUndefined();
+      expect(stats.indexed + stats.skipped).toBe(8);
+      expect(stats.indexed).toBeGreaterThanOrEqual(5);
+
+      const status = await resumed.getStatus();
+      expect(status.needsReindex).toBe(false);
+      expect(status.cachedFiles).toBe(8);
+      // Every file is searchable: distinct files in the table == corpus size.
+      const rows = (await store.count()) ?? 0;
+      expect(rows).toBeGreaterThan(0);
+      expect(readMeta(indexDir).model).toBe("other-model");
+    });
+
+    it("a run resumes from its last checkpoint instead of re-embedding everything", async () => {
+      // 30 files: the checkpoint every 25 indexed files fires once before the kill.
+      for (let i = 6; i < 30; i++) {
+        writeFileSync(path.join(workspace, "doc", `f${i}.md`), `# F${i}\n\nBody ${i}.\n`);
+      }
+      const killed = new Indexer(makeConfig(fakeProvider(3, IDENTITY)), killStoreAfter(store, 27));
+      await expect(killed.reindex()).rejects.toThrow("killed");
+
+      const cacheAfterKill = JSON.parse(
+        readFileSync(path.join(indexDir, "mtime_cache.json"), "utf8"),
+      ) as Record<string, unknown>;
+      expect(Object.keys(cacheAfterKill).length).toBe(25);
+
+      const resumed = new Indexer(makeConfig(fakeProvider(3, IDENTITY)), await freshStore());
+      const stats = await resumed.reindex();
+      expect(stats.skipped).toBe(25);
+      expect(stats.indexed).toBe(32 - 25);
+      expect((await resumed.getStatus()).needsReindex).toBe(false);
     });
   });
 });
