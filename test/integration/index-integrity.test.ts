@@ -564,7 +564,7 @@ describe("Indexer integrity (real LanceDB)", () => {
         staleReason: "holder-dead",
       });
       expect(first.reindexLock).toBeUndefined();
-      expect(existsSync(lockPath)).toBe(false);
+      expect(indexer.inspectReindexLock()).toBeNull();
 
       writeFileSync(
         lockPath,
