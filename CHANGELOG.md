@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The file watcher no longer turns the status bar red when a reindex is
+  already running.** Saving a doc while the start-up catch-up reindex (or a
+  CLI / MCP `reindex_docs`, or the watcher's own previous run) held the lock
+  made the watcher's attempt throw `ReindexInProgressError`, which it reported
+  as "Reindex failed" — a full reindex on a large corpus can take tens of
+  minutes, so the badge sat red for the whole run even though nothing had
+  failed. The watcher now keeps showing "Indexing…", retries every 10 s until
+  the lock is free, and then runs its incremental pass; a new change during
+  the wait collapses into the pending retry.
+
 ## [0.8.0] - 2026-09-12
 
 ### Security
