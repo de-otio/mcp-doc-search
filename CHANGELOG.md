@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Stale reindex locks are detected and cleaned up, not just tripped over.**
+  A reindex killed mid-run (VS Code reload or quit, SIGKILL) left
+  `reindex.lock` behind; it was only ever reclaimed when the next reindex
+  happened to collide with it, and nothing reported it. A running reindex now
+  touches its lock every 30 s as a heartbeat, so a lock is stale when its
+  holder is dead **or** silent for 10 min (covers a recycled pid) **or**
+  unreadable. The extension sweeps a stale lock on activation, `getStatus`
+  (extension panel, CLI `status`, MCP) removes and reports one, and the CLI
+  prints the live lock's holder and heartbeat. New `Indexer` API:
+  `inspectReindexLock()` / `clearStaleReindexLock()`; `IndexStatus` gains
+  `reindexLock` and `clearedStaleLock`.
+- **A rebuild killed part-way no longer leaves an index that claims to be
+  complete.** The rebuild dropped the table but only cleared the mtime cache
+  in memory, and wrote `index-meta.json` at the first embed — so after a kill
+  the next reindex took the incremental path, trusted the old cache, and left
+  a table holding a fraction of the corpus (observed: 3,180 of 5,114 files)
+  with nothing flagging it. The rebuild now writes an empty cache to disk the
+  moment it drops the table, and every run checkpoints the cache after each 25
+  indexed files, so a killed run is resumed from its last checkpoint by the
+  next plain reindex instead of mistaken for finished.
 - **The file watcher no longer turns the status bar red when a reindex is
   already running.** Saving a doc while the start-up catch-up reindex (or a
   CLI / MCP `reindex_docs`, or the watcher's own previous run) held the lock

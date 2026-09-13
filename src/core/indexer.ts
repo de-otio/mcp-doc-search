@@ -12,6 +12,7 @@ import {
   renameSync,
   statSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
@@ -37,6 +38,7 @@ import type {
   IndexStats,
   IndexStatus,
   PathContext,
+  ReindexLockInfo,
 } from "./types.js";
 import { COMPACT_VERSION_THRESHOLD } from "./vectorstore.js";
 import type { LanceVectorStore, VectorRecord } from "./vectorstore.js";
@@ -97,6 +99,40 @@ export class ReindexInProgressError extends Error {
 interface LockHolder {
   pid: number;
   startedAt: string;
+}
+
+/**
+ * How often a running reindex touches its lock file. The lock's mtime is
+ * its heartbeat: a holder that stops touching it — killed, hung, or a pid
+ * that has since been recycled by an unrelated process — is stale once the
+ * heartbeat is older than `LOCK_STALE_AFTER_MS`.
+ */
+export const LOCK_HEARTBEAT_MS = 30_000;
+/**
+ * A lock whose heartbeat is older than this is stale even if its pid is
+ * alive (pid reuse). Generous on purpose: the cost of a false "stale" is two
+ * writers interleaving on one index, the very thing the lock prevents.
+ */
+export const LOCK_STALE_AFTER_MS = 10 * 60_000;
+
+function inspectLock(lockPath: string, now = Date.now()): ReindexLockInfo | null {
+  let heartbeatAt: Date;
+  try {
+    heartbeatAt = new Date(statSync(lockPath).mtimeMs);
+  } catch {
+    return null;
+  }
+  const holder = readLockHolder(lockPath);
+  if (!holder) {
+    return { pid: 0, startedAt: "unknown", heartbeatAt, stale: true, staleReason: "unreadable" };
+  }
+  if (!isProcessAlive(holder.pid)) {
+    return { ...holder, heartbeatAt, stale: true, staleReason: "holder-dead" };
+  }
+  if (now - heartbeatAt.getTime() > LOCK_STALE_AFTER_MS) {
+    return { ...holder, heartbeatAt, stale: true, staleReason: "heartbeat-expired" };
+  }
+  return { ...holder, heartbeatAt, stale: false };
 }
 
 function readLockHolder(lockPath: string): LockHolder | null {
@@ -267,6 +303,8 @@ export class Indexer {
 
   /** Below this many files to index, skip the preflight probe (see reindex). */
   private static readonly MIN_FILES_FOR_PREFLIGHT = 5;
+  /** Persist the mtime cache after this many indexed files (crash resumability). */
+  private static readonly CACHE_CHECKPOINT_FILES = 25;
 
   constructor(config: IndexerConfig, store: LanceVectorStore) {
     // Normalize: callers constructing a config by hand may omit extraRoots.
@@ -476,6 +514,12 @@ export class Indexer {
     // Drop everything: table, mtime cache, prune list. Every file is then
     // re-embedded, which is the only way the index and the cache stay in step
     // — merging the old cache back in is exactly what used to lose files.
+    //
+    // The empty cache goes to disk right away. If this run is killed before
+    // it finishes, the next one must see "nothing indexed yet" — with the old
+    // cache still on disk it would take the incremental path, skip every
+    // file whose mtime it recognises, and leave a table holding a fraction of
+    // the corpus while claiming to be complete.
     const beginRebuild = async (reason: string): Promise<void> => {
       rebuiltReason = reason;
       console.warn(`Rebuilding index: ${reason}`);
@@ -483,6 +527,7 @@ export class Indexer {
       cache = {};
       newCache = {};
       staleKeys = [];
+      this.saveMtimeCache({});
     };
 
     const mismatch = describeMetaMismatch(onDiskMeta, expectedMeta, (await this.store.count()) > 0);
@@ -684,6 +729,14 @@ export class Indexer {
       indexed++;
       totalChunks += chunks.length;
       onProgress?.(indexed, toIndex.length, rel, "indexing");
+
+      // Checkpoint so a killed run resumes where it stopped: the vectors
+      // above are already committed, and a later run skips every file the
+      // cache vouches for. Stale keys were deleted before the loop, so
+      // dropping them from the cache is right at any point.
+      if (indexed % Indexer.CACHE_CHECKPOINT_FILES === 0) {
+        persistCache();
+      }
     }
 
     // Merge new cache with unchanged entries from old cache, excluding pruned keys
@@ -726,8 +779,19 @@ export class Indexer {
     };
   }
 
-  /** Compute the current index health without modifying anything. */
+  /**
+   * Compute the current index health. The only thing it modifies is a stale
+   * `reindex.lock`, which it removes and reports.
+   */
   async getStatus(): Promise<IndexStatus> {
+    const clearedLock = this.clearStaleReindexLock();
+    if (clearedLock) {
+      console.warn(
+        `Removed stale reindex lock (pid ${clearedLock.pid}, started ${clearedLock.startedAt}, ` +
+          `${clearedLock.staleReason})`,
+      );
+    }
+    const reindexLock = this.inspectReindexLock() ?? undefined;
     const cache = this.loadMtimeCache();
     const { entries, missingRootPrefixes } = await this.scanFiles();
 
@@ -768,6 +832,8 @@ export class Indexer {
       extraRootNames: this.config.extraRoots.map((r) => r.name),
       meta: this.loadIndexMeta() ?? undefined,
       ftsIndex: await this.store.hasFtsIndex(),
+      reindexLock,
+      clearedStaleLock: clearedLock ?? undefined,
     };
   }
 
@@ -1014,10 +1080,39 @@ export class Indexer {
   }
 
   /**
+   * What `reindex.lock` currently says, or null when no lock exists. Does not
+   * modify anything; see `clearStaleReindexLock` for the cleanup.
+   */
+  inspectReindexLock(): ReindexLockInfo | null {
+    return inspectLock(this.lockPath());
+  }
+
+  /**
+   * Remove `reindex.lock` if it is stale (holder dead, heartbeat expired, or
+   * unreadable) and return what was removed; null when there was no lock or
+   * the lock is live. A live lock is never touched.
+   *
+   * Called on activation and from `getStatus` so a lock left by a killed run
+   * is cleaned up as soon as anything looks at the index, not only when the
+   * next reindex happens to run.
+   */
+  clearStaleReindexLock(): ReindexLockInfo | null {
+    const state = this.inspectReindexLock();
+    if (!state?.stale) return null;
+    try {
+      unlinkSync(this.lockPath());
+    } catch {
+      // Already removed by another process's sweep.
+    }
+    return state;
+  }
+
+  /**
    * Take `<indexDir>/reindex.lock` exclusively (O_EXCL create) and return the
-   * release function. A lock whose recorded pid is no longer running is
-   * stale — left by a crashed run — and is replaced; a live holder throws
-   * ReindexInProgressError.
+   * release function. While held, the lock is touched every
+   * `LOCK_HEARTBEAT_MS` so other processes can tell a live run from one that
+   * was killed. A stale lock — dead holder, expired heartbeat, or unreadable —
+   * is replaced; a live holder throws ReindexInProgressError.
    */
   private acquireReindexLock(): () => void {
     mkdirSync(this.config.indexDir, { recursive: true });
@@ -1032,7 +1127,18 @@ export class Indexer {
         } finally {
           closeSync(fd);
         }
+        const heartbeat = setInterval(() => {
+          try {
+            const now = new Date();
+            utimesSync(lockPath, now, now);
+          } catch {
+            // Lock swept by another process; the run finishes regardless.
+          }
+        }, LOCK_HEARTBEAT_MS);
+        // Never keep the process alive just to beat the heart.
+        heartbeat.unref();
         return () => {
+          clearInterval(heartbeat);
           try {
             unlinkSync(lockPath);
           } catch {
@@ -1041,11 +1147,11 @@ export class Indexer {
         };
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-        const existing = readLockHolder(lockPath);
-        if (existing && isProcessAlive(existing.pid)) {
+        const existing = inspectLock(lockPath);
+        if (existing && !existing.stale) {
           throw new ReindexInProgressError(existing.pid, existing.startedAt);
         }
-        // Stale (dead pid) or unreadable: remove it and try once more.
+        // Stale or gone: remove it and try once more.
         try {
           unlinkSync(lockPath);
         } catch {

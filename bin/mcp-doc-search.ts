@@ -416,6 +416,14 @@ export async function cmdStatus(flags: Record<string, string | boolean>): Promis
       `deletedFiles:  ${status.deletedFiles}\n` +
       `docGlob:       ${status.docGlob}\n` +
       `fts:           ${status.ftsIndex === undefined ? "unknown" : status.ftsIndex ? "present" : "missing"}\n` +
+      `reindexLock:   ${
+        status.reindexLock
+          ? `held by pid ${status.reindexLock.pid} since ${status.reindexLock.startedAt} (heartbeat ${status.reindexLock.heartbeatAt.toISOString()})`
+          : "none"
+      }\n` +
+      (status.clearedStaleLock
+        ? `staleLock:     removed (pid ${status.clearedStaleLock.pid}, started ${status.clearedStaleLock.startedAt}, ${status.clearedStaleLock.staleReason})\n`
+        : "") +
       metaLines,
   );
 }

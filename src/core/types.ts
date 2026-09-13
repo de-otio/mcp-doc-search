@@ -145,6 +145,21 @@ export interface IndexStatus {
    * hybrid search; `reindex` creates it. Absent when the store cannot say.
    */
   ftsIndex?: boolean;
+  /** A live `reindex.lock`, when a reindex is running. Absent when none. */
+  reindexLock?: ReindexLockInfo;
+  /** A stale lock that computing this status removed, when there was one. */
+  clearedStaleLock?: ReindexLockInfo;
+}
+
+/** What `reindex.lock` says about the run that holds (or held) it. */
+export interface ReindexLockInfo {
+  pid: number;
+  startedAt: string;
+  /** When the holder last touched the lock. */
+  heartbeatAt: Date;
+  /** True when the holder is dead, silent too long, or the file is unreadable. */
+  stale: boolean;
+  staleReason?: "holder-dead" | "heartbeat-expired" | "unreadable";
 }
 
 /**

@@ -109,6 +109,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   store
     .open()
     .then(async () => {
+      // A lock left by a run that VS Code killed (window reload, quit) would
+      // otherwise sit until the next reindex tripped over it.
+      const stale = indexer.clearStaleReindexLock();
+      if (stale) {
+        console.warn(
+          `Doc Search: removed stale reindex lock (pid ${stale.pid}, started ${stale.startedAt}, ${stale.staleReason})`,
+        );
+      }
       if (!config.autoReindex) return;
       const status = await indexer.getStatus();
       if (!status.needsReindex) return;
