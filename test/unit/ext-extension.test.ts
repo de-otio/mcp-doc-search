@@ -60,6 +60,14 @@ describe("Extension", () => {
 
     const { LanceVectorStore } = await import("../../src/core/vectorstore.js");
     vi.mocked(LanceVectorStore).prototype.open = vi.fn().mockResolvedValue(undefined);
+
+    // activate() needs a real provider object: the index directory is keyed by
+    // the embedder's identity, so it is read before anything else happens.
+    const { createEmbedProvider } = await import("../../src/core/embedder.js");
+    vi.mocked(createEmbedProvider).mockReturnValue({
+      embed: vi.fn(),
+      identity: () => ({ provider: "local" as const, model: "Xenova/all-MiniLM-L6-v2", dim: 384 }),
+    });
   });
 
   describe("activate", () => {

@@ -35,6 +35,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `the index at … holds 768-dimension vectors but this process embeds at 384`
   instead of an opaque Lance planner error. An empty table is still recreated.
 
+### Changed
+
+- **The global index directory is keyed by the embedding provider and model.**
+  `~/.doc-search/indexes/<workspace-key>` becomes
+  `~/.doc-search/indexes/<workspace-key>-<provider>-<hash of the model id>`.
+  Which embedder a process resolves is a property of that process — a VS Code
+  extension configured for Ollama and an MCP server that only has the bundled
+  model each saw the other's index as built by the wrong model and rebuilt the
+  whole corpus, every time you switched, each rebuild compacting versions the
+  other was reading through. They now get one index directory each. The key uses
+  provider and model rather than the vector dimension: an Ollama model's
+  dimension is only known after the first embed, and two different 384-dim
+  models are no more comparable than two different widths.
+
+  On first run the existing un-keyed directory is **taken over** (renamed) by
+  whichever runner's provider matches the `index-meta.json` inside it, so no
+  reindex is needed for the runner that built it. A runner whose provider does
+  not match builds its own index once, instead of fighting over one forever. A
+  directory with no readable metadata is left alone.
+
 ### Documentation
 
 - `doc/configuration.md` gains a troubleshooting section on two runners sharing

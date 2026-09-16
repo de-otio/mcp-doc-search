@@ -149,35 +149,6 @@ export async function createEngineFromEnv(): Promise<EngineDeps> {
     process.env.DOC_SEARCH_INDEX_LOCATION ?? settings["docSearch.indexLocation"],
     rawIndexDir,
   );
-  const resolved = resolveIndexLocation(workspaceRoot, {
-    mode,
-    indexDir: rawIndexDir,
-    env: process.env,
-  });
-  const indexDir = resolved.indexDir;
-  if (resolved.shouldGitignore && resolved.gitignoreEntry)
-    ensureGitignored(workspaceRoot, resolved.gitignoreEntry);
-  // 0 = auto: validateConfig derives the budget from the embedding model, the
-  // same way the extension does, so both entry points record one value in
-  // index-meta.json and alternating between them never forces a rebuild.
-  const maxChunkChars = settings["docSearch.maxChunkChars"] ?? 0;
-  const headingDepth = settings["docSearch.headingDepth"] ?? 2;
-
-  // External roots: env var (JSON array) → settings.json (opt-in only) → none.
-  // NOTE: an external root grants MCP/CLI clients read access to a directory
-  // OUTSIDE the workspace — parseExtraRoots drops anything malformed and the
-  // indexer re-contains every ref against the declared root.
-  let rawExtraRoots: unknown = trusted("docSearch.extraRoots");
-  if (process.env.DOC_SEARCH_EXTRA_ROOTS) {
-    try {
-      rawExtraRoots = JSON.parse(process.env.DOC_SEARCH_EXTRA_ROOTS);
-    } catch {
-      warn(`DOC_SEARCH_EXTRA_ROOTS is not valid JSON; ignoring it`);
-    }
-  }
-  const { roots: extraRoots, warnings: extraRootWarnings } = parseExtraRoots(rawExtraRoots);
-  for (const warning of extraRootWarnings) warn(warning);
-
   // Embedding provider: env vars → settings.json (opt-in only) → local
   const providerName =
     (process.env.USE_OPENAI === "1" ? "openai" : undefined) ??
@@ -202,6 +173,39 @@ export async function createEngineFromEnv(): Promise<EngineDeps> {
   } else {
     embedProvider = new LocalEmbedder({ model: process.env.DOC_SEARCH_LOCAL_MODEL });
   }
+
+  // The index directory is keyed by the embedder, so the provider must be
+  // resolved first — two runners that disagree get one directory each
+  // instead of rebuilding over each other (see workspaceKey).
+  const resolved = resolveIndexLocation(workspaceRoot, {
+    mode,
+    indexDir: rawIndexDir,
+    env: process.env,
+    embedding: embedProvider.identity?.(),
+  });
+  const indexDir = resolved.indexDir;
+  if (resolved.shouldGitignore && resolved.gitignoreEntry)
+    ensureGitignored(workspaceRoot, resolved.gitignoreEntry);
+  // 0 = auto: validateConfig derives the budget from the embedding model, the
+  // same way the extension does, so both entry points record one value in
+  // index-meta.json and alternating between them never forces a rebuild.
+  const maxChunkChars = settings["docSearch.maxChunkChars"] ?? 0;
+  const headingDepth = settings["docSearch.headingDepth"] ?? 2;
+
+  // External roots: env var (JSON array) → settings.json (opt-in only) → none.
+  // NOTE: an external root grants MCP/CLI clients read access to a directory
+  // OUTSIDE the workspace — parseExtraRoots drops anything malformed and the
+  // indexer re-contains every ref against the declared root.
+  let rawExtraRoots: unknown = trusted("docSearch.extraRoots");
+  if (process.env.DOC_SEARCH_EXTRA_ROOTS) {
+    try {
+      rawExtraRoots = JSON.parse(process.env.DOC_SEARCH_EXTRA_ROOTS);
+    } catch {
+      warn(`DOC_SEARCH_EXTRA_ROOTS is not valid JSON; ignoring it`);
+    }
+  }
+  const { roots: extraRoots, warnings: extraRootWarnings } = parseExtraRoots(rawExtraRoots);
+  for (const warning of extraRootWarnings) warn(warning);
 
   const store = new LanceVectorStore(indexDir);
   await store.open();

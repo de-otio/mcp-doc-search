@@ -52,7 +52,7 @@ Additional directories **outside the workspace** to index alongside the workspac
 
 Where to store the search index:
 
-- `global` (default): Indexes are centralized under `~/.doc-search/indexes/<workspace-key>`, outside the workspace, shared across all instances of this workspace (VS Code extension, MCP server, CLI). Automatically migrates any existing `.doc-search-index` folder to the global location on first run. The global location is not added to version control.
+- `global` (default): Indexes are centralized under `~/.doc-search/indexes/<workspace-key>`, outside the workspace, shared across all instances of this workspace (VS Code extension, MCP server, CLI) that resolve the same embedding provider. Since 0.8.2 the key ends in `-<provider>-<hash of the model id>`: vectors from two models cannot be compared, so runners configured differently get one index each rather than repeatedly rebuilding over each other (see [the troubleshooting note](#two-runners-on-one-index-disagree-about-the-embedding-provider)). Automatically migrates any existing `.doc-search-index` folder to the global location on first run. The global location is not added to version control.
 - `workspace` (**deprecated**): Indexes are stored in-tree at the location specified by `docSearch.indexDir` (default: `.doc-search-index`). This is the legacy behavior, kept only for setups that cannot use the centralized location; it may be removed in a future release. The configured directory is automatically added to `.gitignore` on first run.
 
 If `docSearch.indexDir` is set to a non-default value and `docSearch.indexLocation` is not explicitly set, workspace mode is automatically selected (preserving any existing custom index locations).
@@ -285,9 +285,16 @@ Symptoms that this is what you are looking at:
 768-dimension vectors but this process embeds at 384`;
 - a reindex refuses with `Refusing to rebuild the index at …`.
 
-The fix is to pin one provider for the workspace and make both runners use it.
-Since 0.8.2 the two sides no longer corrupt each other's reads when they do
-disagree — but they still each rebuild, so pinning is what stops the churn.
+Since 0.8.2 the index directory is **keyed by the embedder**, so two runners
+that disagree get one index each (`…-<provider>-<hash>`) instead of destroying
+each other's. That makes the disagreement survivable, not free: you pay for a
+second index on disk and a second pass of embedding. Pinning one provider for
+the workspace is still what you want.
+
+On upgrade, the existing `~/.doc-search/indexes/<workspace-key>` directory is
+taken over by whichever runner's provider matches the `index-meta.json` inside
+it, so that runner keeps its index. A runner whose provider does not match
+builds its own — one reindex, once, rather than on every alternation.
 
 ### Ollama stops embedding after an upgrade
 
