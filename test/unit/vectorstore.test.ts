@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createHash } from "node:crypto";
-import { LanceVectorStore, fileHashKey } from "../../src/core/vectorstore.js";
+import {
+  LanceVectorStore,
+  fileHashKey,
+  isStaleHandleError,
+  COMPACT_GRACE_MS,
+} from "../../src/core/vectorstore.js";
 
 const sha256 = (s: string): string => createHash("sha256").update(s).digest("hex");
 
@@ -81,13 +86,14 @@ describe("LanceVectorStore", () => {
       expect(store.hasTable()).toBe(true);
     });
 
-    it("should drop and recreate table on dimension mismatch", async () => {
+    it("drops and recreates an EMPTY table on dimension mismatch", async () => {
       const lancedb = await import("@lancedb/lancedb");
       vi.mocked(lancedb.connect).mockResolvedValue(mockDb);
       mockDb.openTable.mockResolvedValue(mockTable);
       mockTable.schema.mockResolvedValue({
         fields: [{ name: "vector", type: { listSize: 768 } }],
       });
+      mockTable.countRows.mockResolvedValue(0);
       mockDb.createTable.mockResolvedValue(mockTable);
       mockTable.delete.mockResolvedValue(undefined);
 
@@ -97,6 +103,27 @@ describe("LanceVectorStore", () => {
 
       expect(mockDb.dropTable).toHaveBeenCalledWith("doc_chunks");
       expect(mockDb.createTable).toHaveBeenCalled();
+    });
+
+    it("refuses to drop a POPULATED table on dimension mismatch, naming both sides", async () => {
+      const lancedb = await import("@lancedb/lancedb");
+      vi.mocked(lancedb.connect).mockResolvedValue(mockDb);
+      mockDb.openTable.mockResolvedValue(mockTable);
+      mockTable.schema.mockResolvedValue({
+        fields: [{ name: "vector", type: { listSize: 768 } }],
+      });
+      mockTable.countRows.mockResolvedValue(5431);
+
+      const store = new LanceVectorStore("/tmp/index");
+      await store.open();
+
+      // Every deliberate rebuild drops the table first, so a populated table
+      // here means the mismatch went undetected — destroying it silently is
+      // how a second runner's index disappears without anyone asking.
+      await expect(store.ensureTable(384)).rejects.toThrow(
+        /5431 rows of 768-dimension vectors and this process embeds at 384/,
+      );
+      expect(mockDb.dropTable).not.toHaveBeenCalled();
     });
   });
 
@@ -188,6 +215,167 @@ describe("LanceVectorStore", () => {
       const results = await store.query([0.1, 0.2], 10);
 
       expect(results).toEqual([]);
+    });
+  });
+
+  describe("stale table handles", () => {
+    const manifestGone = (): Error =>
+      new Error(
+        "Failed to execute query stream: GenericFailure, lance error: Not found: " +
+          "/idx/doc_chunks.lance/_versions/1352.manifest",
+      );
+
+    /** search() that throws the given error once, then returns rows. */
+    function searchFailingOnce(err: Error, rows: unknown[]): () => unknown {
+      let calls = 0;
+      return () => ({
+        distanceType: () => ({
+          limit: () => ({
+            toArray: async () => {
+              if (calls++ === 0) throw err;
+              return rows;
+            },
+          }),
+        }),
+      });
+    }
+
+    it("recognises a vanished manifest and nothing else", () => {
+      expect(isStaleHandleError(manifestGone())).toBe(true);
+      // The form a compacted-away data fragment produces (observed against
+      // LanceDB 0.13: a search on a stale handle reports the missing file, not
+      // the missing manifest).
+      expect(
+        isStaleHandleError(
+          new Error(
+            "Failed to get next batch from stream: lance error: LanceError(IO): " +
+              "Execution error: Not found: /idx/doc_chunks.lance/data/f0f748c3.lance",
+          ),
+        ),
+      ).toBe(true);
+      // A missing table is also "Not found" — it must not be read as a stale
+      // handle, or open() would be retried pointlessly on every empty index.
+      expect(isStaleHandleError(new Error("Not found: table doc_chunks"))).toBe(false);
+      expect(isStaleHandleError(new Error("boom"))).toBe(false);
+      expect(isStaleHandleError("Not found: x/1.manifest")).toBe(true);
+    });
+
+    it("checks out the latest version and retries the query once", async () => {
+      const lancedb = await import("@lancedb/lancedb");
+      vi.mocked(lancedb.connect).mockResolvedValue(mockDb);
+      mockDb.openTable.mockResolvedValue(mockTable);
+      mockTable.checkoutLatest = vi.fn().mockResolvedValue(undefined);
+      mockTable.search.mockImplementation(
+        searchFailingOnce(manifestGone(), [
+          { file: "a.md", heading: "A", lineStart: 0, text: "x", _distance: 0.2 },
+        ]),
+      );
+
+      const store = new LanceVectorStore("/tmp/index");
+      await store.open();
+      const results = await store.query([0.1, 0.2], 10);
+
+      expect(mockTable.checkoutLatest).toHaveBeenCalledTimes(1);
+      expect(results).toHaveLength(1);
+      expect(results[0].file).toBe("a.md");
+    });
+
+    it("reconnects when the handle has no checkoutLatest", async () => {
+      const lancedb = await import("@lancedb/lancedb");
+      vi.mocked(lancedb.connect).mockResolvedValue(mockDb);
+      mockDb.openTable.mockResolvedValue(mockTable);
+      mockTable.query.mockReturnValueOnce({
+        toArray: vi.fn().mockRejectedValue(manifestGone()),
+      });
+      mockTable.query.mockReturnValueOnce({
+        toArray: vi.fn().mockResolvedValue([{ file: "a.md", heading: "A" }]),
+      });
+
+      const store = new LanceVectorStore("/tmp/index");
+      await store.open();
+      expect(await store.listFiles()).toEqual([{ file: "a.md", title: "A" }]);
+      // open() ran twice: once for the initial open, once to re-resolve.
+      expect(vi.mocked(lancedb.connect)).toHaveBeenCalledTimes(2);
+    });
+
+    it("retries count() and fullTextQuery() too", async () => {
+      const lancedb = await import("@lancedb/lancedb");
+      vi.mocked(lancedb.connect).mockResolvedValue(mockDb);
+      mockDb.openTable.mockResolvedValue(mockTable);
+      mockTable.checkoutLatest = vi.fn().mockResolvedValue(undefined);
+      mockTable.countRows.mockRejectedValueOnce(manifestGone()).mockResolvedValueOnce(42);
+
+      const store = new LanceVectorStore("/tmp/index");
+      await store.open();
+      expect(await store.count()).toBe(42);
+
+      const ftsRows = [{ file: "a.md", heading: "A", lineStart: 0, text: "x", _score: 1 }];
+      let ftsCalls = 0;
+      mockTable.query.mockReturnValue({
+        fullTextSearch: () => ({
+          limit: () => ({
+            toArray: async () => {
+              if (ftsCalls++ === 0) throw manifestGone();
+              return ftsRows;
+            },
+          }),
+        }),
+      });
+      expect(await store.fullTextQuery("needle", 5)).toHaveLength(1);
+    });
+
+    it("propagates a second failure instead of looping", async () => {
+      const lancedb = await import("@lancedb/lancedb");
+      vi.mocked(lancedb.connect).mockResolvedValue(mockDb);
+      mockDb.openTable.mockResolvedValue(mockTable);
+      mockTable.checkoutLatest = vi.fn().mockResolvedValue(undefined);
+      mockTable.search.mockReturnValue({
+        distanceType: () => ({
+          limit: () => ({ toArray: vi.fn().mockRejectedValue(manifestGone()) }),
+        }),
+      });
+      mockTable.schema.mockResolvedValue({ fields: [] });
+
+      const store = new LanceVectorStore("/tmp/index");
+      await store.open();
+
+      await expect(store.query([0.1], 10)).rejects.toThrow("1352.manifest");
+      expect(mockTable.checkoutLatest).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves an unrelated error alone", async () => {
+      const lancedb = await import("@lancedb/lancedb");
+      vi.mocked(lancedb.connect).mockResolvedValue(mockDb);
+      mockDb.openTable.mockResolvedValue(mockTable);
+      mockTable.checkoutLatest = vi.fn();
+      mockTable.countRows.mockRejectedValue(new Error("disk on fire"));
+
+      const store = new LanceVectorStore("/tmp/index");
+      await store.open();
+
+      await expect(store.count()).rejects.toThrow("disk on fire");
+      expect(mockTable.checkoutLatest).not.toHaveBeenCalled();
+    });
+
+    it("explains a failed search that is really a dimension mismatch", async () => {
+      const lancedb = await import("@lancedb/lancedb");
+      vi.mocked(lancedb.connect).mockResolvedValue(mockDb);
+      mockDb.openTable.mockResolvedValue(mockTable);
+      mockTable.schema.mockResolvedValue({
+        fields: [{ name: "vector", type: { listSize: 768 } }],
+      });
+      mockTable.search.mockReturnValue({
+        distanceType: () => ({
+          limit: () => ({ toArray: vi.fn().mockRejectedValue(new Error("GenericFailure")) }),
+        }),
+      });
+
+      const store = new LanceVectorStore("/tmp/index");
+      await store.open();
+
+      await expect(store.query(new Array(384).fill(0), 5)).rejects.toThrow(
+        /768-dimension vectors but this process embeds at 384/,
+      );
     });
   });
 
@@ -348,7 +536,7 @@ describe("LanceVectorStore", () => {
   });
 
   describe("compact", () => {
-    it("optimizes with cleanupOlderThan=now and maps the stats", async () => {
+    it("prunes with a grace period, not to now, and maps the stats", async () => {
       const lancedb = await import("@lancedb/lancedb");
       vi.mocked(lancedb.connect).mockResolvedValue(mockDb);
       mockDb.openTable.mockResolvedValue(mockTable);
@@ -367,9 +555,12 @@ describe("LanceVectorStore", () => {
         bytesRemoved: 22_900_000,
         fragmentsRemoved: 443,
       });
+      // Pruning to *now* deletes versions other processes are still reading
+      // through; the cut-off must sit a full grace period in the past.
       const opts = mockTable.optimize.mock.calls[0][0];
       expect(opts.cleanupOlderThan).toBeInstanceOf(Date);
-      expect(opts.cleanupOlderThan.getTime()).toBeGreaterThanOrEqual(before);
+      expect(opts.cleanupOlderThan.getTime()).toBeGreaterThanOrEqual(before - COMPACT_GRACE_MS);
+      expect(opts.cleanupOlderThan.getTime()).toBeLessThan(before - COMPACT_GRACE_MS + 60_000);
     });
 
     it("returns null when there is no table", async () => {

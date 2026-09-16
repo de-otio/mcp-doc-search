@@ -29,6 +29,7 @@ import {
   ReindexInProgressError,
 } from "../../src/core/indexer.js";
 import { LanceVectorStore, fileHashKey } from "../../src/core/vectorstore.js";
+import type { VectorRecord } from "../../src/core/vectorstore.js";
 import { DEFAULT_EXTRA_ROOT_GLOB } from "../../src/core/extraRoots.js";
 import { validateConfig } from "../../src/core/types.js";
 import type {
@@ -170,6 +171,91 @@ describe("LanceVectorStore.deleteByFile (real LanceDB)", () => {
     expect(await store.count()).toBe(0);
     await store.ensureTable(2);
     expect(await store.count()).toBe(0);
+  });
+});
+
+describe("cross-process compaction (real LanceDB)", () => {
+  let indexDir: string;
+
+  const row = (id: string, v: number[]): VectorRecord => ({
+    id,
+    vector: v,
+    file: `doc/${id}.md`,
+    heading: id.toUpperCase(),
+    lineStart: 0,
+    text: `body ${id}`,
+    docid: id,
+  });
+
+  /**
+   * What another process's compaction does to this one: prune every superseded
+   * version with no grace period, exactly as 0.8.1's compact() did. Uses the
+   * LanceDB API directly so the test still reproduces the collision after
+   * COMPACT_GRACE_MS stopped our own compact() from pruning recent versions.
+   */
+  async function compactWithoutGrace(dir: string): Promise<void> {
+    const lancedb = await import("@lancedb/lancedb");
+    const db = await lancedb.connect(dir);
+    const table = await db.openTable("doc_chunks");
+    await table.optimize({ cleanupOlderThan: new Date() });
+  }
+
+  beforeEach(() => {
+    indexDir = tmp("ds-compact-");
+  });
+
+  afterEach(() => {
+    rmSync(indexDir, { recursive: true, force: true });
+  });
+
+  it("a reader survives having its pinned version deleted under it", async () => {
+    // Reader: an MCP server that opened the table once and holds the handle.
+    const reader = new LanceVectorStore(indexDir);
+    await reader.open();
+    await reader.ensureTable(2);
+    await reader.upsert([row("a", [1, 0]), row("b", [0, 1])]);
+    expect(await reader.query([1, 0], 5)).toHaveLength(2);
+
+    // Writer: the editor extension reindexing in another process. A reindex
+    // rewrites each file's chunks (delete, then re-add), so the data files the
+    // reader's version points at stop being referenced — and the compaction
+    // that follows deletes them.
+    const writer = new LanceVectorStore(indexDir);
+    await writer.open();
+    for (let i = 0; i < 5; i++) {
+      await writer.deleteByFile("doc/a.md");
+      await writer.upsert([row("a", [1, 0])]);
+    }
+    await compactWithoutGrace(indexDir);
+
+    // On 0.8.1 both of these threw `Not found: …/doc_chunks.lance/data/<uuid>`
+    // and kept throwing for the life of the process, because nothing ever
+    // re-pointed the handle at a live version.
+    expect(await reader.query([1, 0], 5)).toHaveLength(2);
+    expect(await reader.listFiles()).toHaveLength(2);
+    expect(await reader.count()).toBe(2);
+
+    await reader.close();
+    await writer.close();
+  });
+
+  it("compact() leaves versions a concurrent reader may still hold", async () => {
+    const store = new LanceVectorStore(indexDir);
+    await store.open();
+    await store.ensureTable(2);
+    for (let i = 0; i < 5; i++) await store.upsert([row(`r${i}`, [1, 0])]);
+
+    const before = store.retainedVersions();
+    expect(before).toBeGreaterThan(1);
+
+    const stats = await store.compact();
+
+    // Everything written in this test is newer than the grace period, so the
+    // prune has nothing it is allowed to remove.
+    expect(stats?.versionsRemoved).toBe(0);
+    expect(store.retainedVersions()).toBeGreaterThanOrEqual(before);
+    expect(await store.count()).toBe(5);
+    await store.close();
   });
 });
 

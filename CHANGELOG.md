@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-09-16
+
+### Fixed
+
+- **A search no longer breaks permanently when another process compacts the
+  index.** A LanceDB table handle is a snapshot pinned to the version it was
+  opened at, and the store opened one at startup and kept it for the life of
+  the process. When a second runner on the same index directory — the
+  documented setup is an editor extension plus an MCP server — reindexed and
+  compacted, the data the pinned version pointed at was deleted under it, and
+  every subsequent `search_docs` in the first process failed with
+  `Not found: …/doc_chunks.lance/data/<uuid>.lance` (or `…/_versions/<n>.manifest`).
+  Nothing ever re-pointed the handle, so it never recovered; only a reindex,
+  which re-opens the store, appeared to "fix" it. Reads now detect that error,
+  check out the current version once, and retry.
+- **Compaction keeps a grace period instead of pruning to _now_.** Old versions
+  were deleted the instant they were superseded, including versions live
+  readers in other processes were still using — LanceDB tracks no readers, so
+  that is the collision above. Superseded versions now survive one hour and are
+  reclaimed by the next compaction.
+- **A dimension mismatch on a populated index is refused, not silently
+  obeyed.** `ensureTable` dropped and recreated the table whenever the vector
+  width differed, so a mismatch the metadata check had not already classified
+  as a deliberate rebuild destroyed a working index without a word. It now
+  refuses and names both sides; a failing search reports
+  `the index at … holds 768-dimension vectors but this process embeds at 384`
+  instead of an opaque Lance planner error. An empty table is still recreated.
+
+### Documentation
+
+- `doc/configuration.md` gains a troubleshooting section on two runners sharing
+  one index directory while resolving different embedding providers — including
+  the case where the MCP host sandboxes the server and blocks loopback, making
+  Ollama unreachable and the provider fall back — and how to pin one provider.
+
 ## [0.8.1] - 2026-09-13
 
 ### Fixed
@@ -603,7 +638,7 @@ Initial public release.
 - On-activation catch-up reindex when the workspace has changed since the
   last index run.
 
-[Unreleased]: https://github.com/de-otio/mcp-doc-search/compare/ext-v0.8.1...HEAD
+[Unreleased]: https://github.com/de-otio/mcp-doc-search/compare/ext-v0.8.2...HEAD
 [0.3.1]: https://github.com/de-otio/mcp-doc-search/compare/ext-v0.3.0...ext-v0.3.1
 [0.3.0]: https://github.com/de-otio/mcp-doc-search/compare/ext-v0.2.0...ext-v0.3.0
 [0.2.0]: https://github.com/de-otio/mcp-doc-search/compare/ext-v0.1.3...ext-v0.2.0

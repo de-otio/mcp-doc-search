@@ -191,6 +191,15 @@ export interface LanceTable {
   add(records: unknown[]): Promise<void>;
   query(): LanceQuery;
   countRows(): Promise<number>;
+  /**
+   * Re-point this handle at the table's newest version.
+   *
+   * A `Table` is an MVCC snapshot pinned to the manifest it was opened at, so
+   * a long-lived handle goes stale as soon as another process compacts the
+   * table away from under it. Optional because it is not in every LanceDB
+   * release; callers fall back to reconnecting. Present in 0.13.
+   */
+  checkoutLatest?(): Promise<void>;
   createIndex(column: string, options?: { config?: unknown; replace?: boolean }): Promise<void>;
   listIndices(): Promise<Array<{ name: string; indexType: string; columns: string[] }>>;
   optimize(options?: { cleanupOlderThan?: Date }): Promise<{
