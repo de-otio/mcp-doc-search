@@ -52,7 +52,7 @@ Additional directories **outside the workspace** to index alongside the workspac
 
 Where to store the search index:
 
-- `global` (default): Indexes are centralized under `~/.doc-search/indexes/<workspace-key>`, outside the workspace, shared across all instances of this workspace (VS Code extension, MCP server, CLI). Automatically migrates any existing `.doc-search-index` folder to the global location on first run. The global location is not added to version control.
+- `global` (default): Indexes are centralized under `~/.doc-search/indexes/<workspace-key>`, outside the workspace, shared across all instances of this workspace (VS Code extension, MCP server, CLI) that resolve the same embedding provider. Since 0.8.2 the key ends in `-<provider>-<hash of the model id>`: vectors from two models cannot be compared, so runners configured differently get one index each rather than repeatedly rebuilding over each other (see [the troubleshooting note](#two-runners-on-one-index-disagree-about-the-embedding-provider)). Automatically migrates any existing `.doc-search-index` folder to the global location on first run. The global location is not added to version control.
 - `workspace` (**deprecated**): Indexes are stored in-tree at the location specified by `docSearch.indexDir` (default: `.doc-search-index`). This is the legacy behavior, kept only for setups that cannot use the centralized location; it may be removed in a future release. The configured directory is automatically added to `.gitignore` on first run.
 
 If `docSearch.indexDir` is set to a non-default value and `docSearch.indexLocation` is not explicitly set, workspace mode is automatically selected (preserving any existing custom index locations).
@@ -248,6 +248,53 @@ When running the MCP server standalone, these environment variables configure be
 | `DOC_SEARCH_LOCAL_MODEL`              | `Xenova/all-MiniLM-L6-v2` | Built-in model for the `local` provider; one of the ids listed under `docSearch.localModel`                   |
 
 ## Troubleshooting
+
+### Two runners on one index disagree about the embedding provider
+
+The extension and the MCP server share one index directory per workspace — that
+is the point of `indexLocation: global`, and it is what lets you index once and
+search from both. But **which provider each one resolves is a property of the
+process, not of the workspace**, and they do not resolve it the same way:
+
+| Runner                        | Where the provider comes from                                                                                             |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| VS Code extension             | `docSearch.embedProvider` / `docSearch.localModel` in settings                                                            |
+| MCP server / CLI (standalone) | `USE_OPENAI`, `OLLAMA_URL`, `DOC_SEARCH_LOCAL_MODEL` — and settings **only** with `DOC_SEARCH_TRUST_WORKSPACE_SETTINGS=1` |
+
+So an extension configured for Ollama (`nomic-embed-text`, 768-dim) and an MCP
+server started without `OLLAMA_URL` (the bundled `all-MiniLM-L6-v2`, 384-dim)
+each see the other's index as built by the wrong model and rebuild the whole
+thing. Alternating between them re-embeds the corpus every time. Two situations
+make the divergence easy to miss:
+
+- **The generated `.mcp.json` did not carry the provider.** Regenerate it with
+  **Doc Search: Generate .mcp.json** after changing the provider — it writes
+  `OLLAMA_URL` / `USE_OPENAI` into the server's `env` block.
+- **The MCP host sandboxes the server and blocks loopback networking.** Agent
+  harnesses increasingly do. Ollama on `127.0.0.1:11434` is then unreachable
+  from the server process even though it is running; `curl
+http://127.0.0.1:11434/api/tags` from inside the sandbox returns nothing.
+  Either allow loopback for that server, or run both sides on the `local`
+  provider, which needs no network.
+
+Symptoms that this is what you are looking at:
+
+- a reindex reports `rebuiltReason: provider … → …, vector dimension 768 → 384`
+  (or the reverse) every time you switch runners;
+- a search fails with `Embedding dimension mismatch: the index at … holds
+768-dimension vectors but this process embeds at 384`;
+- a reindex refuses with `Refusing to rebuild the index at …`.
+
+Since 0.8.2 the index directory is **keyed by the embedder**, so two runners
+that disagree get one index each (`…-<provider>-<hash>`) instead of destroying
+each other's. That makes the disagreement survivable, not free: you pay for a
+second index on disk and a second pass of embedding. Pinning one provider for
+the workspace is still what you want.
+
+On upgrade, the existing `~/.doc-search/indexes/<workspace-key>` directory is
+taken over by whichever runner's provider matches the `index-meta.json` inside
+it, so that runner keeps its index. A runner whose provider does not match
+builds its own — one reindex, once, rather than on every alternation.
 
 ### Ollama stops embedding after an upgrade
 

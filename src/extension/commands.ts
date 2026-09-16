@@ -46,6 +46,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
     const freshResolved = resolveIndexLocation(workspaceRoot, {
       mode: resolveMode(freshConfig.indexLocation, freshConfig.indexDir),
       indexDir: freshConfig.indexDir,
+      embedding: freshEmbedProvider.identity?.(),
     });
     const freshIndexerConfig = validateConfig(
       {

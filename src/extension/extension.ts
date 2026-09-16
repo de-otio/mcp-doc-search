@@ -26,9 +26,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Read API key from secure storage (with migration from settings if needed)
   const apiKey = await readOpenAIApiKey(context.secrets);
   const config = readConfig(apiKey);
+  // Built here rather than at its first use below: the index directory is keyed
+  // by the embedder, so the provider has to be known before the location is
+  // resolved (see workspaceKey).
+  const embedProvider = createEmbedProvider(config);
   const resolved = resolveIndexLocation(workspaceRoot, {
     mode: resolveMode(config.indexLocation, config.indexDir),
     indexDir: config.indexDir,
+    embedding: embedProvider.identity?.(),
   });
   const indexDir = resolved.indexDir;
   if (resolved.shouldGitignore && resolved.gitignoreEntry)
@@ -71,7 +76,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   if (mcpProvider) context.subscriptions.push(mcpProvider);
   const store = new LanceVectorStore(indexDir);
-  const embedProvider = createEmbedProvider(config);
   const { roots: extraRoots, warnings: extraRootWarnings } = parseExtraRoots(config.extraRoots);
   for (const warning of extraRootWarnings) {
     vscode.window.showWarningMessage(`Doc Search: ${warning}`);

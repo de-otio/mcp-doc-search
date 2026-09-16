@@ -50,6 +50,29 @@ export interface ResolveIndexOptions {
   home?: string;
   /** Injected for testing. Default: process.env. */
   env?: NodeJS.ProcessEnv;
+  /**
+   * Which embedder this process resolved. Global mode keys the index directory
+   * by it, so two runners that disagree about the provider get one directory
+   * each instead of destroying each other's index (see {@link workspaceKey}).
+   * Omitted (tests, callers with no provider yet) keys as before.
+   */
+  embedding?: EmbeddingKeyIdentity;
+}
+
+/**
+ * The part of an embedder's identity the index directory is keyed by.
+ *
+ * Deliberately NOT the vector dimension, though that is the thing that makes
+ * two indexes incompatible: the dimension of an Ollama model is only known
+ * after the first embed, and a key that changed once embedding started would
+ * move the index out from under a running process. Provider and model name are
+ * known before any work happens, and every runner reads them from the same
+ * configuration, so both sides compute the same key. A dimension change with no
+ * model-name change is still caught by the index-metadata check and rebuilds.
+ */
+export interface EmbeddingKeyIdentity {
+  provider: string;
+  model: string;
 }
 
 export interface ResolvedIndex {
@@ -66,6 +89,11 @@ export interface ResolvedIndex {
    * response: it would leak the user's absolute $HOME layout to the client.
    */
   migratedFrom?: string;
+  /**
+   * Absolute path of the pre-0.8.2 un-keyed index directory this call took over
+   * (renamed to the embedder-keyed name), else undefined. See adoptUnkeyedIndex.
+   */
+  adoptedFrom?: string;
 }
 
 function warn(message: string): void {
@@ -174,8 +202,37 @@ function canonicalize(p: string): string {
  * asserted before returning and a violation throws — this makes the
  * containment re-check in `resolveIndexLocation` provably redundant rather
  * than load-bearing (sec §8/F4/M4).
+ *
+ * With an `embedding` identity the key gains a `-<provider>-<hash8>` segment.
+ * WHY: the index directory is shared per workspace, but which embedder a
+ * process resolves is a property of THAT PROCESS — an extension configured for
+ * Ollama and an MCP server that only has the bundled model each saw the other's
+ * index as built by the wrong model and rebuilt the whole thing, repeatedly,
+ * each rebuild compacting versions the other was reading through. Keying by
+ * embedder turns that destructive fight into two independent indexes; the cost
+ * is disk, and one reindex for whichever runner is not the one that owns the
+ * pre-0.8.2 directory.
  */
-export function workspaceKey(realWorkspacePath: string): string {
+/**
+ * `-<provider>-<8 hex of sha256(provider \0 model)>`, or "" without an identity.
+ *
+ * The provider stays readable (there are three of them and it is the first
+ * thing anyone debugging this wants to see); the model is hashed because model
+ * ids carry `/` and run long, and the key must stay inside `[A-Za-z0-9._-]`.
+ * The directory's own `index-meta.json` names the model in full.
+ */
+function embeddingKeySegment(embedding?: EmbeddingKeyIdentity): string {
+  if (!embedding) return "";
+  const provider = embedding.provider.replace(/[^A-Za-z0-9]/g, "").slice(0, 16) || "unknown";
+  const digest = crypto
+    .createHash("sha256")
+    .update(`${embedding.provider} ${embedding.model}`)
+    .digest("hex")
+    .slice(0, 8);
+  return `-${provider}-${digest}`;
+}
+
+export function workspaceKey(realWorkspacePath: string, embedding?: EmbeddingKeyIdentity): string {
   const canonical = path.resolve(realWorkspacePath);
   const hash = crypto.createHash("sha256").update(canonical).digest("hex").slice(0, 12);
 
@@ -189,7 +246,7 @@ export function workspaceKey(realWorkspacePath: string): string {
   // the key never ends in a bare `.` segment.
   if (base === "" || base === "." || base === "..") base = "workspace";
 
-  const key = `${base}-${hash}`;
+  const key = `${base}-${hash}${embeddingKeySegment(embedding)}`;
 
   // Should-never-happen programmer-error guard (the one place the resolver is
   // allowed to throw): if any of the above failed to produce a safe key,
@@ -251,7 +308,7 @@ export function resolveIndexLocation(
   const resolvedHome = opts.home !== undefined ? canonicalize(opts.home) : home;
   const indexesDir = path.join(resolvedHome, "indexes");
 
-  const key = workspaceKey(canonicalWorkspace);
+  const key = workspaceKey(canonicalWorkspace, opts.embedding);
   // Defense in depth: re-validate that `<home>/indexes/<key>` stays under
   // `<home>/indexes`. `key` is already proven safe above, so this only ever
   // throws on a programmer error — never warn-and-continue (sec §8/M5).
@@ -262,6 +319,13 @@ export function resolveIndexLocation(
   // perm work on Windows (sec §8/H1/F7).
   hardenedMkdir(resolvedHome);
   hardenedMkdir(indexesDir);
+
+  // Before creating an empty keyed directory, see whether the pre-0.8.2
+  // unkeyed one for this workspace is ours to take over (see adoptUnkeyedIndex).
+  const adoptedFrom = opts.embedding
+    ? adoptUnkeyedIndex(indexesDir, workspaceKey(canonicalWorkspace), key, opts.embedding)
+    : undefined;
+
   hardenedMkdir(target);
 
   // Best-effort GC of orphaned temp dirs from crashed migrations (sec §8/M2).
@@ -278,7 +342,63 @@ export function resolveIndexLocation(
     mode: "global",
     shouldGitignore: false,
     migratedFrom,
+    adoptedFrom,
   };
+}
+
+/**
+ * Take over the pre-0.8.2, un-keyed index directory for this workspace when it
+ * was built by the embedder THIS process resolved. Returns the absolute path it
+ * adopted, else undefined. Best-effort; never throws.
+ *
+ * Without this, keying the directory by embedder (0.8.2) would strand every
+ * existing index and force every user into a full reindex on upgrade. With it,
+ * the runner whose provider built the index keeps it, and only a second runner
+ * that disagrees pays for a rebuild — which is the fight the keying exists to
+ * stop, and which that runner was already paying for on every alternation.
+ *
+ * The match is on `index-meta.json`: adopting a directory built by a DIFFERENT
+ * model would hand this process an index of incomparable vectors and trigger
+ * exactly the destructive rebuild we are trying to prevent. An unreadable,
+ * absent or mismatched meta file leaves the old directory alone — it belongs to
+ * the other runner, which adopts it on its own next start.
+ */
+function adoptUnkeyedIndex(
+  indexesDir: string,
+  unkeyedKey: string,
+  keyedKey: string,
+  embedding: EmbeddingKeyIdentity,
+): string | undefined {
+  if (unkeyedKey === keyedKey) return undefined;
+
+  const source = resolveWithinBase(indexesDir, unkeyedKey);
+  const target = resolveWithinBase(indexesDir, keyedKey);
+
+  // Never overwrite an index this process already has, and never adopt an
+  // empty or missing one (nothing to save — let it be created fresh).
+  if (isPopulated(target) || !isPopulated(source)) return undefined;
+
+  let meta: { provider?: unknown; model?: unknown };
+  try {
+    const raw = fs.readFileSync(path.join(source, "index-meta.json"), "utf8");
+    meta = JSON.parse(raw) as { provider?: unknown; model?: unknown };
+  } catch {
+    return undefined; // no metadata to match on — leave it for its owner
+  }
+  if (meta.provider !== embedding.provider || meta.model !== embedding.model) return undefined;
+
+  try {
+    // The target was not created yet (adoption runs before its mkdir), so this
+    // is a plain rename within one directory — atomic, same filesystem.
+    if (fs.existsSync(target)) fs.rmdirSync(target); // empty only; throws otherwise
+    fs.renameSync(source, target);
+    return source;
+  } catch (err) {
+    warn(
+      `could not adopt the existing index at ${source}: ${err instanceof Error ? err.message : err}`,
+    );
+    return undefined;
+  }
 }
 
 /**

@@ -14,6 +14,45 @@ import type { LanceTable, LanceConnection, CompactStats } from "./types.js";
  */
 export const COMPACT_VERSION_THRESHOLD = 20;
 
+/**
+ * How long a superseded table version survives compaction.
+ *
+ * Pruning to *now* deletes versions that live readers in OTHER processes are
+ * still holding — LanceDB tracks no readers, so a handle opened before the
+ * compaction dereferences a manifest that no longer exists and every read
+ * through it fails. The recommended setup (editor extension + MCP server on
+ * one index directory) makes that a routine collision, not a corner case.
+ * An hour outlives any in-flight read; the cost is one extra generation of
+ * superseded versions, reclaimed by the next compaction.
+ *
+ * This narrows the race; it does not close it. `withFreshTable` is what makes
+ * losing it survivable.
+ */
+export const COMPACT_GRACE_MS = 60 * 60 * 1000;
+
+/**
+ * True for the error a read gets when the table version its handle is pinned to
+ * has been compacted away by another process. Two forms, both observed:
+ *
+ *   Failed to execute query stream: GenericFailure, lance error:
+ *   Not found: …/doc_chunks.lance/_versions/1352.manifest
+ *
+ *   Failed to get next batch from stream: lance error: LanceError(IO):
+ *   … Not found: …/doc_chunks.lance/data/<uuid>.lance
+ *
+ * Which one surfaces depends on what the pinned version still needs off disk —
+ * the manifest itself, or a data fragment the compaction rewrote. Matched on
+ * text because `@lancedb/lancedb` reports both as `GenericFailure`/`LanceError`
+ * with no structured code to switch on; requiring a path inside the table
+ * directory keeps a plain "Not found" (a missing table, say) from being read as
+ * a stale handle.
+ */
+export function isStaleHandleError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (!msg.includes("Not found:")) return false;
+  return msg.includes(".manifest") || msg.includes(".lance/");
+}
+
 /** Longest index key accepted; anything past this is a bug upstream, not a path. */
 const MAX_FILE_KEY_LENGTH = 2048;
 
@@ -108,6 +147,46 @@ export class LanceVectorStore {
     }
   }
 
+  /**
+   * Run a read against the current table, recovering once from a stale handle.
+   *
+   * `open()` pins the handle to one table version and nothing re-points it, so
+   * a compaction in another process (the extension reindexing while an MCP
+   * server is up) used to break every subsequent read in this process
+   * permanently — the store had no path back to a live version short of a
+   * reindex. One `checkoutLatest()` (or a reconnect where that is missing) and
+   * a single retry is all it takes; a second failure is real and propagates.
+   */
+  private async withFreshTable<T>(read: () => Promise<T>, fallback: T): Promise<T> {
+    try {
+      return await read();
+    } catch (err) {
+      if (!isStaleHandleError(err)) throw err;
+      console.warn(
+        `Vector store: table handle was pinned to a version that has been compacted ` +
+          `away; re-opening and retrying once.`,
+      );
+      await this.refreshTable();
+      if (!this.table) return fallback;
+      return await read();
+    }
+  }
+
+  /** Re-point `this.table` at the newest table version. */
+  private async refreshTable(): Promise<void> {
+    const table = this.table;
+    if (table?.checkoutLatest) {
+      try {
+        await table.checkoutLatest();
+        return;
+      } catch {
+        // Fall through: a full reopen also recovers a handle too stale to
+        // check out (e.g. the table was dropped and recreated).
+      }
+    }
+    await this.open();
+  }
+
   async ensureTable(vectorDim: number): Promise<void> {
     if (!this.db) throw new Error("Store not opened. Call open() first.");
 
@@ -117,7 +196,21 @@ export class LanceVectorStore {
       const vectorField = schema.fields.find((f) => f.name === "vector");
       const existingDim = vectorField?.type?.listSize;
       if (existingDim && existingDim !== vectorDim) {
-        // Dimension mismatch — drop and recreate the table
+        // Dimension mismatch. Every deliberate rebuild (Indexer sees the
+        // provider/model/dim change in index-meta.json) drops the table before
+        // it gets here, so reaching this branch with rows in the table means
+        // the mismatch went undetected — dropping silently would destroy an
+        // index nobody asked to rebuild. Refuse and name both sides instead;
+        // an empty table carries no data, so that still recreates.
+        const rows = await this.table.countRows();
+        if (rows > 0) {
+          throw new Error(
+            `Refusing to rebuild the index at ${this.indexDir}: it holds ${rows} rows of ` +
+              `${existingDim}-dimension vectors and this process embeds at ${vectorDim}. ` +
+              `Two runners sharing one index resolved different embedding models — pin the ` +
+              `provider so they agree (see doc/configuration.md), then reindex deliberately.`,
+          );
+        }
         await this.db.dropTable(this.tableName);
         this.table = null;
       } else {
@@ -180,51 +273,93 @@ export class LanceVectorStore {
   }
 
   async query(queryVector: number[], n: number): Promise<VectorQueryResult[]> {
-    if (!this.table) return [];
+    return this.withFreshTable(async () => {
+      const table = this.table;
+      if (!table) return [];
 
-    const results = await this.table.search(queryVector).distanceType("cosine").limit(n).toArray();
+      let results: unknown[];
+      try {
+        results = await table.search(queryVector).distanceType("cosine").limit(n).toArray();
+      } catch (err) {
+        throw (await this.explainDimMismatch(queryVector.length)) ?? err;
+      }
 
-    return results.map((row) => {
-      const r = row as {
-        file: string;
-        heading: string;
-        lineStart: number;
-        text: string;
-        _distance?: number;
-        docid?: string;
-      };
-      return {
-        file: r.file,
-        heading: r.heading,
-        lineStart: r.lineStart,
-        text: r.text,
-        _distance: r._distance ?? 0,
-        docid: r.docid ?? "",
-      };
-    });
+      return results.map((row) => {
+        const r = row as {
+          file: string;
+          heading: string;
+          lineStart: number;
+          text: string;
+          _distance?: number;
+          docid?: string;
+        };
+        return {
+          file: r.file,
+          heading: r.heading,
+          lineStart: r.lineStart,
+          text: r.text,
+          _distance: r._distance ?? 0,
+          docid: r.docid ?? "",
+        };
+      });
+    }, []);
+  }
+
+  /**
+   * Turn a failed search into a message that names the actual problem when the
+   * query vector and the stored vectors have different widths.
+   *
+   * This is what two runners that disagree about the embedding provider look
+   * like from the read side: the index was built at one model's dimension and
+   * this process embeds at another's. Lance reports it as an opaque planner
+   * error, which cost an afternoon to diagnose once. Returns null when the
+   * dimensions do agree, so the original error stands.
+   */
+  private async explainDimMismatch(queryDim: number): Promise<Error | null> {
+    const table = this.table;
+    if (!table) return null;
+    let storedDim: number | undefined;
+    try {
+      const schema = await table.schema();
+      storedDim = schema.fields.find((f) => f.name === "vector")?.type?.listSize;
+    } catch {
+      return null;
+    }
+    if (!storedDim || storedDim === queryDim) return null;
+    return new Error(
+      `Embedding dimension mismatch: the index at ${this.indexDir} holds ` +
+        `${storedDim}-dimension vectors but this process embeds at ${queryDim}. ` +
+        `Two runners sharing one index resolved different embedding models — pin the ` +
+        `provider so they agree (see doc/configuration.md), then reindex.`,
+    );
   }
 
   async listFiles(): Promise<Array<{ file: string; title: string }>> {
-    if (!this.table) return [];
+    return this.withFreshTable(async () => {
+      const table = this.table;
+      if (!table) return [];
 
-    const results = await this.table.query().toArray();
-    const seen = new Map<string, string>();
-    for (const row of results) {
-      const r = row as { file: string; heading: string };
-      if (!seen.has(r.file)) {
-        seen.set(r.file, r.heading);
+      const results = await table.query().toArray();
+      const seen = new Map<string, string>();
+      for (const row of results) {
+        const r = row as { file: string; heading: string };
+        if (!seen.has(r.file)) {
+          seen.set(r.file, r.heading);
+        }
       }
-    }
 
-    return Array.from(seen.entries())
-      .map(([file, title]) => ({ file, title }))
-      .sort((a, b) => a.file.localeCompare(b.file));
+      return Array.from(seen.entries())
+        .map(([file, title]) => ({ file, title }))
+        .sort((a, b) => a.file.localeCompare(b.file));
+    }, []);
   }
 
   async count(): Promise<number> {
-    if (!this.table) return 0;
-    const rows = await this.table.countRows();
-    return rows;
+    return this.withFreshTable(async () => {
+      const table = this.table;
+      if (!table) return 0;
+      return await table.countRows();
+    }, 0);
   }
 
   /**
@@ -246,14 +381,16 @@ export class LanceVectorStore {
   }
 
   /**
-   * Merge data fragments and drop every table version but the current one.
+   * Merge data fragments and drop table versions older than COMPACT_GRACE_MS.
    * Sub-second in steady state; minutes when thousands of versions have
    * piled up. Returns null when there is no table yet.
    */
   async compact(): Promise<CompactStats | null> {
     if (!this.table) return null;
     const hadFts = await this.hasFtsIndex();
-    const stats = await this.table.optimize({ cleanupOlderThan: new Date() });
+    const stats = await this.table.optimize({
+      cleanupOlderThan: new Date(Date.now() - COMPACT_GRACE_MS),
+    });
     // Compaction rewrites row addresses but LanceDB 0.13 does not remap the
     // inverted index, so full-text hits come back pointing at the wrong rows
     // afterwards (verified on 0.13: `needle` returned 1 of 21 rows, the wrong
@@ -333,37 +470,41 @@ export class LanceVectorStore {
    * callers fall back to vector-only ranking.
    */
   async fullTextQuery(query: string, n: number): Promise<FtsQueryResult[]> {
-    if (!this.table) return [];
     if (!query.trim() || n <= 0) return [];
 
-    // No column projection: every stored column is needed here anyway, and a
-    // table written before the `docid` column existed makes an explicit
-    // select() fail with "Column docid does not exist".
-    const rows = await this.table
-      .query()
-      .fullTextSearch(query, { columns: "text" })
-      .limit(n)
-      .toArray();
+    return this.withFreshTable(async () => {
+      const table = this.table;
+      if (!table) return [];
 
-    return rows.map((row) => {
-      const r = row as {
-        file: string;
-        heading: string;
-        lineStart: number;
-        text: string;
-        docid?: string;
-        vector?: ArrayLike<number>;
-        _score?: number;
-      };
-      return {
-        file: r.file,
-        heading: r.heading,
-        lineStart: r.lineStart,
-        text: r.text,
-        docid: r.docid ?? "",
-        vector: r.vector ? Array.from(r.vector) : [],
-        _score: r._score ?? 0,
-      };
-    });
+      // No column projection: every stored column is needed here anyway, and a
+      // table written before the `docid` column existed makes an explicit
+      // select() fail with "Column docid does not exist".
+      const rows = await table
+        .query()
+        .fullTextSearch(query, { columns: "text" })
+        .limit(n)
+        .toArray();
+
+      return rows.map((row) => {
+        const r = row as {
+          file: string;
+          heading: string;
+          lineStart: number;
+          text: string;
+          docid?: string;
+          vector?: ArrayLike<number>;
+          _score?: number;
+        };
+        return {
+          file: r.file,
+          heading: r.heading,
+          lineStart: r.lineStart,
+          text: r.text,
+          docid: r.docid ?? "",
+          vector: r.vector ? Array.from(r.vector) : [],
+          _score: r._score ?? 0,
+        };
+      });
+    }, []);
   }
 }

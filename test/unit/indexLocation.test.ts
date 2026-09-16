@@ -244,6 +244,121 @@ describe("resolveIndexLocation (workspace mode)", () => {
 // resolveIndexLocation — global mode happy paths
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Embedder-keyed index directories (0.8.2)
+// ---------------------------------------------------------------------------
+
+describe("workspaceKey with an embedding identity", () => {
+  const OLLAMA = { provider: "ollama", model: "nomic-embed-text" };
+  const LOCAL = { provider: "local", model: "Xenova/all-MiniLM-L6-v2" };
+
+  it("keys two providers to different directories", () => {
+    expect(workspaceKey("/a/b/project", OLLAMA)).not.toBe(workspaceKey("/a/b/project", LOCAL));
+  });
+
+  it("keys two models of the SAME provider apart", () => {
+    // 384-dim MiniLM and 384-dim e5-small have the same width and
+    // incomparable vectors, so the dimension alone is not enough to key on.
+    expect(workspaceKey("/a/b/project", LOCAL)).not.toBe(
+      workspaceKey("/a/b/project", { provider: "local", model: "Xenova/multilingual-e5-small" }),
+    );
+  });
+
+  it("is stable for the same pair and keeps the key charset invariant", () => {
+    const key = workspaceKey("/a/b/project", LOCAL);
+    expect(key).toBe(workspaceKey("/a/b/project", LOCAL));
+    expect(key).toMatch(/^[A-Za-z0-9._-]+$/);
+    // The provider stays readable; the model id (with its slash) is hashed.
+    expect(key).toContain("-local-");
+    expect(key).not.toContain("MiniLM");
+  });
+
+  it("extends the un-keyed key rather than replacing it (same workspace prefix)", () => {
+    expect(workspaceKey("/a/b/project", LOCAL).startsWith(workspaceKey("/a/b/project"))).toBe(true);
+  });
+
+  it("is unchanged without an identity, so a caller that has none keys as before", () => {
+    expect(workspaceKey("/a/b/project")).toBe(workspaceKey("/a/b/project", undefined));
+  });
+});
+
+describe("resolveIndexLocation adopting a pre-0.8.2 index", () => {
+  const LOCAL = { provider: "local", model: "Xenova/all-MiniLM-L6-v2" };
+
+  /** Write the index-meta.json the indexer would have left behind. */
+  function writeMeta(dir: string, provider: string, model: string): void {
+    fs.writeFileSync(
+      path.join(dir, "index-meta.json"),
+      JSON.stringify({ schemaVersion: 2, provider, model, dim: 384 }),
+    );
+  }
+
+  it("takes over an un-keyed index built by the same embedder", () => {
+    const ws = mkScratch("ws-");
+    const home = mkScratch("home-");
+    const indexes = path.join(fs.realpathSync.native(home), "indexes");
+    const unkeyed = path.join(indexes, workspaceKey(fs.realpathSync.native(ws)));
+    makeIndexAt(unkeyed, "pre-0.8.2-data");
+    writeMeta(unkeyed, "local", "Xenova/all-MiniLM-L6-v2");
+
+    const r = resolveIndexLocation(ws, { mode: "global", home, embedding: LOCAL });
+
+    // Upgrading must not cost a full reindex: the data moved, it was not lost.
+    expect(r.adoptedFrom).toBe(unkeyed);
+    expect(r.indexDir).toBe(path.join(indexes, workspaceKey(fs.realpathSync.native(ws), LOCAL)));
+    expect(readSentinelData(r.indexDir)).toBe("pre-0.8.2-data");
+    expect(fs.existsSync(unkeyed)).toBe(false);
+  });
+
+  it("leaves an un-keyed index built by a DIFFERENT embedder alone", () => {
+    const ws = mkScratch("ws-");
+    const home = mkScratch("home-");
+    const indexes = path.join(fs.realpathSync.native(home), "indexes");
+    const unkeyed = path.join(indexes, workspaceKey(fs.realpathSync.native(ws)));
+    makeIndexAt(unkeyed, "ollama-data");
+    writeMeta(unkeyed, "ollama", "nomic-embed-text");
+
+    const r = resolveIndexLocation(ws, { mode: "global", home, embedding: LOCAL });
+
+    // Adopting it would hand this process 768-dim vectors it cannot compare
+    // against — the destructive rebuild the keying exists to prevent. It
+    // belongs to the other runner, which adopts it on its own next start.
+    expect(r.adoptedFrom).toBeUndefined();
+    expect(readSentinelData(unkeyed)).toBe("ollama-data");
+    expect(fs.existsSync(path.join(r.indexDir, SENTINEL))).toBe(false);
+  });
+
+  it("leaves an un-keyed index with no metadata alone", () => {
+    const ws = mkScratch("ws-");
+    const home = mkScratch("home-");
+    const indexes = path.join(fs.realpathSync.native(home), "indexes");
+    const unkeyed = path.join(indexes, workspaceKey(fs.realpathSync.native(ws)));
+    makeIndexAt(unkeyed, "unknown-provenance");
+
+    const r = resolveIndexLocation(ws, { mode: "global", home, embedding: LOCAL });
+
+    expect(r.adoptedFrom).toBeUndefined();
+    expect(readSentinelData(unkeyed)).toBe("unknown-provenance");
+  });
+
+  it("never overwrites a keyed index this process already has", () => {
+    const ws = mkScratch("ws-");
+    const home = mkScratch("home-");
+    const indexes = path.join(fs.realpathSync.native(home), "indexes");
+    const unkeyed = path.join(indexes, workspaceKey(fs.realpathSync.native(ws)));
+    makeIndexAt(unkeyed, "old-data");
+    writeMeta(unkeyed, "local", "Xenova/all-MiniLM-L6-v2");
+    const keyed = path.join(indexes, workspaceKey(fs.realpathSync.native(ws), LOCAL));
+    makeIndexAt(keyed, "current-data");
+
+    const r = resolveIndexLocation(ws, { mode: "global", home, embedding: LOCAL });
+
+    expect(r.adoptedFrom).toBeUndefined();
+    expect(readSentinelData(r.indexDir)).toBe("current-data");
+    expect(readSentinelData(unkeyed)).toBe("old-data");
+  });
+});
+
 describe("resolveIndexLocation (global mode)", () => {
   it("resolves under home/indexes/<key> and does not gitignore", () => {
     const ws = mkScratch("ws-");
