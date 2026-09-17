@@ -19,8 +19,25 @@ import type { ExtensionConfig } from "./config.js";
 /** The subset of the extension configuration the MCP server env depends on. */
 export type McpEnvConfig = Pick<
   ExtensionConfig,
-  "docGlob" | "extraRoots" | "embedProvider" | "ollamaUrl" | "ollamaModel"
+  "docGlob" | "extraRoots" | "embedProvider" | "localModel" | "ollamaUrl" | "ollamaModel"
 >;
+
+/**
+ * Every env key that describes WHICH EMBEDDER the server should use.
+ *
+ * Named as a set because the repair in `mcpJson.ts` reconciles exactly these
+ * keys and nothing else: they are the ones whose drift silently costs the user
+ * a second index (the server resolving a different model than the extension
+ * means incomparable vectors, hence a rebuild). Any other key in an existing
+ * `.mcp.json` is the user's and is left alone.
+ */
+export const PROVIDER_ENV_KEYS = [
+  "USE_OPENAI",
+  "OPENAI_API_KEY",
+  "OLLAMA_URL",
+  "OLLAMA_MODEL",
+  "DOC_SEARCH_LOCAL_MODEL",
+] as const;
 
 /**
  * Env-variable reference for the OpenAI key. Emitted verbatim: the key
@@ -59,15 +76,29 @@ export function buildMcpServerEnv(config: McpEnvConfig, workspace: string): Reco
     env.DOC_SEARCH_EXTRA_ROOTS = JSON.stringify(config.extraRoots);
   }
 
-  if (config.embedProvider === "openai") {
-    env.USE_OPENAI = "1";
-    env.OPENAI_API_KEY = OPENAI_API_KEY_REF;
-  } else if (config.embedProvider === "ollama") {
-    env.OLLAMA_URL = config.ollamaUrl;
-    env.OLLAMA_MODEL = config.ollamaModel;
-  }
+  return { ...env, ...buildProviderEnv(config) };
+}
 
-  return env;
+/**
+ * Just the embedder-identifying part of the env: the keys from
+ * {@link PROVIDER_ENV_KEYS} that the selected provider needs, and only those.
+ *
+ * The local model is emitted explicitly rather than left to the server's
+ * default. The default is a *version-specific* value on the server side, so
+ * omitting it makes the two ends agree only by coincidence — a user on
+ * `multilingual-e5-small` got a server on `all-MiniLM-L6-v2`, same 384
+ * dimensions, incomparable vectors, and a rebuild on every alternation.
+ */
+export function buildProviderEnv(
+  config: Pick<McpEnvConfig, "embedProvider" | "localModel" | "ollamaUrl" | "ollamaModel">,
+): Record<string, string> {
+  if (config.embedProvider === "openai") {
+    return { USE_OPENAI: "1", OPENAI_API_KEY: OPENAI_API_KEY_REF };
+  }
+  if (config.embedProvider === "ollama") {
+    return { OLLAMA_URL: config.ollamaUrl, OLLAMA_MODEL: config.ollamaModel };
+  }
+  return { DOC_SEARCH_LOCAL_MODEL: config.localModel };
 }
 
 /**

@@ -267,9 +267,14 @@ each see the other's index as built by the wrong model and rebuild the whole
 thing. Alternating between them re-embeds the corpus every time. Two situations
 make the divergence easy to miss:
 
-- **The generated `.mcp.json` did not carry the provider.** Regenerate it with
-  **Doc Search: Generate .mcp.json** after changing the provider — it writes
-  `OLLAMA_URL` / `USE_OPENAI` into the server's `env` block.
+- **The `.mcp.json` did not carry the provider.** Since 0.8.3 the extension
+  repairs this itself: on activation it reconciles the `env` block of its own
+  `doc-search` entry with your settings, adding the keys the selected provider
+  needs (`OLLAMA_URL` / `OLLAMA_MODEL`, `USE_OPENAI`, or `DOC_SEARCH_LOCAL_MODEL`)
+  and removing the ones it does not, then tells you to reload. Only those keys
+  are touched — anything else in `env` is yours and is left alone, and an
+  `OPENAI_API_KEY` you set by hand is never overwritten. Reload the window (or
+  run **Doc Search: Generate .mcp.json**) if you want it applied immediately.
 - **The MCP host sandboxes the server and blocks loopback networking.** Agent
   harnesses increasingly do. Ollama on `127.0.0.1:11434` is then unreachable
   from the server process even though it is running; `curl

@@ -6,6 +6,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
 import {
   repairMcpServerPath,
+  repairMcpServerEnv,
   repairMcpJson,
   isPortableLauncherRef,
   isGitTracked,
@@ -126,6 +127,95 @@ describe("isPortableLauncherRef (pure)", () => {
   });
 });
 
+describe("repairMcpServerEnv (pure)", () => {
+  const OLLAMA = { OLLAMA_URL: "http://127.0.0.1:11434", OLLAMA_MODEL: "nomic-embed-text" };
+  const LOCAL = { DOC_SEARCH_LOCAL_MODEL: "Xenova/multilingual-e5-small" };
+  const STABLE = "${HOME}/.doc-search/bin/mcp-server.js";
+
+  const entry = (env: Record<string, unknown>, args: unknown[] = [STABLE]): string =>
+    mcpJson({ command: "node", args, env });
+
+  const envOf = (text: string): Record<string, unknown> =>
+    JSON.parse(text).mcpServers["doc-search"].env;
+
+  it("adds the provider keys to a file generated before the user chose Ollama", () => {
+    // The whole point: the server reads the provider from here and nowhere
+    // else, so without this the user keeps two indexes without being told.
+    const out = repairMcpServerEnv(entry({ DOC_SEARCH_WORKSPACE: "/ws" }), OLLAMA);
+    expect(out).toBeDefined();
+    expect(envOf(out!)).toEqual({ DOC_SEARCH_WORKSPACE: "/ws", ...OLLAMA });
+  });
+
+  it("removes provider keys the new provider does not use", () => {
+    const out = repairMcpServerEnv(entry({ DOC_SEARCH_WORKSPACE: "/ws", ...OLLAMA }), LOCAL);
+    expect(out).toBeDefined();
+    // A leftover OLLAMA_URL would put the server straight back on Ollama.
+    expect(envOf(out!)).toEqual({ DOC_SEARCH_WORKSPACE: "/ws", ...LOCAL });
+  });
+
+  it("preserves env keys that are not ours", () => {
+    const out = repairMcpServerEnv(
+      entry({ DOC_SEARCH_WORKSPACE: "/ws", DOC_SEARCH_EXTRA_ROOTS: "[]", MY_VAR: "keep me" }),
+      OLLAMA,
+    );
+    expect(envOf(out!)).toMatchObject({ DOC_SEARCH_EXTRA_ROOTS: "[]", MY_VAR: "keep me" });
+  });
+
+  it("creates the env block when the entry has none", () => {
+    const out = repairMcpServerEnv(mcpJson({ command: "node", args: [STABLE] }), OLLAMA);
+    expect(envOf(out!)).toEqual(OLLAMA);
+  });
+
+  it("returns undefined when the env already matches", () => {
+    expect(
+      repairMcpServerEnv(entry({ DOC_SEARCH_WORKSPACE: "/ws", ...OLLAMA }), OLLAMA),
+    ).toBeUndefined();
+  });
+
+  it("never overwrites an OPENAI_API_KEY the user already set", () => {
+    // Replacing a literal key with ${OPENAI_API_KEY} breaks the server when
+    // that variable is not exported in the launch environment.
+    const out = repairMcpServerEnv(entry({ OPENAI_API_KEY: "sk-user-literal" }), {
+      USE_OPENAI: "1",
+      OPENAI_API_KEY: "${OPENAI_API_KEY}",
+    });
+    expect(out).toBeDefined();
+    expect(envOf(out!)).toEqual({ USE_OPENAI: "1", OPENAI_API_KEY: "sk-user-literal" });
+  });
+
+  it("writes the ${OPENAI_API_KEY} reference, never a secret, when the key is absent", () => {
+    const out = repairMcpServerEnv(entry({ DOC_SEARCH_WORKSPACE: "/ws" }), {
+      USE_OPENAI: "1",
+      OPENAI_API_KEY: "${OPENAI_API_KEY}",
+    });
+    expect(envOf(out!).OPENAI_API_KEY).toBe("${OPENAI_API_KEY}");
+  });
+
+  it("repairs the stable shim and a versioned install, which carry no ${VAR}", () => {
+    const shim = repairMcpServerEnv(entry({}, ["/Users/me/.doc-search/bin/mcp-server.js"]), OLLAMA);
+    expect(shim).toBeDefined();
+    expect(repairMcpServerEnv(entry({}, [NEW]), OLLAMA)).toBeDefined();
+  });
+
+  it("leaves a server entry that is not ours alone", () => {
+    expect(repairMcpServerEnv(entry({}, ["/opt/other/server.js"]), OLLAMA)).toBeUndefined();
+    expect(
+      repairMcpServerEnv(
+        JSON.stringify({ mcpServers: { other: { command: "node", args: [STABLE] } } }),
+        OLLAMA,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("never clobbers a malformed or unexpected file", () => {
+    expect(repairMcpServerEnv("{not json", OLLAMA)).toBeUndefined();
+    expect(repairMcpServerEnv(undefined, OLLAMA)).toBeUndefined();
+    expect(
+      repairMcpServerEnv(mcpJson({ command: "node", args: [STABLE], env: "nope" }), OLLAMA),
+    ).toBeUndefined();
+  });
+});
+
 describe("repairMcpJson (fs)", () => {
   const cleanups: string[] = [];
   afterEach(() => {
@@ -144,24 +234,56 @@ describe("repairMcpJson (fs)", () => {
     return dir;
   }
 
-  it("rewrites a stale .mcp.json in place and reports true", () => {
+  it("rewrites a stale .mcp.json in place and reports the path repair", () => {
     const ws = mkWs();
     const file = path.join(ws, ".mcp.json");
     fs.writeFileSync(file, mcpJson({ command: "node", args: [STALE] }));
-    expect(repairMcpJson(ws, NEW)).toBe(true);
+    expect(repairMcpJson(ws, NEW)).toEqual({ serverPath: true, providerEnv: false });
     expect(JSON.parse(fs.readFileSync(file, "utf8")).mcpServers["doc-search"].args).toEqual([NEW]);
   });
 
-  it("returns false (and writes nothing) when .mcp.json is absent", () => {
+  it("returns null (and writes nothing) when .mcp.json is absent", () => {
     const ws = mkWs();
-    expect(repairMcpJson(ws, NEW)).toBe(false);
+    expect(repairMcpJson(ws, NEW)).toBeNull();
     expect(fs.existsSync(path.join(ws, ".mcp.json"))).toBe(false);
   });
 
-  it("returns false when already current", () => {
+  it("returns null when already current", () => {
     const ws = mkWs();
     fs.writeFileSync(path.join(ws, ".mcp.json"), mcpJson({ command: "node", args: [NEW] }));
-    expect(repairMcpJson(ws, NEW)).toBe(false);
+    expect(repairMcpJson(ws, NEW)).toBeNull();
+  });
+
+  it("applies a stale path and a drifted provider env in ONE write", () => {
+    const ws = mkWs();
+    const file = path.join(ws, ".mcp.json");
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        mcpServers: {
+          "doc-search": {
+            command: "node",
+            args: [STALE],
+            env: { DOC_SEARCH_WORKSPACE: "/ws", DOC_SEARCH_LOCAL_MODEL: "Xenova/all-MiniLM-L6-v2" },
+          },
+        },
+      }),
+    );
+
+    expect(
+      repairMcpJson(ws, NEW, {
+        OLLAMA_URL: "http://127.0.0.1:11434",
+        OLLAMA_MODEL: "nomic-embed-text",
+      }),
+    ).toEqual({ serverPath: true, providerEnv: true });
+
+    const entry = JSON.parse(fs.readFileSync(file, "utf8")).mcpServers["doc-search"];
+    expect(entry.args).toEqual([NEW]);
+    expect(entry.env).toEqual({
+      DOC_SEARCH_WORKSPACE: "/ws",
+      OLLAMA_URL: "http://127.0.0.1:11434",
+      OLLAMA_MODEL: "nomic-embed-text",
+    });
   });
 });
 

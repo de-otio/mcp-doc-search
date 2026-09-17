@@ -15,6 +15,7 @@ import {
   removeSupersededLegacyIndex,
 } from "../core/indexLocation.js";
 import { repairMcpJson } from "./mcpJson.js";
+import { buildProviderEnv } from "./mcpEnv.js";
 import { writeStableLaunchers } from "./stableBin.js";
 import { registerMcpServerDefinitionProvider } from "./mcpProvider.js";
 import * as path from "node:path";
@@ -63,9 +64,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const expectedMcpServer =
     writeStableLaunchers(context.extensionPath) ??
     path.join(context.extensionPath, "dist", "mcp-server.js");
-  if (repairMcpJson(workspaceRoot, expectedMcpServer)) {
+  // The env block is reconciled here too, not only by the Generate command:
+  // the server cannot read the provider from settings.json (trust model), so a
+  // `.mcp.json` written before the user switched providers silently leaves the
+  // server on a different embedder — which since 0.8.2 means a second index,
+  // and before it meant the two ends rebuilding over each other. Nobody should
+  // have to hand-edit that file after an upgrade or a settings change.
+  const repaired = repairMcpJson(workspaceRoot, expectedMcpServer, buildProviderEnv(config));
+  if (repaired) {
+    const what = [
+      repaired.serverPath ? "the stable server path (~/.doc-search/bin)" : undefined,
+      repaired.providerEnv ? `the ${config.embedProvider} embedding settings` : undefined,
+    ]
+      .filter(Boolean)
+      .join(" and ");
     vscode.window.showInformationMessage(
-      "Doc Search: updated .mcp.json to the stable server path (~/.doc-search/bin). Reload the window for MCP clients to pick it up.",
+      `Doc Search: updated .mcp.json to match ${what}. Reload the window for MCP clients to pick it up.`,
     );
   }
   // Publish the server to the editor's native MCP registry (VS Code 1.101+)
