@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-09-17
+
+### Fixed
+
+- **The extension now repairs `.mcp.json`'s embedding settings itself, on
+  activation.** The MCP server cannot read `docSearch.embedProvider` from
+  `.vscode/settings.json` — a cloned repo controls that file, and redirecting
+  embeddings to an arbitrary host is what the trust model refuses — so the
+  provider reaches the server only through the `env` block of `.mcp.json`. A
+  file generated before the user switched to Ollama therefore left the server on
+  the bundled local model, and nothing said so. The two ends then held
+  incomparable vectors: before 0.8.2 they rebuilt the index over each other; as
+  of 0.8.2 they keep two. Either way the user had to know to regenerate the file
+  by hand. Activation now reconciles it: the keys the selected provider needs are
+  added, the ones it does not need are removed (a leftover `OLLAMA_URL` would put
+  the server straight back on Ollama), and a reload is offered.
+
+  Scoped deliberately narrowly. Only `USE_OPENAI`, `OPENAI_API_KEY`,
+  `OLLAMA_URL`, `OLLAMA_MODEL` and `DOC_SEARCH_LOCAL_MODEL` on our own
+  `doc-search` entry are touched; every other key in `env` is the user's and is
+  preserved; an existing non-empty `OPENAI_API_KEY` is never overwritten (it may
+  be a literal key, and replacing it with a `${OPENAI_API_KEY}` reference that is
+  not exported would break the server); no secret is ever written; a malformed,
+  absent or third-party `.mcp.json` is left untouched.
+
+- **The generated `.mcp.json` pins the local model.** `DOC_SEARCH_LOCAL_MODEL`
+  was never emitted, so the server fell back to _its_ default. A user on
+  `multilingual-e5-small` got a server on `all-MiniLM-L6-v2` — same 384
+  dimensions, incomparable vectors, same silent divergence as a provider
+  mismatch. The model is now always stated explicitly rather than left to two
+  defaults agreeing by coincidence. Existing `.mcp.json` files gain the key on
+  the next activation.
+
 ## [0.8.2] - 2026-09-16
 
 ### Fixed
@@ -658,7 +691,7 @@ Initial public release.
 - On-activation catch-up reindex when the workspace has changed since the
   last index run.
 
-[Unreleased]: https://github.com/de-otio/mcp-doc-search/compare/ext-v0.8.2...HEAD
+[Unreleased]: https://github.com/de-otio/mcp-doc-search/compare/ext-v0.8.3...HEAD
 [0.3.1]: https://github.com/de-otio/mcp-doc-search/compare/ext-v0.3.0...ext-v0.3.1
 [0.3.0]: https://github.com/de-otio/mcp-doc-search/compare/ext-v0.2.0...ext-v0.3.0
 [0.2.0]: https://github.com/de-otio/mcp-doc-search/compare/ext-v0.1.3...ext-v0.2.0

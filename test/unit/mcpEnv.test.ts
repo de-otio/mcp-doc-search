@@ -11,16 +11,34 @@ const base: McpEnvConfig = {
   docGlob: "doc/**/*.md",
   extraRoots: [],
   embedProvider: "local",
+  localModel: "Xenova/all-MiniLM-L6-v2",
   ollamaUrl: "http://127.0.0.1:11434",
   ollamaModel: "nomic-embed-text",
 };
 
 describe("buildMcpServerEnv (pure)", () => {
-  it("emits only workspace and glob for the local provider", () => {
+  it("pins the local model explicitly rather than relying on the server default", () => {
+    // The server's default is a version-specific value on its side, so leaving
+    // it out makes the two ends agree only by coincidence — and a user on a
+    // non-default local model silently got a second index.
     expect(buildMcpServerEnv(base, "/ws")).toEqual({
       DOC_SEARCH_WORKSPACE: "/ws",
       DOC_SEARCH_GLOB: "doc/**/*.md",
+      DOC_SEARCH_LOCAL_MODEL: "Xenova/all-MiniLM-L6-v2",
     });
+    expect(
+      buildMcpServerEnv({ ...base, localModel: "Xenova/multilingual-e5-small" }, "/ws")
+        .DOC_SEARCH_LOCAL_MODEL,
+    ).toBe("Xenova/multilingual-e5-small");
+  });
+
+  it("does not pin a local model when another provider is selected", () => {
+    expect(buildMcpServerEnv({ ...base, embedProvider: "ollama" }, "/ws")).not.toHaveProperty(
+      "DOC_SEARCH_LOCAL_MODEL",
+    );
+    expect(buildMcpServerEnv({ ...base, embedProvider: "openai" }, "/ws")).not.toHaveProperty(
+      "DOC_SEARCH_LOCAL_MODEL",
+    );
   });
 
   it("passes the workspace value through untouched (portable reference or absolute path)", () => {
