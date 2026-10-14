@@ -40,7 +40,11 @@ Additional directories **outside the workspace** to index alongside the workspac
 - Files under an external root appear everywhere (search results, `list_docs`, the mtime cache) under the key `ext://<name>/<relative-path>`, and can be fetched with `get`/`multi_get` using that ref or their docid.
 - The default glob includes `.mdx` — vendor docs corpora are commonly MDX. The chunker treats MDX as markdown.
 - External roots are scanned during reindex (command or `reindex_docs` tool); the save-time file watcher only covers the workspace, so refresh an external root by reindexing after you `git pull` it.
-- A root whose directory is missing (unmounted disk, not yet cloned) is skipped without pruning its existing index entries; removing the root from the setting prunes them on the next reindex.
+- **A missing root** — configured, but its directory is absent (unmounted disk, not yet cloned) — is skipped without pruning its existing index entries; they come back into use when the directory reappears.
+- **An unconfigured root** — the index holds its entries, but the process running the reindex was not given it — is also kept, never pruned. This is the common case for an MCP server or CLI started without `DOC_SEARCH_EXTRA_ROOTS`: it cannot tell "removed" from "not given to me", so it keeps the entries, warns (naming `DOC_SEARCH_EXTRA_ROOTS` and `DOC_SEARCH_TRUST_WORKSPACE_SETTINGS`), does not report them as stale, and reports them as `unconfiguredRoots` in `status` / `reindex` output and in the MCP tool descriptions. (Up to 0.8.3 such a reindex deleted every `ext://` entry.)
+- **Removing a root is explicit.** Removing it from `docSearch.extraRoots` is enough when the extension does the next reindex: the extension owns this setting, so a root that is no longer in it is dropped. From the CLI, run `mcp-doc-search reindex --drop-root <name>` (repeatable). The `reindex_docs` MCP tool never drops a root.
+- Files deleted under a configured root are pruned on the next reindex, as before.
+- The roots the index covers are recorded in `index-meta.json` (`extraRoots`) after each reindex and shown by `mcp-doc-search status`.
 
 **Security note:** every configured root grants doc-search MCP/CLI clients read access to that directory subtree. The MCP server and CLI therefore take this setting from the `DOC_SEARCH_EXTRA_ROOTS` environment variable only — the workspace's `.vscode/settings.json` is not consulted unless you opt in (see [Trust model](#trust-model)). The **Generate .mcp.json** command writes your effective VS Code setting into the `env` block for you. Refs into a root are containment-checked against the root's real path; `..` traversal out of a root is rejected.
 
@@ -209,7 +213,11 @@ MCP server and CLI apply these rules:
   `.vscode/settings.json` are ignored, with a one-line stderr notice naming
   them, unless `DOC_SEARCH_TRUST_WORKSPACE_SETTINGS=1` is set. Set that only
   for workspaces whose settings you wrote yourself; the server then prints a
-  notice that it is trusting the file.
+  notice that it is trusting the file. **For those workspaces it is the
+  recommended setup:** the server then reads the same `extraRoots` and provider
+  as the extension, with no copy in `.mcp.json` to drift out of date. A server
+  without the writer's roots cannot `get` their files and, before 0.8.4, pruned
+  them on reindex.
 - **The environment always wins.** For every key, an environment variable
   overrides the settings.json value, whether or not the opt-in is set. (Earlier
   versions checked settings.json first for the Ollama URL and model.)
@@ -225,8 +233,13 @@ MCP server and CLI apply these rules:
 
 Because of the first rule, the **Generate .mcp.json** command writes your
 effective VS Code configuration into the `env` block of `.mcp.json` — external
-roots included — so federation keeps working without the opt-in. Regenerate
-the file after changing `extraRoots` or the provider.
+roots included — so federation keeps working without the opt-in. The extension
+keeps that block current on activation: the provider keys and
+`DOC_SEARCH_EXTRA_ROOTS` are reconciled with your settings (an entry with
+`DOC_SEARCH_TRUST_WORKSPACE_SETTINGS=1` is not given `DOC_SEARCH_EXTRA_ROOTS`,
+since it reads the setting itself; an existing value is still kept equal to the
+setting, because the environment wins). Reload the window afterwards so MCP
+clients restart the server.
 
 ## MCP Server Environment Variables
 

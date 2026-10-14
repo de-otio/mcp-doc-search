@@ -57,6 +57,8 @@ Open VS Code settings and set:
 
 Their files appear in results as `ext://vendor-docs/<path>` and are fetchable through `get`/`multi_get` like any other ref. External roots are re-scanned on reindex (the save-time watcher covers only the workspace), and can be edited in the settings panel ("Doc Search: Open Settings" → "External folders") or directly in settings.json. Note that a configured root grants doc-search clients read access to that subtree — so the MCP server and CLI take it from the `DOC_SEARCH_EXTRA_ROOTS` environment variable only, never from a cloned repo's `.vscode/settings.json` (the generated `.mcp.json` carries your setting in its `env` block). Details and the opt-in in [doc/configuration.md](doc/configuration.md#trust-model).
 
+Removing a root is explicit. A reindex keeps the entries of any root it was not configured with — an MCP server or CLI started without `DOC_SEARCH_EXTRA_ROOTS` reports them as `unconfiguredRoots` instead of deleting them — so drop a root by removing it from `docSearch.extraRoots` (the extension, which owns that setting, drops it on its next reindex) or with `mcp-doc-search reindex --drop-root <name>`. A root whose directory is temporarily missing keeps its entries too.
+
 ### Use it
 
 - **Cmd+Shift+P → "Doc Search: Reindex Documentation"** — build the initial index (takes ~30s for large repos)
@@ -155,10 +157,12 @@ mcp-doc-search list --json
 # Rebuild the index
 mcp-doc-search reindex
 mcp-doc-search reindex --force   # re-embed every file
+mcp-doc-search reindex --drop-root vendor-docs   # remove an external root's entries
 
 # Read files from the workspace
 mcp-doc-search get doc/api.md
 mcp-doc-search get doc/api.md --from-line 20 --max-lines 50
+mcp-doc-search get ext://vendor-docs/guide/setup.md   # external root (when configured)
 
 # Read multiple files (glob or comma list)
 mcp-doc-search multi-get "doc/**/*.md" --files         # list matched paths
