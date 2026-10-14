@@ -7,6 +7,7 @@ import { execFileSync } from "node:child_process";
 import {
   repairMcpServerPath,
   repairMcpServerEnv,
+  repairMcpServerExtraRoots,
   repairMcpJson,
   isPortableLauncherRef,
   isGitTracked,
@@ -216,6 +217,86 @@ describe("repairMcpServerEnv (pure)", () => {
   });
 });
 
+describe("repairMcpServerExtraRoots (pure)", () => {
+  const STABLE = "${HOME}/.doc-search/bin/mcp-server.js";
+  const NOTES = [{ name: "notes", path: "~/repos/notes", glob: "doc/**/*.md" }];
+  const TWO = [...NOTES, { name: "product-a", path: "/path/to/product-a" }];
+
+  const entry = (env: Record<string, unknown>, args: unknown[] = [STABLE]): string =>
+    mcpJson({ command: "node", args, env });
+  const envOf = (text: string): Record<string, unknown> =>
+    JSON.parse(text).mcpServers["doc-search"].env;
+
+  it("adds DOC_SEARCH_EXTRA_ROOTS when the setting gained a root after generation", () => {
+    // Without it the server answers every ext://notes/ ref with
+    // "Unknown external root" and reports the index stale forever.
+    const out = repairMcpServerExtraRoots(entry({ DOC_SEARCH_WORKSPACE: "/ws" }), NOTES);
+    expect(out).toBeDefined();
+    expect(envOf(out!)).toEqual({
+      DOC_SEARCH_WORKSPACE: "/ws",
+      DOC_SEARCH_EXTRA_ROOTS: JSON.stringify(NOTES),
+    });
+  });
+
+  it("keeps an existing value equal to the setting when a root is added or removed", () => {
+    const grown = repairMcpServerExtraRoots(
+      entry({ DOC_SEARCH_EXTRA_ROOTS: JSON.stringify(NOTES) }),
+      TWO,
+    );
+    expect(envOf(grown!).DOC_SEARCH_EXTRA_ROOTS).toBe(JSON.stringify(TWO));
+
+    const shrunk = repairMcpServerExtraRoots(
+      entry({ DOC_SEARCH_EXTRA_ROOTS: JSON.stringify(TWO) }),
+      NOTES,
+    );
+    expect(envOf(shrunk!).DOC_SEARCH_EXTRA_ROOTS).toBe(JSON.stringify(NOTES));
+  });
+
+  it("removes the key when the setting no longer holds any root", () => {
+    const out = repairMcpServerExtraRoots(
+      entry({ DOC_SEARCH_WORKSPACE: "/ws", DOC_SEARCH_EXTRA_ROOTS: JSON.stringify(NOTES) }),
+      [],
+    );
+    expect(envOf(out!)).toEqual({ DOC_SEARCH_WORKSPACE: "/ws" });
+  });
+
+  it("does not add the key to a trust-flagged entry, which reads the setting itself", () => {
+    expect(
+      repairMcpServerExtraRoots(entry({ DOC_SEARCH_TRUST_WORKSPACE_SETTINGS: "1" }), NOTES),
+    ).toBeUndefined();
+  });
+
+  it("still corrects a stale value on a trust-flagged entry (env wins over settings)", () => {
+    const out = repairMcpServerExtraRoots(
+      entry({ DOC_SEARCH_TRUST_WORKSPACE_SETTINGS: "1", DOC_SEARCH_EXTRA_ROOTS: "[]" }),
+      NOTES,
+    );
+    expect(envOf(out!)).toEqual({
+      DOC_SEARCH_TRUST_WORKSPACE_SETTINGS: "1",
+      DOC_SEARCH_EXTRA_ROOTS: JSON.stringify(NOTES),
+    });
+  });
+
+  it("leaves an equivalent, differently formatted value alone", () => {
+    expect(
+      repairMcpServerExtraRoots(
+        entry({ DOC_SEARCH_EXTRA_ROOTS: JSON.stringify(NOTES, null, 2) }),
+        NOTES,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("is a no-op when neither the setting nor the entry has roots", () => {
+    expect(repairMcpServerExtraRoots(entry({ DOC_SEARCH_WORKSPACE: "/ws" }), [])).toBeUndefined();
+  });
+
+  it("leaves foreign entries and malformed files alone", () => {
+    expect(repairMcpServerExtraRoots(entry({}, ["/opt/other/server.js"]), NOTES)).toBeUndefined();
+    expect(repairMcpServerExtraRoots("{not json", NOTES)).toBeUndefined();
+    expect(repairMcpServerExtraRoots(undefined, NOTES)).toBeUndefined();
+  });
+});
+
 describe("repairMcpJson (fs)", () => {
   const cleanups: string[] = [];
   afterEach(() => {
@@ -238,7 +319,11 @@ describe("repairMcpJson (fs)", () => {
     const ws = mkWs();
     const file = path.join(ws, ".mcp.json");
     fs.writeFileSync(file, mcpJson({ command: "node", args: [STALE] }));
-    expect(repairMcpJson(ws, NEW)).toEqual({ serverPath: true, providerEnv: false });
+    expect(repairMcpJson(ws, NEW)).toEqual({
+      serverPath: true,
+      providerEnv: false,
+      extraRootsEnv: false,
+    });
     expect(JSON.parse(fs.readFileSync(file, "utf8")).mcpServers["doc-search"].args).toEqual([NEW]);
   });
 
@@ -275,7 +360,7 @@ describe("repairMcpJson (fs)", () => {
         OLLAMA_URL: "http://127.0.0.1:11434",
         OLLAMA_MODEL: "nomic-embed-text",
       }),
-    ).toEqual({ serverPath: true, providerEnv: true });
+    ).toEqual({ serverPath: true, providerEnv: true, extraRootsEnv: false });
 
     const entry = JSON.parse(fs.readFileSync(file, "utf8")).mcpServers["doc-search"];
     expect(entry.args).toEqual([NEW]);
@@ -283,6 +368,33 @@ describe("repairMcpJson (fs)", () => {
       DOC_SEARCH_WORKSPACE: "/ws",
       OLLAMA_URL: "http://127.0.0.1:11434",
       OLLAMA_MODEL: "nomic-embed-text",
+    });
+  });
+});
+
+describe("repairMcpJson (fs): extraRoots", () => {
+  const cleanups: string[] = [];
+  afterEach(() => {
+    for (const dir of cleanups.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("reconciles a drifted provider env and a missing root in ONE write", () => {
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), "mcpjson-roots-"));
+    cleanups.push(ws);
+    const file = path.join(ws, ".mcp.json");
+    const roots = [{ name: "notes", path: "/path/to/notes" }];
+    fs.writeFileSync(
+      file,
+      mcpJson({ command: "node", args: [NEW], env: { DOC_SEARCH_WORKSPACE: "/ws" } }),
+    );
+
+    expect(
+      repairMcpJson(ws, NEW, { DOC_SEARCH_LOCAL_MODEL: "Xenova/all-MiniLM-L6-v2" }, roots),
+    ).toEqual({ serverPath: false, providerEnv: true, extraRootsEnv: true });
+    expect(JSON.parse(fs.readFileSync(file, "utf8")).mcpServers["doc-search"].env).toEqual({
+      DOC_SEARCH_WORKSPACE: "/ws",
+      DOC_SEARCH_LOCAL_MODEL: "Xenova/all-MiniLM-L6-v2",
+      DOC_SEARCH_EXTRA_ROOTS: JSON.stringify(roots),
     });
   });
 });

@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import * as vscode from "vscode";
 import { activate, deactivate } from "../../src/extension/extension.js";
 
@@ -333,6 +336,88 @@ describe("Extension", () => {
       await activate(mockContext);
 
       expect(vi.mocked(removeSupersededLegacyIndex)).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("external roots", () => {
+    const NOTES = [{ name: "notes", path: "/path/to/notes" }];
+    let ws: string;
+
+    beforeEach(async () => {
+      ws = fs.mkdtempSync(path.join(os.tmpdir(), "ext-roots-"));
+      (vscode.workspace as any).workspaceFolders = [{ uri: { fsPath: ws } }];
+      const { readConfig } = await import("../../src/extension/config.js");
+      vi.mocked(readConfig).mockReturnValue({
+        docGlob: "doc/**/*.md",
+        indexDir: ".doc-search-index",
+        indexLocation: "global",
+        headingDepth: 2,
+        maxChunkChars: 4000,
+        embedProvider: "local",
+        localModel: "Xenova/all-MiniLM-L6-v2",
+        ollamaUrl: "http://localhost:11434",
+        ollamaModel: "nomic-embed-text",
+        openaiApiKey: "",
+        autoReindex: false,
+        extraRoots: NOTES,
+      } as any);
+    });
+
+    afterEach(() => {
+      fs.rmSync(ws, { recursive: true, force: true });
+    });
+
+    function writeMcpJson(env: Record<string, string>): string {
+      const file = path.join(ws, ".mcp.json");
+      fs.writeFileSync(
+        file,
+        JSON.stringify({
+          mcpServers: {
+            "doc-search": {
+              command: "node",
+              args: ["/mock-home/.doc-search/bin/mcp-server.js"],
+              env: {
+                DOC_SEARCH_WORKSPACE: ws,
+                DOC_SEARCH_LOCAL_MODEL: "Xenova/all-MiniLM-L6-v2",
+                ...env,
+              },
+            },
+          },
+        }),
+      );
+      return file;
+    }
+
+    it("repairs a generated .mcp.json whose setting has since gained a root", async () => {
+      const file = writeMcpJson({});
+
+      await activate(mockContext);
+
+      const env = JSON.parse(fs.readFileSync(file, "utf8")).mcpServers["doc-search"].env;
+      expect(env.DOC_SEARCH_EXTRA_ROOTS).toBe(JSON.stringify(NOTES));
+      expect(vi.mocked(vscode.window.showInformationMessage)).toHaveBeenCalledWith(
+        expect.stringContaining("docSearch.extraRoots"),
+      );
+    });
+
+    it("does not give DOC_SEARCH_EXTRA_ROOTS to a trust-flagged entry", async () => {
+      const file = writeMcpJson({ DOC_SEARCH_TRUST_WORKSPACE_SETTINGS: "1" });
+      const before = fs.readFileSync(file, "utf8");
+
+      await activate(mockContext);
+
+      expect(fs.readFileSync(file, "utf8")).toBe(before);
+    });
+
+    it("builds its indexer as the owner of the root configuration", async () => {
+      const { Indexer } = await import("../../src/core/indexer.js");
+
+      await activate(mockContext);
+
+      expect(vi.mocked(Indexer).mock.calls[0][0]).toMatchObject({
+        ownsRootConfig: true,
+        extraRoots: [expect.objectContaining({ name: "notes" })],
+      });
     });
   });
 

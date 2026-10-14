@@ -1,7 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { PROVIDER_ENV_KEYS } from "./mcpEnv.js";
+import {
+  EXTRA_ROOTS_ENV_KEY,
+  extraRootsEnvValue,
+  PROVIDER_ENV_KEYS,
+  TRUST_WORKSPACE_SETTINGS_ENV_KEY,
+} from "./mcpEnv.js";
 
 /**
  * A doc-search server path is recognized as one we own (and may rewrite) only
@@ -127,6 +132,46 @@ export function repairMcpServerEnv(
   currentText: string | undefined,
   desiredProviderEnv: Record<string, string>,
 ): string | undefined {
+  const parsed = parseDocSearchEnv(currentText);
+  if (!parsed) return undefined;
+  const { config, entry, env } = parsed;
+
+  let changed = false;
+  for (const key of PROVIDER_ENV_KEYS) {
+    const desired = desiredProviderEnv[key];
+    if (desired === undefined) {
+      if (key in env) {
+        delete env[key];
+        changed = true;
+      }
+      continue;
+    }
+    // Never replace a key the user supplied a real value for.
+    if (key === "OPENAI_API_KEY" && typeof env[key] === "string" && env[key] !== "") continue;
+    if (env[key] !== desired) {
+      env[key] = desired;
+      changed = true;
+    }
+  }
+  if (!changed) return undefined;
+
+  entry.env = env;
+  return JSON.stringify(config, null, 2) + "\n";
+}
+
+/**
+ * Parse `.mcp.json` text down to our doc-search entry and its `env` (an empty
+ * object when the entry has none). Undefined when the file is absent,
+ * malformed, has no doc-search entry, or the entry does not launch our server
+ * — every case in which a repair must not touch the file.
+ */
+function parseDocSearchEnv(currentText: string | undefined):
+  | {
+      config: Record<string, unknown>;
+      entry: Record<string, unknown>;
+      env: Record<string, unknown>;
+    }
+  | undefined {
   if (currentText === undefined) return undefined;
 
   let config: Record<string, unknown>;
@@ -150,28 +195,61 @@ export function repairMcpServerEnv(
   if (existingEnv !== undefined && (typeof existingEnv !== "object" || existingEnv === null)) {
     return undefined; // hand-written into a shape we do not understand
   }
-  const env = (existingEnv ?? {}) as Record<string, unknown>;
+  return { config, entry: entryRecord, env: (existingEnv ?? {}) as Record<string, unknown> };
+}
 
-  let changed = false;
-  for (const key of PROVIDER_ENV_KEYS) {
-    const desired = desiredProviderEnv[key];
-    if (desired === undefined) {
-      if (key in env) {
-        delete env[key];
-        changed = true;
-      }
-      continue;
-    }
-    // Never replace a key the user supplied a real value for.
-    if (key === "OPENAI_API_KEY" && typeof env[key] === "string" && env[key] !== "") continue;
-    if (env[key] !== desired) {
-      env[key] = desired;
-      changed = true;
-    }
+/** True when two JSON texts encode the same value; false if either does not parse. */
+function sameJson(a: string, b: string): boolean {
+  try {
+    return JSON.stringify(JSON.parse(a)) === JSON.stringify(JSON.parse(b));
+  } catch {
+    return false;
   }
-  if (!changed) return undefined;
+}
 
-  entryRecord.env = env;
+/**
+ * Compute a `.mcp.json` whose doc-search `env` carries the external roots the
+ * user configured in `docSearch.extraRoots`. Pure; returns the rewritten text,
+ * or undefined when nothing needs to change.
+ *
+ * WHY: the server reads extraRoots from this `env` block only (unless the
+ * entry opts in with `DOC_SEARCH_TRUST_WORKSPACE_SETTINGS=1`). A `.mcp.json`
+ * generated before a root was added leaves the server without it: `get` on
+ * that root's `ext://` refs fails with "Unknown external root", and the index
+ * looks stale to the server forever.
+ *
+ * - An existing `DOC_SEARCH_EXTRA_ROOTS` is kept equal to the setting — set to
+ *   its value, or removed when the setting holds no roots. This applies even
+ *   with the trust flag set: env wins over settings.json on the server, so a
+ *   stale value there would mask the setting.
+ * - A missing one is added when the setting has roots, unless the entry sets
+ *   `DOC_SEARCH_TRUST_WORKSPACE_SETTINGS=1` (the server then reads the setting
+ *   itself, and pinning a copy here would only create something to drift).
+ * - Equality is by JSON value, so a hand-formatted equivalent is left alone.
+ */
+export function repairMcpServerExtraRoots(
+  currentText: string | undefined,
+  extraRootsSetting: unknown,
+): string | undefined {
+  const parsed = parseDocSearchEnv(currentText);
+  if (!parsed) return undefined;
+  const { config, entry, env } = parsed;
+
+  const desired = extraRootsEnvValue(extraRootsSetting);
+  const existing = env[EXTRA_ROOTS_ENV_KEY];
+
+  if (existing === undefined) {
+    if (desired === undefined || env[TRUST_WORKSPACE_SETTINGS_ENV_KEY] === "1") return undefined;
+    env[EXTRA_ROOTS_ENV_KEY] = desired;
+  } else if (desired === undefined) {
+    delete env[EXTRA_ROOTS_ENV_KEY];
+  } else if (typeof existing === "string" && sameJson(existing, desired)) {
+    return undefined;
+  } else {
+    env[EXTRA_ROOTS_ENV_KEY] = desired;
+  }
+
+  entry.env = env;
   return JSON.stringify(config, null, 2) + "\n";
 }
 
@@ -181,11 +259,14 @@ export interface McpJsonRepair {
   serverPath: boolean;
   /** The `env` block was reconciled with the configured embedding provider. */
   providerEnv: boolean;
+  /** `DOC_SEARCH_EXTRA_ROOTS` was reconciled with the extraRoots setting. */
+  extraRootsEnv: boolean;
 }
 
 /**
  * Repair `<workspaceRoot>/.mcp.json` in place: re-point a stale doc-search
- * server path, and reconcile its `env` with the configured embedding provider.
+ * server path, and reconcile its `env` with the configured embedding provider
+ * and, when `extraRootsSetting` is given, with the extraRoots setting.
  * Returns what changed, or null when the file was already correct (or absent,
  * unreadable, malformed, or not ours). Best-effort; never throws.
  *
@@ -196,6 +277,7 @@ export function repairMcpJson(
   workspaceRoot: string,
   expectedServerPath: string,
   desiredProviderEnv?: Record<string, string>,
+  extraRootsSetting?: unknown,
 ): McpJsonRepair | null {
   const mcpJsonPath = path.join(workspaceRoot, ".mcp.json");
   let currentText: string;
@@ -210,13 +292,22 @@ export function repairMcpJson(
   const envRepaired = desiredProviderEnv
     ? repairMcpServerEnv(afterPath, desiredProviderEnv)
     : undefined;
+  const afterEnv = envRepaired ?? afterPath;
+  const rootsRepaired =
+    extraRootsSetting !== undefined
+      ? repairMcpServerExtraRoots(afterEnv, extraRootsSetting)
+      : undefined;
 
-  const finalText = envRepaired ?? pathRepaired;
+  const finalText = rootsRepaired ?? envRepaired ?? pathRepaired;
   if (finalText === undefined) return null;
 
   try {
     fs.writeFileSync(mcpJsonPath, finalText, "utf8");
-    return { serverPath: pathRepaired !== undefined, providerEnv: envRepaired !== undefined };
+    return {
+      serverPath: pathRepaired !== undefined,
+      providerEnv: envRepaired !== undefined,
+      extraRootsEnv: rootsRepaired !== undefined,
+    };
   } catch {
     return null;
   }
