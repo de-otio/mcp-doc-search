@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+  symlinkSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -231,11 +239,15 @@ describe("Indexer with external roots", () => {
     expect(resolved).toHaveProperty("error");
   });
 
-  it("rejects refs to unconfigured roots", () => {
+  it("rejects refs to unconfigured roots, naming the fix", () => {
     const indexer = new Indexer(makeConfig(), store);
-    expect(indexer.resolveRef("ext://other/x.md")).toEqual({
-      error: "Unknown external root: other",
-    });
+    const resolved = indexer.resolveRef("ext://other/x.md");
+    if (!("error" in resolved)) throw new Error("expected an error");
+    expect(resolved.error).toMatch(/^Unknown external root: other\. This server was not given/);
+    expect(resolved.error).toContain("DOC_SEARCH_EXTRA_ROOTS");
+    expect(resolved.error).toContain("DOC_SEARCH_TRUST_WORKSPACE_SETTINGS=1");
+    // The message must stay path-free: it is returned to MCP clients verbatim.
+    expect(resolved.error).not.toContain(rootDir);
     expect(indexer.resolveRef("ext://vendor")).toHaveProperty("error");
   });
 
@@ -282,15 +294,111 @@ describe("Indexer with external roots", () => {
     expect(status.deletedFiles).toBe(0);
   });
 
-  it("prunes external entries when the root is unconfigured", async () => {
-    const indexer = new Indexer(makeConfig(), store);
-    await indexer.reindex();
+  describe("unconfigured roots (a reader not given the writer's roots)", () => {
+    const EXT_KEYS = ["ext://vendor/notes.md", "ext://vendor/pages/guide.mdx"];
+    let warn: ReturnType<typeof vi.spyOn>;
 
-    deletedFiles.length = 0;
-    const indexer2 = new Indexer(makeConfig({ extraRoots: [] }), store);
-    const stats = await indexer2.reindex();
+    beforeEach(async () => {
+      warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      // The writer indexes the federated corpus.
+      await new Indexer(makeConfig(), store).reindex();
+      deletedFiles.length = 0;
+      warn.mockClear();
+    });
 
-    expect(stats.pruned).toBe(2);
-    expect(deletedFiles.sort()).toEqual(["ext://vendor/notes.md", "ext://vendor/pages/guide.mdx"]);
+    afterEach(() => {
+      warn.mockRestore();
+    });
+
+    const readCache = (): Record<string, unknown> =>
+      JSON.parse(readFileSync(path.join(indexDir, "mtime_cache.json"), "utf8"));
+
+    it("keeps their entries on a reindex with no roots configured, and warns", async () => {
+      const reader = new Indexer(makeConfig({ extraRoots: [] }), store);
+      const stats = await reader.reindex();
+
+      // 0.8.3 pruned both ext:// entries here: pruned=2.
+      expect(stats.pruned).toBe(0);
+      expect(deletedFiles).toEqual([]);
+      expect(stats.unconfiguredRoots).toEqual(["vendor"]);
+      expect(Object.keys(readCache())).toEqual(expect.arrayContaining(EXT_KEYS));
+
+      const warning = warn.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(warning).toContain("vendor");
+      expect(warning).toContain("DOC_SEARCH_EXTRA_ROOTS");
+      expect(warning).toContain("DOC_SEARCH_TRUST_WORKSPACE_SETTINGS");
+
+      // And again: the kept entries survive repeated reader runs.
+      expect((await reader.reindex()).pruned).toBe(0);
+      expect(deletedFiles).toEqual([]);
+    });
+
+    it("prunes a root's entries when the drop is explicit", async () => {
+      const reader = new Indexer(makeConfig({ extraRoots: [] }), store);
+      const stats = await reader.reindex(false, undefined, { dropRoots: ["vendor"] });
+
+      expect(stats.pruned).toBe(2);
+      expect(deletedFiles.sort()).toEqual(EXT_KEYS);
+      expect(stats.droppedRoots).toEqual(["vendor"]);
+      expect(stats.unconfiguredRoots).toBeUndefined();
+      expect(Object.keys(readCache())).toEqual(["doc/readme.md"]);
+      expect((await reader.getStatus()).unconfiguredRoots).toEqual([]);
+    });
+
+    it("drops a root removed from the settings of the process that owns them", async () => {
+      const owner = new Indexer(makeConfig({ extraRoots: [], ownsRootConfig: true }), store);
+      expect((await owner.getStatus()).needsReindex).toBe(true);
+
+      const stats = await owner.reindex();
+
+      expect(stats.pruned).toBe(2);
+      expect(deletedFiles.sort()).toEqual(EXT_KEYS);
+      expect(stats.droppedRoots).toEqual(["vendor"]);
+      expect((await owner.getStatus()).needsReindex).toBe(false);
+    });
+
+    it("still prunes a file deleted under a configured root", async () => {
+      rmSync(path.join(rootDir, "notes.md"));
+      const stats = await new Indexer(makeConfig(), store).reindex();
+
+      expect(stats.pruned).toBe(1);
+      expect(deletedFiles).toEqual(["ext://vendor/notes.md"]);
+      expect(stats.unconfiguredRoots).toBeUndefined();
+    });
+
+    it("reports a reader's index as not stale, and names the roots it lacks", async () => {
+      const status = await new Indexer(makeConfig({ extraRoots: [] }), store).getStatus();
+
+      // 0.8.3 counted both ext:// entries as deleted: needsReindex=true forever.
+      expect(status.deletedFiles).toBe(0);
+      expect(status.needsReindex).toBe(false);
+      expect(status.unconfiguredRoots).toEqual(["vendor"]);
+      expect(status.extraRootNames).toEqual([]);
+    });
+
+    it("refuses to drop a configured root or a malformed name, before touching the index", async () => {
+      const indexer = new Indexer(makeConfig(), store);
+      await expect(indexer.reindex(false, undefined, { dropRoots: ["vendor"] })).rejects.toThrow(
+        /configured for this run/,
+      );
+      await expect(
+        indexer.reindex(false, undefined, { dropRoots: ["vendor/pages"] }),
+      ).rejects.toThrow(/not a valid root name/);
+      expect(deletedFiles).toEqual([]);
+    });
+
+    it("records the roots the index covers in index-meta.json", async () => {
+      const meta = (): { extraRoots?: string[] } =>
+        JSON.parse(readFileSync(path.join(indexDir, "index-meta.json"), "utf8"));
+      expect(meta().extraRoots).toEqual(["vendor"]);
+
+      await new Indexer(makeConfig({ extraRoots: [] }), store).reindex();
+      expect(meta().extraRoots).toEqual(["vendor"]);
+
+      await new Indexer(makeConfig({ extraRoots: [] }), store).reindex(false, undefined, {
+        dropRoots: ["vendor"],
+      });
+      expect(meta().extraRoots).toEqual([]);
+    });
   });
 });

@@ -21,7 +21,14 @@ import path from "node:path";
 import { glob } from "glob";
 import { chunkMarkdown, computeDocid } from "./chunker.js";
 import { EmbedError, EmbedderUnavailableError, isFatalEmbedKind } from "./embedder.js";
-import { EXT_REF_SCHEME, extKey, parseExtKey } from "./extraRoots.js";
+import {
+  EXT_REF_SCHEME,
+  extKey,
+  extRootPrefix,
+  isValidRootName,
+  parseExtKey,
+  rootNamesOfKeys,
+} from "./extraRoots.js";
 import {
   canonicalRoot,
   isSymlinkOrEscapes,
@@ -94,6 +101,26 @@ export class ReindexInProgressError extends Error {
     this.startedAt = startedAt;
   }
 }
+
+/** Options for `Indexer.reindex` beyond `force` and progress reporting. */
+export interface ReindexOptions {
+  /**
+   * External roots whose entries this run removes from the index. The only
+   * way a process that does not own the root configuration (MCP server, CLI)
+   * removes a root: entries under a root it was not configured with are kept
+   * otherwise. A name that is configured for this run is refused.
+   */
+  dropRoots?: string[];
+}
+
+/**
+ * Env vars that hand a reader process the roots the writer indexed. Named in
+ * every message about unconfigured roots so the fix is one read away.
+ */
+export const UNCONFIGURED_ROOT_FIX =
+  "set DOC_SEARCH_EXTRA_ROOTS in the server's env (the extension's Generate .mcp.json " +
+  "command writes it), or DOC_SEARCH_TRUST_WORKSPACE_SETTINGS=1 for a workspace whose " +
+  ".vscode/settings.json you wrote yourself";
 
 /** Contents of reindex.lock. */
 interface LockHolder {
@@ -460,6 +487,12 @@ export class Indexer {
    * Throws EmbedderUnavailableError when the embedding provider is unusable —
    * either at preflight or after repeated failures mid-run.
    *
+   * External roots: entries under a root this run is not configured with are
+   * kept and reported in `unconfiguredRoots` (with a warning), unless the
+   * root is named in `options.dropRoots` or this process owns the root
+   * configuration (`IndexerConfig.ownsRootConfig`). A reader that was simply
+   * not given the writer's roots must never prune what it cannot see.
+   *
    * @param force - Re-index all files even if unchanged
    * @param onProgress - Optional callback invoked after each file is processed.
    *   Receives (processedCount, totalToProcess, currentFile, phase) where
@@ -475,10 +508,12 @@ export class Indexer {
       file: string,
       phase: "scanning" | "loading" | "indexing" | "failed",
     ) => void,
+    options: ReindexOptions = {},
   ): Promise<IndexStats> {
+    const dropRoots = this.validateDropRoots(options.dropRoots ?? []);
     const releaseLock = this.acquireReindexLock();
     try {
-      return await this.reindexLocked(force, onProgress);
+      return await this.reindexLocked(force, onProgress, dropRoots);
     } finally {
       releaseLock();
     }
@@ -492,6 +527,7 @@ export class Indexer {
       file: string,
       phase: "scanning" | "loading" | "indexing" | "failed",
     ) => void,
+    dropRoots: string[] = [],
   ): Promise<IndexStats> {
     const t0 = Date.now();
     // Always load real cache for prune sweep; force only clears the embed decision
@@ -501,6 +537,24 @@ export class Indexer {
     onProgress?.(0, 0, "", "scanning");
 
     const { entries, missingRootPrefixes } = await this.scanFiles();
+
+    // External roots the index holds entries for but this run was not
+    // configured with. Kept unless dropped explicitly (or by the owner of the
+    // root configuration): a reader started without the writer's roots would
+    // otherwise delete every ext:// entry it cannot see.
+    const { kept: keptRoots, dropped: droppedRoots } = this.partitionUnconfiguredRoots(
+      Object.keys(cache),
+      dropRoots,
+    );
+    if (keptRoots.length > 0) {
+      console.warn(
+        `Keeping index entries of external root(s) not configured for this process: ` +
+          `${keptRoots.join(", ")}. To read and refresh them from this process, ${UNCONFIGURED_ROOT_FIX}. ` +
+          `To remove them, reindex with --drop-root <name>.`,
+      );
+    }
+    const keptPrefixes = keptRoots.map(extRootPrefix);
+    const droppedPrefixes = droppedRoots.map(extRootPrefix);
 
     // Index metadata: vectors from a different model, or chunks cut with
     // different settings, cannot be mixed into the existing table. Decide up
@@ -523,6 +577,13 @@ export class Indexer {
     const beginRebuild = async (reason: string): Promise<void> => {
       rebuiltReason = reason;
       console.warn(`Rebuilding index: ${reason}`);
+      if (keptRoots.length > 0) {
+        console.warn(
+          `Rebuilding discards the entries of external root(s) ${keptRoots.join(", ")}, ` +
+            `which this process was not configured with; a reindex by a process that is ` +
+            `configured with them restores them`,
+        );
+      }
       await this.store.dropTable();
       cache = {};
       newCache = {};
@@ -535,10 +596,16 @@ export class Indexer {
       await beginRebuild(mismatch);
     } else {
       // Prune: remove vector store entries for files no longer on disk / in glob.
-      // Keys under a currently-missing external root are kept, not pruned.
+      // Keys under a currently-missing external root, and under a root this
+      // run was not configured with (see above), are kept, not pruned.
+      // Explicitly dropped roots are removed even when their directory is
+      // missing.
       const currentSet = new Set(entries.map((e) => e.key));
+      const protectedPrefixes = [...missingRootPrefixes, ...keptPrefixes];
       staleKeys = Object.keys(cache).filter(
-        (rel) => !currentSet.has(rel) && !missingRootPrefixes.some((p) => rel.startsWith(p)),
+        (rel) =>
+          droppedPrefixes.some((p) => rel.startsWith(p)) ||
+          (!currentSet.has(rel) && !protectedPrefixes.some((p) => rel.startsWith(p))),
       );
       for (const rel of staleKeys) {
         try {
@@ -571,7 +638,7 @@ export class Indexer {
     // Persist whatever has been indexed so far. Called on the normal path and
     // before an abort: the successful files' vectors are already in the store,
     // so dropping their cache entries would force a pointless re-embed.
-    const persistCache = (): void => {
+    const persistCache = (): MtimeCache => {
       const staleSet = new Set(staleKeys);
       const mergedCache: MtimeCache = {};
       for (const [k, v] of Object.entries(cache)) {
@@ -581,6 +648,7 @@ export class Indexer {
         mergedCache[k] = v;
       }
       this.saveMtimeCache(mergedCache);
+      return mergedCache;
     };
 
     const abort = (message: string, kind: EmbedFailureKind, hint?: string): never => {
@@ -740,7 +808,10 @@ export class Indexer {
     }
 
     // Merge new cache with unchanged entries from old cache, excluding pruned keys
-    persistCache();
+    const finalCache = persistCache();
+    this.recordRootNames(finalCache);
+    // A rebuild dropped the kept roots' entries along with everything else.
+    const unconfiguredRoots = rebuiltReason === undefined ? keptRoots : [];
 
     // Full-text index: rebuild after any run that wrote or pruned rows (stale
     // postings from the delete-before-add above would otherwise break queries;
@@ -776,7 +847,77 @@ export class Indexer {
       firstError,
       compacted,
       rebuiltReason,
+      ...(unconfiguredRoots.length > 0 ? { unconfiguredRoots } : {}),
+      ...(droppedRoots.length > 0 ? { droppedRoots } : {}),
     };
+  }
+
+  /**
+   * Check `dropRoots` before the run takes the lock: every name must be a
+   * well-formed root name (a name containing `/` would match a sub-tree of
+   * another root's keys), and none may be configured for this run — its
+   * files would be scanned and re-indexed in the same breath.
+   */
+  private validateDropRoots(dropRoots: string[]): string[] {
+    const configured = new Set(this.config.extraRoots.map((r) => r.name));
+    for (const name of dropRoots) {
+      if (!isValidRootName(name)) {
+        throw new Error(`Cannot drop external root ${JSON.stringify(name)}: not a valid root name`);
+      }
+      if (configured.has(name)) {
+        throw new Error(
+          `Cannot drop external root "${name}": it is configured for this run. ` +
+            `Remove it from the configuration first.`,
+        );
+      }
+    }
+    return [...new Set(dropRoots)].sort();
+  }
+
+  /**
+   * Split the external roots that `keys` live under, minus the configured
+   * ones, into those this run keeps and those it drops. The owner of the root
+   * configuration drops all of them; any other process drops only the ones
+   * named in `dropRoots`. A requested root with no entries is not reported.
+   */
+  private partitionUnconfiguredRoots(
+    keys: string[],
+    dropRoots: string[],
+  ): { kept: string[]; dropped: string[] } {
+    const unconfigured = this.unconfiguredRootNames(keys);
+    if (this.config.ownsRootConfig) return { kept: [], dropped: unconfigured };
+    const requested = new Set(dropRoots);
+    return {
+      kept: unconfigured.filter((n) => !requested.has(n)),
+      dropped: unconfigured.filter((n) => requested.has(n)),
+    };
+  }
+
+  /** Roots that `keys` live under which this process is not configured with. */
+  private unconfiguredRootNames(keys: string[]): string[] {
+    const configured = new Set(this.config.extraRoots.map((r) => r.name));
+    return rootNamesOfKeys(keys).filter((n) => !configured.has(n));
+  }
+
+  /**
+   * Record in index-meta.json the external roots the index now covers: the
+   * configured ones plus any whose entries were kept. Informational (status
+   * output); skipped while no metadata exists yet, which is an index that
+   * holds nothing.
+   */
+  private recordRootNames(finalCache: MtimeCache): void {
+    const meta = this.loadIndexMeta();
+    if (!meta) return;
+    const names = [
+      ...new Set([
+        ...this.config.extraRoots.map((r) => r.name),
+        ...rootNamesOfKeys(Object.keys(finalCache)),
+      ]),
+    ].sort();
+    // An absent record and "no roots" are the same thing: no write, so an
+    // incremental run on a root-less index leaves index-meta.json untouched.
+    if (JSON.stringify(meta.extraRoots ?? []) === JSON.stringify(names)) return;
+    this.saveIndexMeta({ ...meta, extraRoots: names });
   }
 
   /**
@@ -810,8 +951,20 @@ export class Indexer {
       }
     }
 
+    // Entries under a root this process was not given are not stale: they
+    // were indexed by a process that has the root, and a reindex here keeps
+    // them. Counting them as deleted made every reader report "may be stale"
+    // forever. The owner of the root configuration does count them — its
+    // next reindex drops them.
+    const unconfiguredRoots = this.unconfiguredRootNames(Object.keys(cache));
+    const unconfiguredPrefixes = this.config.ownsRootConfig
+      ? []
+      : unconfiguredRoots.map(extRootPrefix);
     const deletedFiles = Object.keys(cache).filter(
-      (rel) => !fileSet.has(rel) && !missingRootPrefixes.some((p) => rel.startsWith(p)),
+      (rel) =>
+        !fileSet.has(rel) &&
+        !missingRootPrefixes.some((p) => rel.startsWith(p)) &&
+        !unconfiguredPrefixes.some((p) => rel.startsWith(p)),
     ).length;
 
     const cachePath = this.mtimeCachePath();
@@ -830,6 +983,7 @@ export class Indexer {
       needsReindex: changedFiles > 0 || newFiles > 0 || deletedFiles > 0,
       docGlob: this.config.docGlob,
       extraRootNames: this.config.extraRoots.map((r) => r.name),
+      unconfiguredRoots,
       meta: this.loadIndexMeta() ?? undefined,
       ftsIndex: await this.store.hasFtsIndex(),
       reindexLock,
@@ -1049,6 +1203,9 @@ export class Indexer {
         maxChunkChars: Number(parsed.maxChunkChars ?? 0),
         headingDepth: Number(parsed.headingDepth ?? 0),
         createdAt: String(parsed.createdAt ?? ""),
+        ...(Array.isArray(parsed.extraRoots)
+          ? { extraRoots: parsed.extraRoots.filter((n): n is string => typeof n === "string") }
+          : {}),
       };
     } catch {
       return null;
@@ -1190,7 +1347,11 @@ export class Indexer {
     }
     const root = this.config.extraRoots.find((r) => r.name === parsed.name);
     if (!root) {
-      return { error: `Unknown external root: ${parsed.name}` };
+      return {
+        error:
+          `Unknown external root: ${parsed.name}. This server was not given that root; ` +
+          `to read it, ${UNCONFIGURED_ROOT_FIX}.`,
+      };
     }
     // Canonicalize the root first so a symlinked root cannot redirect the
     // containment check (see resolveWithinBase docs).

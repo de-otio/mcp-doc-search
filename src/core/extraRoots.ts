@@ -126,6 +126,30 @@ export function parseExtraRoots(raw: unknown, homeDir: string = os.homedir()): P
   return { roots, warnings };
 }
 
+/** True when `name` is a well-formed external-root name. */
+export function isValidRootName(name: string): boolean {
+  return NAME_PATTERN.test(name);
+}
+
+/** The key prefix every entry under the named external root starts with. */
+export function extRootPrefix(rootName: string): string {
+  return `${EXT_REF_SCHEME}${rootName}/`;
+}
+
+/**
+ * Names of the external roots that index keys live under, sorted and
+ * de-duplicated. Workspace-relative keys and malformed ext keys contribute
+ * nothing.
+ */
+export function rootNamesOfKeys(keys: Iterable<string>): string[] {
+  const names = new Set<string>();
+  for (const key of keys) {
+    const parsed = parseExtKey(key);
+    if (parsed) names.add(parsed.name);
+  }
+  return [...names].sort();
+}
+
 /** Compose the index key for a file under an external root. */
 export function extKey(rootName: string, rel: string): string {
   return `${EXT_REF_SCHEME}${rootName}/${rel.replace(/\\/g, "/")}`;

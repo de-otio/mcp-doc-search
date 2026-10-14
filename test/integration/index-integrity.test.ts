@@ -7,7 +7,7 @@
  * that silently lost unchanged files, non-atomic cache writes, and two
  * reindexes racing on one index directory.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   existsSync,
   mkdirSync,
@@ -350,6 +350,25 @@ describe("Indexer integrity (real LanceDB)", () => {
 
     expect(stats.pruned).toBe(1);
     expect((await store.listFiles()).map((f) => f.file)).toEqual(["doc/readme.md"]);
+  });
+
+  it("a reader without the roots keeps a federated index's ext:// rows", async () => {
+    await new Indexer(makeConfig(fakeProvider(3, IDENTITY)), store).reindex();
+    const before = await store.count();
+
+    // An MCP server / CLI started without DOC_SEARCH_EXTRA_ROOTS. 0.8.3 pruned
+    // every ext:// row here.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const reader = new Indexer(makeConfig(fakeProvider(3, IDENTITY), { extraRoots: [] }), store);
+      const stats = await reader.reindex();
+      expect(stats.pruned).toBe(0);
+      expect(stats.unconfiguredRoots).toEqual(["v"]);
+    } finally {
+      warn.mockRestore();
+    }
+    expect(await store.count()).toBe(before);
+    expect((await store.listFiles()).map((f) => f.file)).toEqual(["doc/readme.md", AWKWARD_KEY]);
   });
 
   it("writes index-meta.json from the provider identity and config", async () => {

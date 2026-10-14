@@ -81,6 +81,15 @@ export interface IndexStats {
    * configuration (provider, model, dimension, chunking, schema version).
    */
   rebuiltReason?: string;
+  /**
+   * External roots whose entries the index holds but this run was not
+   * configured with, and which it therefore KEPT rather than pruned. A reader
+   * started without `DOC_SEARCH_EXTRA_ROOTS` sees every root the writer
+   * indexed here; absent when there were none.
+   */
+  unconfiguredRoots?: string[];
+  /** External roots whose entries this run removed on request (`dropRoots`). */
+  droppedRoots?: string[];
 }
 
 /**
@@ -101,6 +110,12 @@ export interface IndexMeta {
   headingDepth: number;
   /** ISO timestamp of when this index generation was created. */
   createdAt: string;
+  /**
+   * Names of the external roots the index holds entries for (or was last
+   * configured with), updated after every reindex. Informational: absent on
+   * indexes written before 0.8.4, and never a reason to rebuild.
+   */
+  extraRoots?: string[];
 }
 
 /** Outcome of a LanceDB compaction + old-version prune. */
@@ -134,6 +149,14 @@ export interface IndexStatus {
   docGlob: string;
   /** Names of configured external roots (empty when none) */
   extraRootNames: string[];
+  /**
+   * External roots the index holds entries for that this process was NOT
+   * configured with — typically an MCP server or CLI started without the
+   * roots the editor extension indexed. Their entries are not counted as
+   * deleted (they are not stale), cannot be fetched by `get`, and are kept by
+   * a reindex. Empty when none.
+   */
+  unconfiguredRoots?: string[];
   /**
    * On-disk index metadata, when present. Absent on an empty index and on
    * indexes built before metadata existed (those are rebuilt on the next
@@ -289,6 +312,15 @@ export interface IndexerConfig {
   embedProvider: EmbedProvider;
   /** Validated external roots (see extraRoots.ts). Defaults to []. */
   extraRoots: ExtraRoot[];
+  /**
+   * True only for the process that owns the root configuration — the editor
+   * extension, which reads `docSearch.extraRoots` from the user's settings.
+   * Its configuration is authoritative: entries under a root it is not
+   * configured with were removed by the user and are dropped on reindex.
+   * Every other process (MCP server, CLI) keeps such entries, because it
+   * cannot tell "removed" from "not given to me". Defaults to false.
+   */
+  ownsRootConfig?: boolean;
 }
 
 /**
@@ -307,5 +339,6 @@ export function validateConfig(
     maxChunkChars: resolveMaxChunkChars(raw.maxChunkChars, embedProvider),
     embedProvider,
     extraRoots: raw.extraRoots ?? [],
+    ownsRootConfig: raw.ownsRootConfig === true,
   };
 }

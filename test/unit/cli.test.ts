@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { parseArgs } from "../../bin/mcp-doc-search.js";
+import { Indexer } from "../../src/core/indexer.js";
+import type { ExtraRoot } from "../../src/core/extraRoots.js";
 
 // ---------------------------------------------------------------------------
 // parseArgs — argument parsing unit tests (no I/O)
@@ -75,6 +80,18 @@ describe("parseArgs", () => {
     expect(r.flags["n"]).toBe("3");
     expect(r.flags.json).toBe(true);
     expect(r.flags.explain).toBe(true);
+  });
+
+  it("collects a repeatable --drop-root in order", () => {
+    const r = parseArgs(["reindex", "--drop-root", "notes", "--json", "--drop-root", "product-a"]);
+    expect(r.repeated["drop-root"]).toEqual(["notes", "product-a"]);
+    expect(r.flags.json).toBe(true);
+    expect(r.flags["drop-root"]).toBeUndefined();
+  });
+
+  it("refuses --drop-root without a value", () => {
+    expect(() => parseArgs(["reindex", "--drop-root"])).toThrow(/requires a value/);
+    expect(() => parseArgs(["reindex", "--drop-root", "--json"])).toThrow(/requires a value/);
   });
 
   it("returns empty subcommand for empty argv", () => {
@@ -159,6 +176,32 @@ describe("CLI subcommands", () => {
     stderrSpy.mockRestore();
     exitSpy.mockRestore();
   });
+
+  /**
+   * Hand the CLI a real Indexer, so `get` / `multi-get` exercise the same
+   * ref resolution as the MCP tool (no index needed: resolution reads the
+   * mtime cache only for docids).
+   */
+  async function useRealResolver(workspaceRoot: string, extraRoots: ExtraRoot[] = []) {
+    const indexer = new Indexer(
+      {
+        workspaceRoot,
+        docGlob: "doc/**/*.md",
+        indexDir: path.join(os.tmpdir(), "cli-test-no-index"),
+        maxChunkChars: 4000,
+        headingDepth: 2,
+        embedProvider: mockEmbedProvider,
+        extraRoots,
+      },
+      mockStore,
+    );
+    const { createEngineFromEnv } = await import("../../src/mcp/config.js");
+    vi.mocked(createEngineFromEnv).mockResolvedValue({
+      store: mockStore,
+      indexer,
+      embedProvider: mockEmbedProvider,
+    });
+  }
 
   // -------------------------------------------------------------------------
   // list
@@ -248,6 +291,44 @@ describe("CLI subcommands", () => {
       const { parseArgs: pa } = await import("../../bin/mcp-doc-search.js");
       const parsed = pa(["reindex"]);
       expect(parsed.flags.force).toBeUndefined();
+    });
+
+    it("passes --drop-root names to the indexer and reports the drop", async () => {
+      const { cmdReindex } = await import("../../bin/mcp-doc-search.js");
+      mockIndexer.reindex.mockResolvedValue({
+        indexed: 0,
+        skipped: 3,
+        failedFiles: 0,
+        totalChunks: 0,
+        durationMs: 5,
+        pruned: 2,
+        droppedRoots: ["notes"],
+      });
+
+      await cmdReindex({}, ["notes"]);
+
+      expect(mockIndexer.reindex).toHaveBeenCalledWith(false, undefined, { dropRoots: ["notes"] });
+      const out = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+      expect(out).toContain("Dropped external root(s): notes");
+    });
+
+    it("says which unconfigured roots a reindex kept", async () => {
+      const { cmdReindex } = await import("../../bin/mcp-doc-search.js");
+      mockIndexer.reindex.mockResolvedValue({
+        indexed: 0,
+        skipped: 1,
+        failedFiles: 0,
+        totalChunks: 0,
+        durationMs: 5,
+        pruned: 0,
+        unconfiguredRoots: ["notes"],
+      });
+
+      await cmdReindex({});
+
+      expect(mockIndexer.reindex).toHaveBeenCalledWith(false, undefined, { dropRoots: [] });
+      const out = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+      expect(out).toMatch(/Kept external root\(s\).*notes.*DOC_SEARCH_EXTRA_ROOTS/);
     });
 
     it("JSON output includes status and stats", () => {
@@ -477,7 +558,7 @@ describe("CLI subcommands", () => {
   describe("get path traversal", () => {
     it("rejects ../etc/passwd with exit(1) and a 'Path traversal blocked' error", async () => {
       const { cmdGet } = await import("../../bin/mcp-doc-search.js");
-      process.env.DOC_SEARCH_WORKSPACE = "/tmp/test-workspace";
+      await useRealResolver("/tmp/test-workspace");
 
       await expect(cmdGet(["../etc/passwd"], {})).rejects.toThrow("process.exit(1)");
 
@@ -487,7 +568,7 @@ describe("CLI subcommands", () => {
 
     it("rejects /etc/passwd (absolute) with exit(1)", async () => {
       const { cmdGet } = await import("../../bin/mcp-doc-search.js");
-      process.env.DOC_SEARCH_WORKSPACE = "/tmp/test-workspace";
+      await useRealResolver("/tmp/test-workspace");
 
       await expect(cmdGet(["/etc/passwd"], {})).rejects.toThrow("process.exit(1)");
 
@@ -497,14 +578,14 @@ describe("CLI subcommands", () => {
 
     it("rejects mid-path .. escape with exit(1)", async () => {
       const { cmdGet } = await import("../../bin/mcp-doc-search.js");
-      process.env.DOC_SEARCH_WORKSPACE = "/tmp/test-workspace";
+      await useRealResolver("/tmp/test-workspace");
 
       await expect(cmdGet(["doc/../../etc/passwd"], {})).rejects.toThrow("process.exit(1)");
     });
 
     it("error message does not include the workspace absolute path", async () => {
       const { cmdGet } = await import("../../bin/mcp-doc-search.js");
-      process.env.DOC_SEARCH_WORKSPACE = "/secret/customer/workspace";
+      await useRealResolver("/secret/customer/workspace");
 
       await expect(cmdGet(["../etc/passwd"], {})).rejects.toThrow();
 
@@ -513,10 +594,81 @@ describe("CLI subcommands", () => {
     });
   });
 
+  describe("get / multi-get of external-root refs", () => {
+    let ws: string;
+    let root: string;
+    let ROOTS: ExtraRoot[];
+
+    beforeEach(async () => {
+      ws = realpathSync(mkdtempSync(path.join(os.tmpdir(), "cli-ws-")));
+      root = realpathSync(mkdtempSync(path.join(os.tmpdir(), "cli-root-")));
+      mkdirSync(path.join(ws, "doc"));
+      writeFileSync(path.join(ws, "doc", "a.md"), "# Workspace\n");
+      writeFileSync(path.join(ws, "secret.md"), "workspace-only secret\n");
+      mkdirSync(path.join(root, "guide"));
+      writeFileSync(path.join(root, "guide", "setup.md"), "# Setup\n\nExternal content.\n");
+      ROOTS = [{ name: "notes", path: root, glob: "**/*.md" }];
+      await useRealResolver(ws, ROOTS);
+    });
+
+    afterEach(() => {
+      rmSync(ws, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
+    });
+
+    const stdout = (): string => stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+    const stderr = (): string => stderrSpy.mock.calls.map((c) => String(c[0])).join("");
+
+    it("get returns the content of an ext:// ref under a configured root", async () => {
+      const { cmdGet } = await import("../../bin/mcp-doc-search.js");
+      // 0.8.3 resolved this as a workspace path: "File not found".
+      await cmdGet(["ext://notes/guide/setup.md"], {});
+      expect(stdout()).toContain("External content.");
+    });
+
+    it("get names the fix for a root the CLI was not given", async () => {
+      const { cmdGet } = await import("../../bin/mcp-doc-search.js");
+      await expect(cmdGet(["ext://other/guide/setup.md"], {})).rejects.toThrow("process.exit(1)");
+      expect(stderr()).toContain("Unknown external root: other");
+      expect(stderr()).toContain("DOC_SEARCH_EXTRA_ROOTS");
+      expect(stderr()).toContain("DOC_SEARCH_TRUST_WORKSPACE_SETTINGS=1");
+    });
+
+    it("get refuses a .. traversal out of the root", async () => {
+      const { cmdGet } = await import("../../bin/mcp-doc-search.js");
+      await expect(cmdGet([`ext://notes/../${path.basename(ws)}/secret.md`], {})).rejects.toThrow(
+        "process.exit(1)",
+      );
+      expect(stderr()).toMatch(/Path traversal blocked/);
+      expect(stdout()).not.toContain("workspace-only secret");
+    });
+
+    it("get refuses a symlink under the root that leads outside it", async () => {
+      const { cmdGet } = await import("../../bin/mcp-doc-search.js");
+      try {
+        symlinkSync(path.join(ws, "secret.md"), path.join(root, "link.md"));
+      } catch {
+        return; // symlinks unavailable — skip
+      }
+      await expect(cmdGet(["ext://notes/link.md"], {})).rejects.toThrow("process.exit(1)");
+      expect(stderr()).toMatch(/Path traversal blocked/);
+      expect(stdout()).not.toContain("workspace-only secret");
+    });
+
+    it("multi-get reads ext:// refs in a comma list alongside workspace paths", async () => {
+      const { cmdMultiGet } = await import("../../bin/mcp-doc-search.js");
+      await cmdMultiGet(["doc/a.md,ext://notes/guide/setup.md,ext://other/x.md"], { json: true });
+      const results = JSON.parse(stdout()) as Array<{ file: string; text: string; error?: string }>;
+      expect(results[0].text).toContain("# Workspace");
+      expect(results[1].text).toContain("External content.");
+      expect(results[2].error).toContain("Unknown external root: other");
+    });
+  });
+
   describe("multi-get path traversal", () => {
     it("reports a per-file traversal error in results for ../etc/passwd", async () => {
       const { cmdMultiGet } = await import("../../bin/mcp-doc-search.js");
-      process.env.DOC_SEARCH_WORKSPACE = "/tmp/test-workspace";
+      await useRealResolver("/tmp/test-workspace");
 
       // Comma-separated list bypasses the glob branch and goes straight to per-rel
       // resolution. Include a real-looking ref alongside the traversal attempt so the

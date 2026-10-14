@@ -412,6 +412,37 @@ describe("MCP Tools", () => {
       expect(desc).toContain("150");
     });
 
+    it("names the external roots the server was not given, with the fix, in three descriptions", async () => {
+      mockIndexer.getStatus.mockResolvedValue({ ...baseStatus, unconfiguredRoots: ["notes"] });
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+
+      const tools = await getTools(mockServer);
+      for (const name of ["search_docs", "list_docs", "reindex_docs"]) {
+        const desc = tools.find((t) => t.name === name)!.description;
+        expect(desc).toContain("ext://notes/");
+        expect(desc).toContain("DOC_SEARCH_EXTRA_ROOTS");
+        expect(desc).toContain("DOC_SEARCH_TRUST_WORKSPACE_SETTINGS=1");
+      }
+      // Not stale: the reader's status excludes those keys from deletedFiles.
+      expect(tools.find((t) => t.name === "list_docs")!.description).not.toContain("stale");
+    });
+
+    it("adds no unconfigured-roots line when every root is configured", async () => {
+      mockIndexer.getStatus.mockResolvedValue({ ...baseStatus, unconfiguredRoots: [] });
+      registerTools(mockServer, {
+        store: mockStore,
+        indexer: mockIndexer,
+        embedProvider: mockEmbedProvider,
+      });
+
+      const tools = await getTools(mockServer);
+      for (const t of tools) expect(t.description).not.toContain("was not given");
+    });
+
     it("search_docs description falls back to empty-index message when totalFiles === 0", async () => {
       mockIndexer.getStatus.mockResolvedValue({ ...baseStatus, totalFiles: 0 });
 

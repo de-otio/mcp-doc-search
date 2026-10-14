@@ -58,6 +58,10 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         // Without this, the reindex command / status panel scan the workspace
         // only — and a reindex would PRUNE every ext:// entry from the index.
         extraRoots: parseExtraRoots(freshConfig.extraRoots).roots,
+        // The extension owns docSearch.extraRoots: a root the user removed
+        // from the setting is dropped here. Readers (MCP server, CLI) keep
+        // entries of roots they were not given instead.
+        ownsRootConfig: true,
       },
       freshEmbedProvider,
     );
