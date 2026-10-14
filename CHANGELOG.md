@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-10-14
+
+### Fixed
+
+- **A reindex no longer deletes the external roots it was not given.** The
+  extension (the writer) reads `docSearch.extraRoots` from VS Code; the MCP
+  server and CLI (the readers) take roots from `DOC_SEARCH_EXTRA_ROOTS` only,
+  unless `DOC_SEARCH_TRUST_WORKSPACE_SETTINGS=1`. A reader started without them
+  pruned every `ext://` entry on its next `reindex_docs` or `reindex`, because a
+  key under a root it did not know looked like a deleted file. Entries under a
+  root the running process is not configured with are now kept, with a warning
+  naming both env vars, and reported as `unconfiguredRoots` in the reindex
+  result. Files deleted under a configured root are still pruned, and a
+  configured root whose directory is missing still keeps its entries, as before.
+- **Removing a root is now explicit.** The extension owns the setting, so a root
+  removed from `docSearch.extraRoots` is dropped on its next reindex (activation
+  catches it up). Elsewhere, `mcp-doc-search reindex --drop-root <name>`
+  (repeatable) removes a root's entries; the `reindex_docs` MCP tool never does.
+  The roots an index covers are recorded in `index-meta.json` (`extraRoots`) and
+  shown by `mcp-doc-search status`.
+- **A reader without the roots no longer reports the index stale forever.**
+  `needsReindex` ignores keys under roots the process was not given; `status`
+  lists them as `unconfigured`, and the `search_docs` / `list_docs` /
+  `reindex_docs` descriptions name them with the fix.
+- **`Unknown external root` says what to do.** The `get` / `multi_get` error now
+  states that the server was not given that root and names the fix:
+  `DOC_SEARCH_EXTRA_ROOTS`, or `DOC_SEARCH_TRUST_WORKSPACE_SETTINGS=1` for a
+  workspace whose settings you wrote yourself.
+- **The extension keeps `DOC_SEARCH_EXTRA_ROOTS` in `.mcp.json` current.** The
+  activation repair added in 0.8.3 reconciled only the provider keys. It now also
+  keeps an existing `DOC_SEARCH_EXTRA_ROOTS` equal to the setting (removing it
+  when the setting is empty), and adds it when the setting has roots — except to
+  an entry that sets `DOC_SEARCH_TRUST_WORKSPACE_SETTINGS=1`, which reads the
+  setting itself.
+- **The CLI's `get` and `multi-get` resolve `ext://` refs and docids.** They
+  resolved every ref as a workspace path, so `get ext://<root>/<path>` failed
+  with "File not found" even for a configured root. They now use the same
+  resolution as the MCP `get` tool — `#docid`, bare docid and `ext://` refs,
+  re-contained against the root's real path, `..` and symlink escapes refused,
+  and the same `Unknown external root` diagnostic. A `multi-get` glob still
+  matches workspace files only; pass external refs as a comma list.
+
 ## [0.8.3] - 2026-09-17
 
 ### Fixed

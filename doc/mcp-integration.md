@@ -135,6 +135,22 @@ It will call the `search_docs` tool and return matching documentation sections.
   `.mcp.json` so the current settings are written into `env`, or set
   `DOC_SEARCH_TRUST_WORKSPACE_SETTINGS=1` for a workspace whose settings you
   wrote yourself. See [Trust model](configuration.md#trust-model).
+- Opening the workspace in VS Code repairs the provider keys and
+  `DOC_SEARCH_EXTRA_ROOTS` in an existing `.mcp.json` automatically; reload the
+  window afterwards so the client restarts the server.
+
+**`get` fails with `Unknown external root: <name>`**
+
+- The index holds files under `ext://<name>/`, indexed by a process that had
+  that root (usually the VS Code extension), but this server was not given it.
+  The `search_docs` / `list_docs` / `reindex_docs` descriptions name such roots,
+  and `mcp-doc-search status` lists them as `unconfigured`.
+- Fix: add `DOC_SEARCH_EXTRA_ROOTS` to the server's `env` (regenerate
+  `.mcp.json`, or open the workspace in VS Code, which adds it), or set
+  `DOC_SEARCH_TRUST_WORKSPACE_SETTINGS=1` for a workspace whose
+  `.vscode/settings.json` you wrote yourself. Then restart the server.
+- Reindexing from this server does **not** fix it: the entries are kept, not
+  refreshed. (Before 0.8.4 a reindex here deleted them.)
 
 ## Manual setup (without the extension command)
 
@@ -268,6 +284,17 @@ Trigger a documentation reindex.
 - `skipped` — number of unchanged files skipped
 - `totalChunks` — total chunks in the index
 - `durationMs` — time taken in milliseconds
+- `pruned` — files removed from the index (deleted, renamed, excluded)
+- `unconfiguredRoots` — external roots the index holds that this server was
+  not given; present only when there are any
+
+**External roots:** a reindex prunes deleted files under the roots the server
+was given, but **keeps** every entry under a root it was not given — it cannot
+tell a removed root from one it was simply not told about. Those entries are
+not refreshed, and `get` cannot read them until the server is given the root
+(see [Troubleshooting](#troubleshooting)). The tool never removes a root; that
+is done by removing it from `docSearch.extraRoots` (the extension drops it on
+its next reindex) or with `mcp-doc-search reindex --drop-root <name>`.
 
 ## Environment Variables
 
@@ -275,19 +302,19 @@ The MCP server is configured via the `env` block in `.mcp.json`. The **Generate 
 
 External roots and the embedding provider are **env-only**: the server does not read them from the workspace's `.vscode/settings.json` unless `DOC_SEARCH_TRUST_WORKSPACE_SETTINGS=1` is set, and an env value always wins over a settings.json value. See [Trust model](configuration.md#trust-model).
 
-| Variable                              | Default             | Description                                                                                 |
-| ------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------- |
-| `DOC_SEARCH_WORKSPACE`                | `process.cwd()`     | Absolute path to workspace root, or `${CLAUDE_PROJECT_DIR}` for Claude Code                 |
-| `DOC_SEARCH_GLOB`                     | `doc/**/*.md`       | File glob pattern                                                                           |
-| `DOC_SEARCH_EXTRA_ROOTS`              | —                   | JSON array of external roots (same shape as `docSearch.extraRoots`)                         |
-| `DOC_SEARCH_TRUST_WORKSPACE_SETTINGS` | —                   | `1` to also read the env-only keys from `.vscode/settings.json` (Ollama URL: loopback only) |
-| `DOC_SEARCH_HOME`                     | `~/.doc-search`     | Base directory for the global index (absolute path)                                         |
-| `DOC_SEARCH_INDEX_LOCATION`           | `global`            | Index location mode: `global` or `workspace` (deprecated)                                   |
-| `DOC_SEARCH_INDEX_DIR`                | `.doc-search-index` | Deprecated: workspace-mode index directory; ignored in global mode                          |
-| `USE_OPENAI`                          | `0`                 | Set to `1` to use OpenAI embeddings                                                         |
-| `OPENAI_API_KEY`                      | —                   | Required if `USE_OPENAI=1`; write it as `${OPENAI_API_KEY}` and export it in your shell     |
-| `OLLAMA_URL`                          | —                   | Ollama server URL (presence enables Ollama provider)                                        |
-| `OLLAMA_MODEL`                        | `nomic-embed-text`  | Ollama model name                                                                           |
+| Variable                              | Default             | Description                                                                                                                                                                                    |
+| ------------------------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DOC_SEARCH_WORKSPACE`                | `process.cwd()`     | Absolute path to workspace root, or `${CLAUDE_PROJECT_DIR}` for Claude Code                                                                                                                    |
+| `DOC_SEARCH_GLOB`                     | `doc/**/*.md`       | File glob pattern                                                                                                                                                                              |
+| `DOC_SEARCH_EXTRA_ROOTS`              | —                   | JSON array of external roots (same shape as `docSearch.extraRoots`). Without it the server cannot `get` the roots the extension indexed, and keeps (does not refresh) their entries on reindex |
+| `DOC_SEARCH_TRUST_WORKSPACE_SETTINGS` | —                   | `1` to also read the env-only keys from `.vscode/settings.json` (Ollama URL: loopback only). Recommended for workspaces whose settings you wrote yourself                                      |
+| `DOC_SEARCH_HOME`                     | `~/.doc-search`     | Base directory for the global index (absolute path)                                                                                                                                            |
+| `DOC_SEARCH_INDEX_LOCATION`           | `global`            | Index location mode: `global` or `workspace` (deprecated)                                                                                                                                      |
+| `DOC_SEARCH_INDEX_DIR`                | `.doc-search-index` | Deprecated: workspace-mode index directory; ignored in global mode                                                                                                                             |
+| `USE_OPENAI`                          | `0`                 | Set to `1` to use OpenAI embeddings                                                                                                                                                            |
+| `OPENAI_API_KEY`                      | —                   | Required if `USE_OPENAI=1`; write it as `${OPENAI_API_KEY}` and export it in your shell                                                                                                        |
+| `OLLAMA_URL`                          | —                   | Ollama server URL (presence enables Ollama provider)                                                                                                                                           |
+| `OLLAMA_MODEL`                        | `nomic-embed-text`  | Ollama model name                                                                                                                                                                              |
 
 ## Shared Index
 

@@ -39,6 +39,30 @@ export const PROVIDER_ENV_KEYS = [
   "DOC_SEARCH_LOCAL_MODEL",
 ] as const;
 
+/** Env key carrying the external roots to the server, as a JSON array. */
+export const EXTRA_ROOTS_ENV_KEY = "DOC_SEARCH_EXTRA_ROOTS";
+
+/**
+ * Env key that lets the server read the trust-sensitive keys (extraRoots among
+ * them) from `.vscode/settings.json` itself. An entry that sets it to `1` gets
+ * its roots from there, so the repair does not add {@link EXTRA_ROOTS_ENV_KEY}.
+ */
+export const TRUST_WORKSPACE_SETTINGS_ENV_KEY = "DOC_SEARCH_TRUST_WORKSPACE_SETTINGS";
+
+/**
+ * The {@link EXTRA_ROOTS_ENV_KEY} value for a raw `docSearch.extraRoots`
+ * setting, or undefined when the setting holds no roots.
+ *
+ * The server validates the entries itself (parseExtraRoots), exactly as the
+ * extension does, so the raw setting is forwarded rather than a normalised
+ * copy — `~` stays `~`, which keeps the file portable.
+ */
+export function extraRootsEnvValue(extraRoots: unknown): string | undefined {
+  return Array.isArray(extraRoots) && extraRoots.length > 0
+    ? JSON.stringify(extraRoots)
+    : undefined;
+}
+
 /**
  * Env-variable reference for the OpenAI key. Emitted verbatim: the key
  * itself is never written to `.mcp.json`. Claude Code expands `${VAR}`
@@ -69,12 +93,8 @@ export function buildMcpServerEnv(config: McpEnvConfig, workspace: string): Reco
     DOC_SEARCH_GLOB: config.docGlob,
   };
 
-  // The server validates the entries itself (parseExtraRoots), exactly as
-  // the extension does, so the raw setting is forwarded rather than a
-  // normalised copy — `~` stays `~`, which keeps the file portable.
-  if (Array.isArray(config.extraRoots) && config.extraRoots.length > 0) {
-    env.DOC_SEARCH_EXTRA_ROOTS = JSON.stringify(config.extraRoots);
-  }
+  const extraRoots = extraRootsEnvValue(config.extraRoots);
+  if (extraRoots !== undefined) env[EXTRA_ROOTS_ENV_KEY] = extraRoots;
 
   return { ...env, ...buildProviderEnv(config) };
 }

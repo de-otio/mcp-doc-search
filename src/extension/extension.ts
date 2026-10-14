@@ -70,11 +70,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // server on a different embedder — which since 0.8.2 means a second index,
   // and before it meant the two ends rebuilding over each other. Nobody should
   // have to hand-edit that file after an upgrade or a settings change.
-  const repaired = repairMcpJson(workspaceRoot, expectedMcpServer, buildProviderEnv(config));
+  //
+  // The same holds for extraRoots: a server without them cannot `get` an
+  // ext:// ref and reports the index stale, so DOC_SEARCH_EXTRA_ROOTS is
+  // reconciled with the setting as well (see repairMcpServerEnv).
+  const repaired = repairMcpJson(
+    workspaceRoot,
+    expectedMcpServer,
+    buildProviderEnv(config),
+    config.extraRoots,
+  );
   if (repaired) {
     const what = [
       repaired.serverPath ? "the stable server path (~/.doc-search/bin)" : undefined,
       repaired.providerEnv ? `the ${config.embedProvider} embedding settings` : undefined,
+      repaired.extraRootsEnv ? "the docSearch.extraRoots setting" : undefined,
     ]
       .filter(Boolean)
       .join(" and ");
@@ -102,6 +112,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       maxChunkChars: config.maxChunkChars,
       headingDepth: config.headingDepth,
       extraRoots,
+      // The extension owns docSearch.extraRoots, so a root removed from the
+      // setting is dropped on the next reindex (see IndexerConfig).
+      ownsRootConfig: true,
     },
     embedProvider,
   );

@@ -84,6 +84,19 @@ This composes with federation: one subagent sweep can cover every
   writes the current setting into `env`) or, for a workspace whose settings
   you wrote yourself, set `DOC_SEARCH_TRUST_WORKSPACE_SETTINGS=1`. See
   [Trust model](configuration.md#trust-model).
+- **How to tell the server lacks roots.** The `search_docs`, `list_docs` and
+  `reindex_docs` descriptions carry a line beginning _"This server was not
+  given the external root(s) ext://<name>/"_ when the index holds roots the
+  server was not configured with; `get` on such a ref fails with
+  `Unknown external root: <name>. This server was not given that root…`; and
+  `reindex_docs` returns them in `unconfiguredRoots`. Search hits under those
+  roots still appear, but cannot be fetched.
+- **Do not reindex to "fix" that.** A reindex from a server without the roots
+  neither restores nor refreshes them (since 0.8.4 it keeps them; before, it
+  deleted them). The fix is configuration — tell the human to add
+  `DOC_SEARCH_EXTRA_ROOTS` to the server's `env` (or open the workspace in
+  VS Code, which repairs `.mcp.json`) and restart the session. Never pass
+  `--drop-root` on the user's behalf: it deletes that root's entries.
 - The index is centralized under `~/.doc-search/indexes/<workspace-key>`
   (see [configuration](configuration.md)); the in-tree
   `.doc-search-index/` layout is deprecated.

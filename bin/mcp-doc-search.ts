@@ -6,7 +6,7 @@
  * Usage:
  *   mcp-doc-search search <query> [--n N] [--json] [--files] [--min-score N] [--explain]
  *   mcp-doc-search list [--json]
- *   mcp-doc-search reindex [--force] [--json]
+ *   mcp-doc-search reindex [--force] [--drop-root <name>]... [--json]
  *   mcp-doc-search get <ref> [--from-line N] [--max-lines N] [--max-bytes N] [--json]
  *   mcp-doc-search multi-get <pattern> [--from-line N] [--max-lines N] [--max-bytes N] [--json] [--files]
  *   mcp-doc-search status [--json]
@@ -15,11 +15,12 @@
  *   mcp-doc-search context remove <path>
  */
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { createEngineFromEnv } from "../src/mcp/config.js";
+import type { EngineDeps } from "../src/mcp/config.js";
 import { search } from "../src/core/searcher.js";
-import { PathTraversalError, resolveSafePath } from "../src/core/safePath.js";
+import { assertRealpathWithin, PathTraversalError } from "../src/core/safePath.js";
 
 // ---------------------------------------------------------------------------
 // Minimal hand-rolled arg parser
@@ -29,11 +30,17 @@ interface ParsedArgs {
   subcommand: string;
   positionals: string[];
   flags: Record<string, string | boolean>;
+  /** Values of repeatable flags (see REPEATABLE_FLAGS), in argv order. */
+  repeated: Record<string, string[]>;
 }
+
+/** Flags that take a value and may be given more than once. */
+const REPEATABLE_FLAGS = ["drop-root"];
 
 export function parseArgs(argv: string[]): ParsedArgs {
   const positionals: string[] = [];
   const flags: Record<string, string | boolean> = {};
+  const repeated: Record<string, string[]> = {};
 
   let i = 0;
   while (i < argv.length) {
@@ -41,6 +48,14 @@ export function parseArgs(argv: string[]): ParsedArgs {
     if (arg.startsWith("--")) {
       const key = arg.slice(2);
       const next = argv[i + 1];
+      if (REPEATABLE_FLAGS.includes(key)) {
+        if (next === undefined || next.startsWith("--")) {
+          throw new Error(`--${key} requires a value`);
+        }
+        (repeated[key] ??= []).push(next);
+        i += 2;
+        continue;
+      }
       if (next !== undefined && !next.startsWith("--")) {
         // check if it looks like a value (next arg exists and isn't a flag)
         const numeric = Number(next);
@@ -69,7 +84,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   }
 
   const subcommand = positionals[0] ?? "";
-  return { subcommand, positionals: positionals.slice(1), flags };
+  return { subcommand, positionals: positionals.slice(1), flags, repeated };
 }
 
 function getFlag<T extends string | boolean | number>(
@@ -116,15 +131,20 @@ SUBCOMMANDS
 
   reindex                Rebuild the search index
     --force              Re-embed all files (not just changed)
+    --drop-root <name>   Remove the index entries of external root <name>
+                         (repeatable). Entries under a root this process is
+                         not configured with are otherwise kept.
     --json               Emit JSON
 
-  get <ref>              Read a file from the workspace
+  get <ref>              Read a file: a workspace path, #docid, or
+                         ext://<root>/<path> under a configured root
     --from-line N        Start at this line (0-based)
     --max-lines N        Return at most N lines
     --max-bytes N        Truncate output to N bytes
     --json               Emit JSON
 
-  multi-get <pattern>    Read multiple files matching a glob or comma list
+  multi-get <pattern>    Read multiple files: a workspace glob, or a comma
+                         list of refs (as for get)
     --from-line N        Start line (applied to each file)
     --max-lines N        Max lines per file
     --max-bytes N        Max bytes per file
@@ -151,6 +171,10 @@ ENVIRONMENT
   DOC_SEARCH_INDEX_DIR         Workspace-mode index directory (default: .doc-search-index)
   USE_OPENAI=1                 Use OpenAI embeddings
   OLLAMA_URL                   Use Ollama embeddings at this URL
+  DOC_SEARCH_EXTRA_ROOTS       External roots, as a JSON array of {name, path, glob?}
+  DOC_SEARCH_TRUST_WORKSPACE_SETTINGS=1
+                               Read extraRoots and the embedding provider from
+                               .vscode/settings.json (only for settings you wrote)
 `.trim() + "\n",
   );
 }
@@ -173,6 +197,28 @@ function readFilePortion(
     text = Buffer.from(text).slice(0, maxBytes).toString("utf8");
   }
   return text;
+}
+
+/**
+ * Resolve a ref exactly as the MCP `get` tool does: `Indexer.resolveRef`
+ * (workspace path, `#docid`, bare docid, or `ext://<root>/...` under a
+ * configured root, each re-contained against its root), then a realpath check
+ * so a symlink under the root cannot lead the read outside it. Returns the
+ * real path to read and the ref's index key, or a path-free error.
+ */
+export function resolveCliRef(
+  indexer: EngineDeps["indexer"],
+  ref: string,
+): { absPath: string; file: string } | { error: string } {
+  const resolved = indexer.resolveRef(ref);
+  if ("error" in resolved) return resolved;
+  try {
+    const real = assertRealpathWithin(indexer.rootForAbsPath(resolved.file), resolved.file);
+    return { absPath: real, file: indexer.keyForAbsPath(resolved.file) };
+  } catch (err) {
+    if (err instanceof PathTraversalError) return { error: err.message };
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -248,12 +294,15 @@ async function cmdList(flags: Record<string, string | boolean>): Promise<void> {
   }
 }
 
-async function cmdReindex(flags: Record<string, string | boolean>): Promise<void> {
+export async function cmdReindex(
+  flags: Record<string, string | boolean>,
+  dropRoots: string[] = [],
+): Promise<void> {
   const force = getFlag(flags, "force", false);
   const asJson = getFlag(flags, "json", false);
 
   const deps = await createEngineFromEnv();
-  const stats = await deps.indexer.reindex(force);
+  const stats = await deps.indexer.reindex(force, undefined, { dropRoots });
 
   if (asJson) {
     printJson({ status: "ok", ...stats });
@@ -266,6 +315,16 @@ async function cmdReindex(flags: Record<string, string | boolean>): Promise<void
   );
   if (stats.rebuiltReason) {
     process.stdout.write(`Rebuilt the whole index: ${stats.rebuiltReason}\n`);
+  }
+  if (stats.droppedRoots?.length) {
+    process.stdout.write(`Dropped external root(s): ${stats.droppedRoots.join(", ")}\n`);
+  }
+  if (stats.unconfiguredRoots?.length) {
+    process.stdout.write(
+      `Kept external root(s) this process is not configured with: ` +
+        `${stats.unconfiguredRoots.join(", ")} (set DOC_SEARCH_EXTRA_ROOTS to include them, ` +
+        `or --drop-root <name> to remove them)\n`,
+    );
   }
   if (stats.compacted) {
     const mb = (stats.compacted.bytesRemoved / 1e6).toFixed(1);
@@ -290,24 +349,14 @@ export async function cmdGet(
   const maxBytes = flags["max-bytes"] !== undefined ? getFlag(flags, "max-bytes", 0) : null;
   const asJson = getFlag(flags, "json", false);
 
-  const workspaceRoot = process.env.DOC_SEARCH_WORKSPACE ?? process.cwd();
-  let absPath: string;
-  try {
-    absPath = resolveSafePath(workspaceRoot, ref);
-  } catch (err) {
-    if (err instanceof PathTraversalError) {
-      printError(`${err.message}. Refs must be relative paths inside the workspace.`);
-      process.exit(1);
-    }
-    throw err;
-  }
-
-  if (!existsSync(absPath)) {
-    printError(`File not found: ${ref}`);
+  const { indexer } = await createEngineFromEnv();
+  const resolved = resolveCliRef(indexer, ref);
+  if ("error" in resolved) {
+    printError(resolved.error);
     process.exit(1);
   }
 
-  const text = readFilePortion(absPath, fromLine, maxLines, maxBytes);
+  const text = readFilePortion(resolved.absPath, fromLine, maxLines, maxBytes);
 
   if (asJson) {
     printJson({ file: ref, fromLine, text });
@@ -333,11 +382,13 @@ export async function cmdMultiGet(
   const asJson = getFlag(flags, "json", false);
   const filesOnly = getFlag(flags, "files", false);
 
-  const workspaceRoot = process.env.DOC_SEARCH_WORKSPACE ?? process.cwd();
+  const { indexer } = await createEngineFromEnv();
+  const workspaceRoot = indexer.getWorkspaceRoot();
 
-  // Support comma-separated list or glob
+  // Support comma-separated list or glob. A glob matches workspace files only;
+  // ext:// and #docid refs go in a comma list (or a single ref).
   let matchedFiles: string[] = [];
-  if (pattern.includes(",")) {
+  if (pattern.includes(",") || !/[*?[]/.test(pattern)) {
     matchedFiles = pattern
       .split(",")
       .map((p) => p.trim())
@@ -355,21 +406,12 @@ export async function cmdMultiGet(
 
   const results: Array<{ file: string; text: string; error?: string }> = [];
   for (const rel of matchedFiles) {
-    let absPath: string;
-    try {
-      absPath = resolveSafePath(workspaceRoot, rel);
-    } catch (err) {
-      if (err instanceof PathTraversalError) {
-        results.push({ file: rel, text: "", error: err.message });
-        continue;
-      }
-      throw err;
-    }
-    if (!existsSync(absPath)) {
-      results.push({ file: rel, text: "", error: "not found" });
+    const resolved = resolveCliRef(indexer, rel);
+    if ("error" in resolved) {
+      results.push({ file: rel, text: "", error: resolved.error });
       continue;
     }
-    const text = readFilePortion(absPath, fromLine, maxLines, maxBytes);
+    const text = readFilePortion(resolved.absPath, fromLine, maxLines, maxBytes);
     results.push({ file: rel, text });
   }
 
@@ -403,7 +445,8 @@ export async function cmdStatus(flags: Record<string, string | boolean>): Promis
     ? `schema:        v${meta.schemaVersion}\n` +
       `embedding:     ${meta.provider} / ${meta.model} (${meta.dim}-dim)\n` +
       `chunking:      maxChunkChars=${meta.maxChunkChars}, headingDepth=${meta.headingDepth}\n` +
-      `indexCreated:  ${meta.createdAt || "unknown"}\n`
+      `indexCreated:  ${meta.createdAt || "unknown"}\n` +
+      (meta.extraRoots ? `indexRoots:    ${meta.extraRoots.join(", ") || "none"}\n` : "")
     : `schema:        none recorded (empty or pre-0.8 index; the next reindex rebuilds it)\n`;
 
   process.stdout.write(
@@ -415,6 +458,11 @@ export async function cmdStatus(flags: Record<string, string | boolean>): Promis
       `newFiles:      ${status.newFiles}\n` +
       `deletedFiles:  ${status.deletedFiles}\n` +
       `docGlob:       ${status.docGlob}\n` +
+      `extraRoots:    ${status.extraRootNames?.length ? status.extraRootNames.join(", ") : "none"}\n` +
+      (status.unconfiguredRoots?.length
+        ? `unconfigured:  ${status.unconfiguredRoots.join(", ")} (in the index, not given to ` +
+          `this process; set DOC_SEARCH_EXTRA_ROOTS or DOC_SEARCH_TRUST_WORKSPACE_SETTINGS=1)\n`
+        : "") +
       `fts:           ${status.ftsIndex === undefined ? "unknown" : status.ftsIndex ? "present" : "missing"}\n` +
       `reindexLock:   ${
         status.reindexLock
@@ -496,8 +544,14 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  const parsed = parseArgs(argv);
-  const { subcommand, positionals, flags } = parsed;
+  let parsed: ParsedArgs;
+  try {
+    parsed = parseArgs(argv);
+  } catch (err) {
+    printError(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+  const { subcommand, positionals, flags, repeated } = parsed;
 
   try {
     switch (subcommand) {
@@ -508,7 +562,7 @@ async function main(): Promise<void> {
         await cmdList(flags);
         break;
       case "reindex":
-        await cmdReindex(flags);
+        await cmdReindex(flags, repeated["drop-root"] ?? []);
         break;
       case "get":
         await cmdGet(positionals, flags);
