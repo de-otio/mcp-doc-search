@@ -70,6 +70,11 @@ interface MtimeCache {
   [relPath: string]: string | MtimeCacheEntry;
 }
 
+/** Let pending I/O and timers run; one macrotask turn. */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise<void>((resolve) => setImmediate(resolve));
+}
+
 /** Normalize a cache entry to the new object format. */
 function normalizeCacheEntry(entry: string | MtimeCacheEntry): MtimeCacheEntry {
   if (typeof entry === "string") {
@@ -330,6 +335,8 @@ export class Indexer {
 
   /** Below this many files to index, skip the preflight probe (see reindex). */
   private static readonly MIN_FILES_FOR_PREFLIGHT = 5;
+  /** Unchanged files stat'ed between event-loop yields (processed files always yield). */
+  private static readonly SKIP_YIELD_EVERY = 200;
   /** Persist the mtime cache after this many indexed files (crash resumability). */
   private static readonly CACHE_CHECKPOINT_FILES = 25;
 
@@ -691,6 +698,12 @@ export class Indexer {
 
     // Index-based loop so a rebuild discovered mid-run (see the dimension
     // check below) can restart from the first file.
+    //
+    // The loop hands the event loop back once per processed file, and once per
+    // SKIP_YIELD_EVERY unchanged files, so a long run cannot hold the thread
+    // for the whole scan. That matters most inside the VS Code extension host,
+    // where the indexer shares a thread with every other extension (#117).
+    let skippedSinceYield = 0;
     for (let i = 0; i < entries.length; i++) {
       const { absPath: filePath, key: rel } = entries[i];
       const mtime = String(statSync(filePath).mtimeMs);
@@ -699,8 +712,14 @@ export class Indexer {
       if (!force && rebuiltReason === undefined && existingEntry?.mtime === mtime) {
         skipped++;
         newCache[rel] = existingEntry;
+        if (++skippedSinceYield >= Indexer.SKIP_YIELD_EVERY) {
+          skippedSinceYield = 0;
+          await yieldToEventLoop();
+        }
         continue;
       }
+
+      await yieldToEventLoop();
 
       const chunks = chunkMarkdown(
         filePath,

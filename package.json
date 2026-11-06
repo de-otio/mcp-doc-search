@@ -38,8 +38,7 @@
     "Other"
   ],
   "activationEvents": [
-    "onStartupFinished",
-    "workspaceContains:**/*.md"
+    "onStartupFinished"
   ],
   "main": "./dist/extension.js",
   "bin": {

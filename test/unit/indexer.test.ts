@@ -504,6 +504,77 @@ describe("Indexer", () => {
       errorSpy.mockRestore();
     });
 
+    describe("event-loop yielding (#117)", () => {
+      /**
+       * Count event-loop turns while `run` executes. A macrotask ticker only
+       * advances when the loop is handed back, so a run that never yields sees
+       * 0 ticks no matter how many files it processes: every await in these
+       * tests (mocked fs/glob/store/embedder) resolves as a microtask.
+       */
+      async function countLoopTurns(run: () => Promise<unknown>): Promise<number> {
+        let ticks = 0;
+        let running = true;
+        const tick = (): void => {
+          ticks++;
+          if (running) setImmediate(tick);
+        };
+        setImmediate(tick);
+        try {
+          await run();
+        } finally {
+          running = false;
+        }
+        return ticks;
+      }
+
+      beforeEach(() => {
+        mockEmbedProvider.embed.mockResolvedValue([[0.1, 0.2]]);
+      });
+
+      it("lets the event loop run between processed files", async () => {
+        await setupFiles(5);
+        const indexer = new Indexer(config, mockStore as any);
+        vi.spyOn(indexer as any, "saveMtimeCache").mockImplementation(() => {});
+        vi.spyOn(indexer as any, "saveIndexMeta").mockImplementation(() => {});
+
+        const turns = await countLoopTurns(() => indexer.reindex(true));
+
+        // One yield per processed file; the ticker gets a turn in each.
+        expect(turns).toBeGreaterThanOrEqual(5);
+      });
+
+      it("also yields while scanning a large unchanged corpus", async () => {
+        const count = 450;
+        await setupFiles(count);
+        const indexer = new Indexer(config, mockStore as any);
+        vi.spyOn(indexer as any, "loadIndexMeta").mockReturnValue({
+          schemaVersion: 2,
+          provider: "local",
+          model: "m",
+          dim: 2,
+          maxChunkChars: 4000,
+          headingDepth: 2,
+          createdAt: "2026-09-12T00:00:00.000Z",
+        });
+        mockEmbedProvider.identity = vi.fn(() => ({ provider: "local", model: "m", dim: 2 }));
+        const cache: Record<string, { mtime: string; docid: string }> = {};
+        for (let i = 0; i < count; i++) cache[`doc/file${i}.md`] = { mtime: "1000", docid: "d" };
+        vi.spyOn(indexer as any, "loadMtimeCache").mockReturnValue(cache);
+        vi.spyOn(indexer as any, "saveMtimeCache").mockImplementation(() => {});
+
+        let stats: Awaited<ReturnType<Indexer["reindex"]>> | undefined;
+        const turns = await countLoopTurns(async () => {
+          stats = await indexer.reindex(false);
+        });
+
+        expect(stats?.skipped).toBe(count);
+        expect(mockEmbedProvider.embed).not.toHaveBeenCalled();
+        // 450 skipped files, one yield per 200: two yields (no yield per skip).
+        expect(turns).toBeGreaterThanOrEqual(2);
+        expect(turns).toBeLessThan(count / 10);
+      });
+    });
+
     describe("index metadata", () => {
       const matchingMeta = {
         schemaVersion: 2,
