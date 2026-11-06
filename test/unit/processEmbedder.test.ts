@@ -77,6 +77,28 @@ describe("ProcessEmbedder", () => {
     for (const e of live.splice(0)) e.dispose();
   });
 
+  describe("batching", () => {
+    it("sends one request per LocalEmbedder batch and keeps vector order", async () => {
+      const batchSizes: number[] = [];
+      const h = track(harness(["echo.cjs"]));
+      h.fork.mockImplementation((_p, args, options) => {
+        const child = nodeFork(fixture("echo.cjs"), args, options);
+        const send = child.send.bind(child) as (msg: unknown, cb?: unknown) => boolean;
+        child.send = ((msg: { op: string; texts?: string[] }, cb?: unknown) => {
+          if (msg.op === "embed") batchSizes.push(msg.texts!.length);
+          return send(msg, cb);
+        }) as typeof child.send;
+        h.children.push(child);
+        return child;
+      });
+      const n = LocalEmbedder.BATCH_SIZE * 2 + 5;
+      const texts = Array.from({ length: n }, (_, i) => "x".repeat(i + 1));
+      const vectors = await h.embedder.embed(texts);
+      expect(batchSizes).toEqual([LocalEmbedder.BATCH_SIZE, LocalEmbedder.BATCH_SIZE, 5]);
+      expect(vectors.map((v) => v[0])).toEqual(texts.map((t) => t.length));
+    });
+  });
+
   describe("identity", () => {
     it.each([undefined, "", "Xenova/multilingual-e5-small", "nomic-ai/nomic-embed-text-v1.5"])(
       "matches LocalEmbedder for model %j without spawning",

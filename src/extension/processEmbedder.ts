@@ -14,7 +14,7 @@
  */
 
 import { fork as nodeFork, type ChildProcess, type ForkOptions } from "node:child_process";
-import { EmbedError } from "../core/embedder.js";
+import { EmbedError, LocalEmbedder } from "../core/embedder.js";
 import { resolveLocalModel, type LocalModelSpec } from "../core/localModels.js";
 import type { EmbedIdentity, EmbedProvider, HealthResult } from "../core/types.js";
 import { WORKER_ENV_FLAG, type WorkerReply, type WorkerRequest } from "./embedWorker.js";
@@ -104,13 +104,23 @@ export class ProcessEmbedder implements EmbedProvider {
     return { provider: "local", model: this.spec.id, dim: this.spec.dim };
   }
 
+  /**
+   * One request per LocalEmbedder batch, so the request timeout bounds a single
+   * model call rather than a whole file: the indexer embeds every chunk of a
+   * file at once, and a large file on a large model can legitimately take
+   * longer than one timeout in total.
+   */
   async embed(texts: string[], prefix = ""): Promise<number[][]> {
-    if (texts.length === 0) return [];
-    const reply = await this.request({ op: "embed", texts, prefix });
-    if (!("vectors" in reply)) {
-      throw new EmbedError("Embedding worker sent a malformed reply", "runner-load-failed");
+    const results: number[][] = [];
+    for (let i = 0; i < texts.length; i += LocalEmbedder.BATCH_SIZE) {
+      const batch = texts.slice(i, i + LocalEmbedder.BATCH_SIZE);
+      const reply = await this.request({ op: "embed", texts: batch, prefix });
+      if (!("vectors" in reply) || reply.vectors.length !== batch.length) {
+        throw new EmbedError("Embedding worker sent a malformed reply", "runner-load-failed");
+      }
+      results.push(...reply.vectors);
     }
-    return reply.vectors;
+    return results;
   }
 
   async healthCheck(): Promise<HealthResult> {
