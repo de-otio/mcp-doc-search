@@ -16,6 +16,7 @@ import {
 } from "../core/indexLocation.js";
 import { repairMcpJson } from "./mcpJson.js";
 import { buildProviderEnv } from "./mcpEnv.js";
+import { decideCatchUp, unfinishedRunsKey } from "./catchUpGuard.js";
 import { writeStableLaunchers } from "./stableBin.js";
 import { registerMcpServerDefinitionProvider } from "./mcpProvider.js";
 import * as path from "node:path";
@@ -150,13 +151,38 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           `Doc Search: removed stale reindex lock (pid ${stale.pid}, started ${stale.startedAt}, ${stale.staleReason})`,
         );
       }
-      if (!config.autoReindex) return;
-      const status = await indexer.getStatus();
-      if (!status.needsReindex) return;
+      // Crash-loop guard (#117): a lock left by a dead process means the last
+      // run never finished. After repeated unfinished runs, do not restart
+      // straight into the same work — see decideCatchUp.
+      const countKey = unfinishedRunsKey(workspaceRoot);
+      const storedCount = context.globalState.get<number>(countKey, 0);
+      const setCount = async (value: number): Promise<void> => {
+        if (value !== context.globalState.get<number>(countKey, 0)) {
+          await context.globalState.update(countKey, value);
+        }
+      };
+      // Only checked when it will be used: getStatus walks the whole corpus.
+      const needsReindex = config.autoReindex ? (await indexer.getStatus()).needsReindex : false;
+      const decision = decideCatchUp({
+        staleCleared: !!stale,
+        count: storedCount,
+        autoReindex: config.autoReindex,
+        needsReindex,
+      });
+      // Persist before running so a crash mid-run keeps the increment.
+      await setCount(decision.nextCount);
+
+      if (decision.warn) {
+        // Not awaited: the prompt stays open for as long as the user likes.
+        void offerManualReindex(indexer, () => setCount(0));
+      }
+      if (!decision.run) return;
+
       statusBar.setIndexing();
       try {
         await indexer.reindex(false);
         statusBar.setReady();
+        await setCount(0);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         statusBar.setError(`Catch-up reindex failed: ${msg}`);
@@ -167,6 +193,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         `Doc Search: Failed to open index — ${err instanceof Error ? err.message : String(err)}`,
       );
     });
+}
+
+/**
+ * Tell the user automatic indexing is paused and offer to run it by hand.
+ * `resetCount` runs only once the index is seen to be up to date afterwards,
+ * so a manual run that fails (or crashes the host) leaves the guard armed.
+ * There is no "Show log" action: the extension has no output channel.
+ */
+async function offerManualReindex(
+  indexer: Indexer,
+  resetCount: () => Promise<void>,
+): Promise<void> {
+  const choice = await vscode.window.showWarningMessage(
+    "Doc Search: the last indexing runs did not finish, so automatic indexing is paused for this window.",
+    "Reindex now",
+  );
+  if (choice !== "Reindex now") return;
+  // forceArg=false skips the mode picker; the command reports its own errors.
+  try {
+    await vscode.commands.executeCommand("docSearch.reindex", false);
+    if (!(await indexer.getStatus()).needsReindex) await resetCount();
+  } catch {
+    // Command or status failed: leave the counter; the next successful run resets it.
+  }
 }
 
 export function deactivate(): void {}
