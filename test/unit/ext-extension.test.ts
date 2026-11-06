@@ -26,6 +26,26 @@ vi.mock("../../src/extension/stableBin.js", () => ({
   writeStableLaunchers: vi.fn(() => "/mock-home/.doc-search/bin/mcp-server.js"),
 }));
 
+/** In-memory stand-in for ExtensionContext.globalState. */
+function makeGlobalState(initial: Record<string, unknown> = {}) {
+  const data = new Map<string, unknown>(Object.entries(initial));
+  return {
+    data,
+    get: vi.fn((key: string, fallback?: unknown) => (data.has(key) ? data.get(key) : fallback)),
+    update: vi.fn(async (key: string, value: unknown) => {
+      data.set(key, value);
+    }),
+  };
+}
+
+const STALE_LOCK = {
+  pid: 56457,
+  startedAt: "2026-09-13T06:14:05.451Z",
+  heartbeatAt: new Date("2026-09-13T06:53:38.000Z"),
+  stale: true,
+  staleReason: "holder-dead",
+};
+
 describe("Extension", () => {
   let mockContext: any;
 
@@ -39,6 +59,7 @@ describe("Extension", () => {
       },
       subscriptions: [],
       extensionPath: "/mock/extension",
+      globalState: makeGlobalState(),
     };
 
     (vscode.workspace as any).workspaceFolders = [{ uri: { fsPath: "/workspace" } }];
@@ -201,13 +222,13 @@ describe("Extension", () => {
 
       await activate(mockContext);
 
-      // store.open() is non-blocking; flush microtasks so the .then() chain runs
-      await Promise.resolve();
-      await Promise.resolve();
+      // store.open() is non-blocking; wait for the .then() chain to finish
+      await vi.waitFor(() => {
+        expect(setReadyMock).toHaveBeenCalled();
+      });
 
       expect(vi.mocked(Indexer).prototype.reindex).toHaveBeenCalledWith(false);
       expect(setIndexingMock).toHaveBeenCalled();
-      expect(setReadyMock).toHaveBeenCalled();
     });
 
     it("sweeps a stale reindex lock on activation, before the catch-up check, even with autoReindex off", async () => {
@@ -250,6 +271,147 @@ describe("Extension", () => {
       expect(vi.mocked(Indexer).prototype.getStatus).not.toHaveBeenCalled();
       expect(vi.mocked(Indexer).prototype.reindex).not.toHaveBeenCalled();
       warn.mockRestore();
+    });
+  });
+
+  describe("crash-loop guard (#117)", () => {
+    const PAUSED_MESSAGE =
+      "Doc Search: the last indexing runs did not finish, so automatic indexing is paused for this window.";
+
+    async function setup(opts: { stale: boolean; needsReindex?: boolean }) {
+      const { readConfig } = await import("../../src/extension/config.js");
+      vi.mocked(readConfig).mockReturnValue({
+        docGlob: "doc/**/*.md",
+        indexDir: ".doc-search-index",
+        indexLocation: "global",
+        headingDepth: 2,
+        maxChunkChars: 4000,
+        embedProvider: "local",
+        ollamaUrl: "http://localhost:11434",
+        ollamaModel: "nomic-embed-text",
+        openaiApiKey: "",
+        autoReindex: true,
+      } as any);
+      const { Indexer } = await import("../../src/core/indexer.js");
+      const proto = vi.mocked(Indexer).prototype;
+      proto.clearStaleReindexLock = vi.fn().mockReturnValue(opts.stale ? STALE_LOCK : null);
+      proto.getStatus = vi.fn().mockResolvedValue({ needsReindex: opts.needsReindex ?? true });
+      proto.reindex = vi.fn().mockResolvedValue({ indexed: 1 });
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      return proto;
+    }
+
+    /** Run the activation and let the store.open().then(...) chain settle. */
+    async function activateAndSettle(): Promise<void> {
+      await activate(mockContext);
+      await vi.waitFor(() => {
+        expect(mockContext.globalState.get).toHaveBeenCalled();
+      });
+      await new Promise((r) => setImmediate(r));
+    }
+
+    it("runs the catch-up on the first stale lock, then resets the counter on success", async () => {
+      const proto = await setup({ stale: true });
+
+      await activateAndSettle();
+
+      expect(proto.reindex).toHaveBeenCalledWith(false);
+      expect(vi.mocked(vscode.window.showWarningMessage)).not.toHaveBeenCalled();
+      // Incremented to 1 before the run, back to 0 after it succeeded.
+      expect(mockContext.globalState.update.mock.calls.map((c: any[]) => c[1])).toEqual([1, 0]);
+      expect([...mockContext.globalState.data.values()]).toEqual([0]);
+    });
+
+    it("skips the catch-up and warns when two stale locks were cleared in a row", async () => {
+      const proto = await setup({ stale: true });
+      // One unfinished run is already on record for THIS workspace.
+      const { unfinishedRunsKey } = await import("../../src/extension/catchUpGuard.js");
+      mockContext.globalState = makeGlobalState({ [unfinishedRunsKey("/workspace")]: 1 });
+
+      await activateAndSettle();
+
+      expect(proto.reindex).not.toHaveBeenCalled();
+      expect(vi.mocked(vscode.window.showWarningMessage)).toHaveBeenCalledWith(
+        PAUSED_MESSAGE,
+        "Reindex now",
+      );
+      expect(mockContext.globalState.data.get(unfinishedRunsKey("/workspace"))).toBe(2);
+    });
+
+    it("stays paused on a later activation with no new stale lock", async () => {
+      const proto = await setup({ stale: false });
+      const { unfinishedRunsKey } = await import("../../src/extension/catchUpGuard.js");
+      mockContext.globalState = makeGlobalState({ [unfinishedRunsKey("/workspace")]: 2 });
+
+      await activateAndSettle();
+
+      expect(proto.reindex).not.toHaveBeenCalled();
+      expect(vi.mocked(vscode.window.showWarningMessage)).toHaveBeenCalledWith(
+        PAUSED_MESSAGE,
+        "Reindex now",
+      );
+    });
+
+    it("keeps one workspace's counter from pausing another", async () => {
+      const proto = await setup({ stale: false });
+      const { unfinishedRunsKey } = await import("../../src/extension/catchUpGuard.js");
+      mockContext.globalState = makeGlobalState({ [unfinishedRunsKey("/other-workspace")]: 5 });
+
+      await activateAndSettle();
+
+      expect(proto.reindex).toHaveBeenCalledWith(false);
+    });
+
+    it("does not reset the counter when the catch-up fails", async () => {
+      const proto = await setup({ stale: true });
+      proto.reindex = vi.fn().mockRejectedValue(new Error("boom"));
+
+      await activateAndSettle();
+
+      const { unfinishedRunsKey } = await import("../../src/extension/catchUpGuard.js");
+      expect(mockContext.globalState.data.get(unfinishedRunsKey("/workspace"))).toBe(1);
+    });
+
+    it("runs 'Reindex now' via the reindex command and resets once the index is current", async () => {
+      const proto = await setup({ stale: false });
+      const { unfinishedRunsKey } = await import("../../src/extension/catchUpGuard.js");
+      const key = unfinishedRunsKey("/workspace");
+      mockContext.globalState = makeGlobalState({ [key]: 2 });
+      vi.mocked(vscode.window.showWarningMessage).mockResolvedValue("Reindex now" as any);
+      // First status (activation): behind. After the manual run: current.
+      proto.getStatus = vi
+        .fn()
+        .mockResolvedValueOnce({ needsReindex: true })
+        .mockResolvedValue({ needsReindex: false });
+
+      await activateAndSettle();
+      await vi.waitFor(() => {
+        expect(mockContext.globalState.data.get(key)).toBe(0);
+      });
+
+      expect(vi.mocked(vscode.commands.executeCommand)).toHaveBeenCalledWith(
+        "docSearch.reindex",
+        false,
+      );
+      // The automatic catch-up itself never ran.
+      expect(proto.reindex).not.toHaveBeenCalled();
+    });
+
+    it("leaves the counter armed when 'Reindex now' did not finish the job", async () => {
+      const proto = await setup({ stale: false });
+      const { unfinishedRunsKey } = await import("../../src/extension/catchUpGuard.js");
+      const key = unfinishedRunsKey("/workspace");
+      mockContext.globalState = makeGlobalState({ [key]: 2 });
+      vi.mocked(vscode.window.showWarningMessage).mockResolvedValue("Reindex now" as any);
+      proto.getStatus = vi.fn().mockResolvedValue({ needsReindex: true });
+
+      await activateAndSettle();
+      await vi.waitFor(() => {
+        expect(vi.mocked(vscode.commands.executeCommand)).toHaveBeenCalled();
+      });
+      await new Promise((r) => setImmediate(r));
+
+      expect(mockContext.globalState.data.get(key)).toBe(2);
     });
   });
 
@@ -464,11 +626,9 @@ describe("Extension", () => {
 
       await activate(mockContext);
 
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-
-      expect(setErrorMock).toHaveBeenCalledWith(expect.stringContaining("catch-up boom"));
+      await vi.waitFor(() => {
+        expect(setErrorMock).toHaveBeenCalledWith(expect.stringContaining("catch-up boom"));
+      });
     });
 
     it("shows a warning when store.open() rejects", async () => {

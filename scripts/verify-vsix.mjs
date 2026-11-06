@@ -8,6 +8,7 @@
  * `unzip -l`, then asserts:
  *   - dist/extension.js is present
  *   - dist/mcp-server.js is present
+ *   - dist/embed-worker.js is present (the built-in model's child process)
  *   - no src/** files leaked in
  *   - no node_modules/onnxruntime-web/** files leaked in
  *   - no internal/dev files leaked in (CLAUDE.md, .vscode/, ...)
@@ -24,7 +25,11 @@ import { readdirSync, statSync } from "node:fs";
 import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
 
-export const REQUIRED = ["extension/dist/extension.js", "extension/dist/mcp-server.js"];
+export const REQUIRED = [
+  "extension/dist/extension.js",
+  "extension/dist/mcp-server.js",
+  "extension/dist/embed-worker.js",
+];
 
 /** Path prefixes that must not appear in the archive. */
 export const FORBIDDEN_PREFIXES = [
