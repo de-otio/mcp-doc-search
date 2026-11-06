@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-11-06
+
 ### Fixed
 
 - **The built-in model no longer runs inside the editor's extension host.**
@@ -15,6 +17,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   model fails the reindex (the status bar says why) instead of taking down every
   extension in the window (#117). The process starts on demand, stops after five
   idle minutes, and is not restarted after three crashes in ten minutes.
+- **Automatic indexing pauses after repeated unfinished runs.** If the last two
+  indexing runs in a workspace were cut off (for example because the window
+  crashed or was closed mid-run), the extension no longer restarts straight into
+  the same work on activation. It shows a warning with a **Reindex now** action
+  instead, and resumes automatic indexing once a run completes (#117).
+- **Long reindexes no longer hold the extension host's thread.** The indexer
+  yields to the event loop between files, so other extensions and the editor
+  stay responsive while a large corpus is scanned (#117).
+
+### Changed
+
+- The extension now activates only on startup finished; the
+  `workspaceContains:**/*.md` activation event, which made VS Code search the
+  whole workspace tree before activation, is removed (#117).
 
 ## [0.8.4] - 2026-10-14
 
