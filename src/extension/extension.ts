@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { LanceVectorStore } from "../core/vectorstore.js";
-import { createEmbedProvider } from "../core/embedder.js";
+import { createExtensionEmbedProvider } from "./embedProvider.js";
 import { parseExtraRoots } from "../core/extraRoots.js";
 import { Indexer } from "../core/indexer.js";
 import { validateConfig } from "../core/types.js";
@@ -30,7 +30,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Built here rather than at its first use below: the index directory is keyed
   // by the embedder, so the provider has to be known before the location is
   // resolved (see workspaceKey).
-  const embedProvider = createEmbedProvider(config);
+  const embedProvider = createExtensionEmbedProvider(config, context.extensionPath);
+  // Kills the embedding child process (if any) when the extension deactivates.
+  context.subscriptions.push({ dispose: () => embedProvider.dispose?.() });
   const resolved = resolveIndexLocation(workspaceRoot, {
     mode: resolveMode(config.indexLocation, config.indexDir),
     indexDir: config.indexDir,

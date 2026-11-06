@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The built-in model no longer runs inside the editor's extension host.**
+  Indexing with the built-in (local) embedding model now runs in a separate
+  process, so a large reindex no longer freezes the editor, and a crash of the
+  model fails the reindex (the status bar says why) instead of taking down every
+  extension in the window (#117). The process starts on demand, stops after five
+  idle minutes, and is not restarted after three crashes in ten minutes.
+
 ## [0.8.4] - 2026-10-14
 
 ### Fixed

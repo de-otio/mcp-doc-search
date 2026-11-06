@@ -5,6 +5,7 @@ const GOOD = [
   "extension/package.json",
   "extension/dist/extension.js",
   "extension/dist/mcp-server.js",
+  "extension/dist/embed-worker.js",
   "extension/node_modules/@huggingface/transformers/dist/transformers.node.cjs",
   "extension/node_modules/@lancedb/lancedb/dist/index.js",
   "extension/node_modules/",
@@ -18,6 +19,11 @@ describe("verifyEntries", () => {
   it("reports a missing required bundle", () => {
     const entries = GOOD.filter((e) => e !== "extension/dist/mcp-server.js");
     expect(verifyEntries(entries, 40)).toEqual(["MISSING: extension/dist/mcp-server.js"]);
+  });
+
+  it("reports a missing embedding worker bundle", () => {
+    const entries = GOOD.filter((e) => e !== "extension/dist/embed-worker.js");
+    expect(verifyEntries(entries, 40)).toEqual(["MISSING: extension/dist/embed-worker.js"]);
   });
 
   it("reports leaked dev paths by prefix", () => {
@@ -80,6 +86,7 @@ describe("verifyEntries", () => {
     const failures = verifyEntries(entries, 90);
     expect(failures).toEqual([
       "MISSING: extension/dist/mcp-server.js",
+      "MISSING: extension/dist/embed-worker.js",
       "LEAKED:  extension/src/",
       "LEAKED:  extension/node_modules/onnxruntime-web/",
       "SECRET:  extension/.env (matches .env*)",

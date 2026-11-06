@@ -5,7 +5,8 @@ import { resolveIndexLocation, resolveMode } from "../core/indexLocation.js";
 import { Indexer } from "../core/indexer.js";
 import type { EmbedProvider, IndexStats } from "../core/types.js";
 import { validateConfig } from "../core/types.js";
-import { createEmbedProvider, EmbedderUnavailableError } from "../core/embedder.js";
+import { EmbedderUnavailableError } from "../core/embedder.js";
+import { createExtensionEmbedProvider } from "./embedProvider.js";
 import { handleEmbedderFailure, resetRecoveryAttempts } from "./embedderRecovery.js";
 import type { LanceVectorStore } from "../core/vectorstore.js";
 import { parseExtraRoots } from "../core/extraRoots.js";
@@ -34,6 +35,13 @@ interface CommandDeps {
 export function registerCommands(context: vscode.ExtensionContext, deps: CommandDeps): void {
   const { store, statusBar, workspaceRoot } = deps;
 
+  /** Fresh provider for the current config; disposed (child process killed) on deactivate. */
+  const createFreshEmbedProvider = (freshConfig: ExtensionConfig): EmbedProvider => {
+    const provider = createExtensionEmbedProvider(freshConfig, deps.context.extensionPath);
+    context.subscriptions.push({ dispose: () => provider.dispose?.() });
+    return provider;
+  };
+
   /**
    * Build an Indexer using whatever config is current right now. Used by both
    * the reindex command and the Index Status panel so config changes (embed
@@ -42,7 +50,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
   const buildFreshIndexer = async (): Promise<Indexer> => {
     const apiKey = await readOpenAIApiKey(deps.context.secrets);
     const freshConfig = readConfig(apiKey);
-    const freshEmbedProvider = createEmbedProvider(freshConfig);
+    const freshEmbedProvider = createFreshEmbedProvider(freshConfig);
     const freshResolved = resolveIndexLocation(workspaceRoot, {
       mode: resolveMode(freshConfig.indexLocation, freshConfig.indexDir),
       indexDir: freshConfig.indexDir,
@@ -73,7 +81,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
       // Re-read config so the search uses whichever provider is currently configured
       const apiKey = await readOpenAIApiKey(deps.context.secrets);
       const freshConfig = readConfig(apiKey);
-      const freshEmbedProvider = createEmbedProvider(freshConfig);
+      const freshEmbedProvider = createFreshEmbedProvider(freshConfig);
       SearchPanel.createOrShow(context, {
         workspaceRoot,
         store,
