@@ -214,7 +214,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
     }),
 
     vscode.commands.registerCommand("docSearch.openIndexStatus", () => {
-      IndexStatusPanel.createOrShow(context, buildFreshIndexer);
+      IndexStatusPanel.createOrShow(context, buildFreshIndexer, statusBar);
     }),
 
     vscode.commands.registerCommand("docSearch.openSettings", () => {
