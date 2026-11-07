@@ -327,6 +327,7 @@ describe("Commands", () => {
       expect(vi.mocked(IndexStatusPanel.createOrShow)).toHaveBeenCalledWith(
         mockContext,
         expect.any(Function),
+        deps.statusBar,
       );
     });
   });

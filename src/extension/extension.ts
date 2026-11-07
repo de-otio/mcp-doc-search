@@ -2,12 +2,12 @@ import * as vscode from "vscode";
 import { LanceVectorStore } from "../core/vectorstore.js";
 import { createExtensionEmbedProvider } from "./embedProvider.js";
 import { parseExtraRoots } from "../core/extraRoots.js";
-import { Indexer } from "../core/indexer.js";
+import { Indexer, ReindexInProgressError } from "../core/indexer.js";
 import { validateConfig } from "../core/types.js";
 import { readConfig, readOpenAIApiKey } from "./config.js";
 import { StatusBarManager } from "./statusBar.js";
 import { registerCommands } from "./commands.js";
-import { FileWatcher } from "./fileWatcher.js";
+import { FileWatcher, REINDEX_RETRY_MS } from "./fileWatcher.js";
 import { ensureGitignored } from "../core/gitignore.js";
 import {
   resolveIndexLocation,
@@ -179,13 +179,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (!decision.run) return;
 
       statusBar.setIndexing();
-      try {
-        await indexer.reindex(false);
-        statusBar.setReady();
-        await setCount(0);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        statusBar.setError(`Catch-up reindex failed: ${msg}`);
+      for (;;) {
+        try {
+          await indexer.reindex(false);
+          statusBar.setReady();
+          await setCount(0);
+          return;
+        } catch (err) {
+          // Another reindex (CLI, MCP server, another window) holds the lock.
+          // That is not a failure, and the holder never reports to this status
+          // bar, so wait and retry rather than leave a stale error behind.
+          if (err instanceof ReindexInProgressError) {
+            await new Promise((resolve) => setTimeout(resolve, REINDEX_RETRY_MS));
+            continue;
+          }
+          const msg = err instanceof Error ? err.message : String(err);
+          statusBar.setError(`Catch-up reindex failed: ${msg}`);
+          return;
+        }
       }
     })
     .catch((err) => {
