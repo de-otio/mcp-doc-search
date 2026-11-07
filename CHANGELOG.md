@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-11-07
+
+### Fixed
+
+- **The red status-bar error clears once indexing works again.** A reindex
+  started from the Index Status panel now updates the status bar, so a
+  successful run there clears an earlier error (#120). When another process
+  (the CLI, the MCP server or another window) is already reindexing at
+  start-up, the status bar shows "Indexing…" and retries instead of reporting
+  an error that nothing would clear.
+
+### Security
+
+- Updated dependencies to fix open advisories, including `glob` 14 /
+  `minimatch` 11 (bundled into the MCP server and CLI; denial of service via
+  crafted patterns) and several development-only packages (#121). Pattern
+  matching in `docGlob` follows minimatch 11, which differs from earlier
+  versions only in rare edge cases.
+
 ## [0.8.5] - 2026-11-06
 
 ### Fixed
