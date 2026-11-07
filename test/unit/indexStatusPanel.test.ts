@@ -145,6 +145,30 @@ describe("IndexStatusPanel", () => {
       }
     });
 
+    it("clears a status-bar error when a panel reindex succeeds", async () => {
+      const statusBar = { setIndexing: vi.fn(), setReady: vi.fn(), setError: vi.fn() };
+      IndexStatusPanel.createOrShow(mockContext, () => mockIndexer, statusBar as any);
+
+      const handler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
+      await handler({ type: "reindex", force: false });
+
+      expect(statusBar.setIndexing).toHaveBeenCalledTimes(1);
+      expect(statusBar.setReady).toHaveBeenCalledTimes(1);
+      expect(statusBar.setError).not.toHaveBeenCalled();
+    });
+
+    it("sets a status-bar error when a panel reindex fails", async () => {
+      mockIndexer.reindex.mockRejectedValue(new Error("disk full"));
+      const statusBar = { setIndexing: vi.fn(), setReady: vi.fn(), setError: vi.fn() };
+      IndexStatusPanel.createOrShow(mockContext, () => mockIndexer, statusBar as any);
+
+      const handler = vi.mocked(mockPanel.webview.onDidReceiveMessage).mock.calls[0]?.[0];
+      await handler({ type: "reindex", force: false });
+
+      expect(statusBar.setReady).not.toHaveBeenCalled();
+      expect(statusBar.setError).toHaveBeenCalledWith("Reindex failed: disk full");
+    });
+
     it("should set disposed flag on dispose", () => {
       IndexStatusPanel.createOrShow(mockContext, () => mockIndexer);
 

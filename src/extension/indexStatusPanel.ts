@@ -3,6 +3,7 @@ import type { Indexer } from "../core/indexer.js";
 import type { IndexStats } from "../core/types.js";
 import { EmbedderUnavailableError } from "../core/embedder.js";
 import { handleEmbedderFailure, resetRecoveryAttempts } from "./embedderRecovery.js";
+import type { StatusBarManager } from "./statusBar.js";
 import { getNonce } from "./utils.js";
 
 /**
@@ -12,12 +13,16 @@ import { getNonce } from "./utils.js";
  */
 export type IndexerFactory = () => Promise<Indexer> | Indexer;
 
+/** The status-bar states a panel reindex reports, so a success clears an earlier error. */
+export type IndexStatusReporter = Pick<StatusBarManager, "setIndexing" | "setReady" | "setError">;
+
 export class IndexStatusPanel {
   private static instance: IndexStatusPanel | undefined;
   /** True while any reindex (from command or panel) is running. */
   static busy = false;
   private readonly panel: vscode.WebviewPanel;
   private readonly indexerFactory: IndexerFactory;
+  private readonly statusBar: IndexStatusReporter | undefined;
 
   static reset(): void {
     this.instance = undefined;
@@ -54,7 +59,11 @@ export class IndexStatusPanel {
     IndexStatusPanel.instance?.panel.webview.postMessage({ type: "reindexError", message });
   }
 
-  static createOrShow(context: vscode.ExtensionContext, indexerFactory: IndexerFactory): void {
+  static createOrShow(
+    context: vscode.ExtensionContext,
+    indexerFactory: IndexerFactory,
+    statusBar?: IndexStatusReporter,
+  ): void {
     if (IndexStatusPanel.instance) {
       IndexStatusPanel.instance.panel.reveal();
       return;
@@ -65,16 +74,18 @@ export class IndexStatusPanel {
       vscode.ViewColumn.One,
       { enableScripts: true },
     );
-    IndexStatusPanel.instance = new IndexStatusPanel(panel, context, indexerFactory);
+    IndexStatusPanel.instance = new IndexStatusPanel(panel, context, indexerFactory, statusBar);
   }
 
   private constructor(
     panel: vscode.WebviewPanel,
     context: vscode.ExtensionContext,
     indexerFactory: IndexerFactory,
+    statusBar: IndexStatusReporter | undefined,
   ) {
     this.panel = panel;
     this.indexerFactory = indexerFactory;
+    this.statusBar = statusBar;
     this.panel.webview.html = this.getHtml();
 
     this.panel.onDidDispose(() => {
@@ -108,6 +119,7 @@ export class IndexStatusPanel {
   private async runReindex(force: boolean): Promise<void> {
     if (IndexStatusPanel.busy) return;
     IndexStatusPanel.busy = true;
+    this.statusBar?.setIndexing();
     this.panel.webview.postMessage({ type: "indexing", phase: "scanning" });
 
     const runOnce = async (): Promise<IndexStats> => {
@@ -132,12 +144,14 @@ export class IndexStatusPanel {
         stats = await runOnce();
       }
       IndexStatusPanel.busy = false;
+      this.statusBar?.setReady();
       await this.sendStatus();
       this.panel.webview.postMessage({ type: "reindexDone", stats });
       this.panel.reveal();
     } catch (err) {
       IndexStatusPanel.busy = false;
       const message = err instanceof Error ? err.message : String(err);
+      this.statusBar?.setError(`Reindex failed: ${message}`);
       try {
         this.panel.webview.postMessage({ type: "reindexError", message });
       } catch {

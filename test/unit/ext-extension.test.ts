@@ -631,6 +631,65 @@ describe("Extension", () => {
       });
     });
 
+    it("retries catch-up while another reindex holds the lock, without showing an error", async () => {
+      const { readConfig } = await import("../../src/extension/config.js");
+      vi.mocked(readConfig).mockReturnValue({
+        docGlob: "doc/**/*.md",
+        indexDir: ".doc-search-index",
+        indexLocation: "global",
+        headingDepth: 2,
+        maxChunkChars: 4000,
+        embedProvider: "local",
+        ollamaUrl: "http://localhost:11434",
+        ollamaModel: "nomic-embed-text",
+        openaiApiKey: "",
+        autoReindex: true,
+      } as any);
+
+      const { Indexer, ReindexInProgressError } = await import("../../src/core/indexer.js");
+      vi.mocked(Indexer).prototype.getStatus = vi.fn().mockResolvedValue({
+        totalFiles: 3,
+        cachedFiles: 2,
+        changedFiles: 0,
+        newFiles: 1,
+        deletedFiles: 0,
+        chunkCount: 10,
+        lastIndexed: new Date(),
+        needsReindex: true,
+        docGlob: "doc/**/*.md",
+      });
+      const reindexMock = vi
+        .fn()
+        .mockRejectedValueOnce(new (ReindexInProgressError as any)())
+        .mockResolvedValue({
+          indexed: 1,
+          skipped: 0,
+          failedFiles: 0,
+          totalChunks: 1,
+          durationMs: 1,
+        });
+      vi.mocked(Indexer).prototype.reindex = reindexMock;
+
+      const { StatusBarManager } = await import("../../src/extension/statusBar.js");
+      const setErrorMock = vi.fn();
+      const setReadyMock = vi.fn();
+      vi.mocked(StatusBarManager).prototype.setIndexing = vi.fn();
+      vi.mocked(StatusBarManager).prototype.setError = setErrorMock;
+      vi.mocked(StatusBarManager).prototype.setReady = setReadyMock;
+
+      vi.useFakeTimers({ toFake: ["setTimeout"] });
+      try {
+        await activate(mockContext);
+        await vi.waitFor(() => expect(reindexMock).toHaveBeenCalledTimes(1));
+        await vi.advanceTimersByTimeAsync(60_000);
+        await vi.waitFor(() => expect(setReadyMock).toHaveBeenCalled());
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(reindexMock).toHaveBeenCalledTimes(2);
+      expect(setErrorMock).not.toHaveBeenCalled();
+    });
+
     it("shows a warning when store.open() rejects", async () => {
       const { LanceVectorStore } = await import("../../src/core/vectorstore.js");
       vi.mocked(LanceVectorStore).prototype.open = vi
